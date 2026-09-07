@@ -56,6 +56,7 @@ export default function Sidebar({
     { to: "/connect", label: "WhatsApp Gateway", icon: Smartphone },
     { to: "/conversations", label: "Live Conversations", icon: MessageSquare },
     { to: "/tools", label: "Tool Knowledge Base", icon: Wrench },
+    { to: "/skills", label: "Sales Skill (SKILL.md)", icon: Sparkles },
     { to: "/customers", label: "Customer Directory", icon: Users },
     { to: "/analytics", label: "Analytics & ROI", icon: BarChart3 },
     { to: "/settings", label: "Workspace Settings", icon: Settings },

@@ -17,6 +17,7 @@ import WhatsAppConnect from "./pages/WhatsAppConnect";
 import Conversations from "./pages/Conversations";
 import Customers from "./pages/Customers";
 import Tools from "./pages/Tools";
+import SkillsPage from "./pages/SkillsPage";
 import Analytics from "./pages/Analytics";
 import SettingsPage from "./pages/SettingsPage";
 import AdminLayout from "./pages/admin/AdminLayout";
@@ -204,6 +205,10 @@ function MainAppShell() {
             <Route
               path="/tools"
               element={<Tools />}
+            />
+            <Route
+              path="/skills"
+              element={<SkillsPage />}
             />
             <Route
               path="/analytics"

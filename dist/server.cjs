@@ -867,6 +867,41 @@ function setupSettingsRoutes(app) {
       res.status(500).json({ error: "Failed to save settings" });
     }
   });
+  app.get("/api/skill", async (req, res) => {
+    try {
+      const user = await getUserByToken(req.headers.authorization);
+      const settings = await getSettings(user?.id);
+      const skillPath = import_path2.default.join(process.cwd(), "SKILL.md");
+      let content = "";
+      try {
+        content = await import_promises2.default.readFile(skillPath, "utf-8");
+      } catch {
+        content = "# WhatsApp Tool-Selling Closer\nNo SKILL.md found on server.";
+      }
+      res.json({
+        enabled: settings.salesSkillEnabled !== false,
+        content
+      });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to load skill configuration" });
+    }
+  });
+  app.post("/api/skill", async (req, res) => {
+    try {
+      const user = await getUserByToken(req.headers.authorization);
+      const { content, enabled } = req.body;
+      if (typeof enabled === "boolean") {
+        await saveSettings({ salesSkillEnabled: enabled }, user?.id);
+      }
+      if (typeof content === "string" && content.trim().length > 0) {
+        const skillPath = import_path2.default.join(process.cwd(), "SKILL.md");
+        await import_promises2.default.writeFile(skillPath, content, "utf-8");
+      }
+      res.json({ success: true, message: "Skill settings saved successfully" });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to save skill configuration" });
+    }
+  });
 }
 var import_promises2, import_path2, getSettingsFile, DEFAULT_SETTINGS;
 var init_settings = __esm({
