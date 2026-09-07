@@ -3267,6 +3267,22 @@ var init_deepgram = __esm({
 });
 
 // src/server/whatsapp.ts
+function extractIncomingText(message) {
+  if (!message) return null;
+  if (message.conversation) return message.conversation;
+  if (message.extendedTextMessage?.text) return message.extendedTextMessage.text;
+  if (message.imageMessage?.caption) return message.imageMessage.caption;
+  if (message.videoMessage?.caption) return message.videoMessage.caption;
+  if (message.documentMessage?.caption) return message.documentMessage.caption;
+  if (message.templateButtonReplyMessage?.selectedId) return message.templateButtonReplyMessage.selectedId;
+  if (message.buttonsResponseMessage?.selectedButtonId) return message.buttonsResponseMessage.selectedButtonId;
+  if (message.listResponseMessage?.singleSelectReply?.selectedRowId) return message.listResponseMessage.singleSelectReply.selectedRowId;
+  if (message.ephemeralMessage?.message) return extractIncomingText(message.ephemeralMessage.message);
+  if (message.viewOnceMessage?.message) return extractIncomingText(message.viewOnceMessage.message);
+  if (message.viewOnceMessageV2?.message) return extractIncomingText(message.viewOnceMessageV2.message);
+  if (message.documentWithCaptionMessage?.message) return extractIncomingText(message.documentWithCaptionMessage.message);
+  return null;
+}
 function getUserWASession(userId) {
   const effectiveId = userId || "usr_admin_badar";
   let session = userSessions.get(effectiveId);
@@ -3393,57 +3409,66 @@ async function connectToWhatsApp(userId = "usr_admin_badar", usePairingCode = fa
     newSock.ev.on("messages.upsert", async (m) => {
       if (m.type === "notify" || m.type === "append") {
         for (const msg of m.messages) {
-          if (!msg.key.fromMe && msg.message) {
-            const sender = msg.key.remoteJid;
-            if (!sender) continue;
-            if (sender.includes("@newsletter") || sender.includes("@broadcast") || sender.includes("status@broadcast") || sender.includes("@call")) {
+          if (!msg.message) continue;
+          if (msg.key.id && sentMessageIds.has(msg.key.id)) {
+            sentMessageIds.delete(msg.key.id);
+            continue;
+          }
+          const rawSender = msg.key.remoteJid;
+          if (!rawSender) continue;
+          const sender = rawSender.replace(/:\d+@/, "@");
+          if (sender.includes("@newsletter") || sender.includes("@broadcast") || sender.includes("status@broadcast") || sender.includes("@call")) {
+            continue;
+          }
+          if (sender.includes("@g.us")) {
+            const settings = await getSettings(userId);
+            if (!settings.allowGroups) {
               continue;
             }
-            if (sender.includes("@g.us")) {
-              const settings = await getSettings(userId);
-              if (!settings.allowGroups) {
-                continue;
-              }
-            }
-            const isDirectChat = sender.endsWith("@s.whatsapp.net");
-            const isGroupChat = sender.endsWith("@g.us");
-            if (!isDirectChat && !isGroupChat) {
-              continue;
-            }
-            const textMessage = msg.message.conversation || msg.message.extendedTextMessage?.text || msg.message.ephemeralMessage?.message?.extendedTextMessage?.text || msg.message.ephemeralMessage?.message?.conversation || msg.message.imageMessage?.caption || msg.message.videoMessage?.caption || msg.message.documentMessage?.caption || msg.message.templateButtonReplyMessage?.selectedId || msg.message.buttonsResponseMessage?.selectedButtonId || msg.message.listResponseMessage?.singleSelectReply?.selectedRowId;
-            if (textMessage) {
-              console.log(`[WhatsApp:${userId}] Received message from ${sender}: "${textMessage}"`);
-              await queueMessage(sender, textMessage, msg.pushName || "Customer", userId);
-            } else {
-              const audioMsg = msg.message.audioMessage || msg.message.ephemeralMessage?.message?.audioMessage;
-              if (audioMsg) {
-                console.log(`[WhatsApp:${userId}] Received voice message from ${sender}. Downloading audio...`);
-                try {
-                  const buffer = await (0, import_baileys.downloadMediaMessage)(
-                    msg,
-                    "buffer",
-                    {},
-                    {
-                      logger: (0, import_pino.default)({ level: "silent" }),
-                      reuploadRequest: newSock.updateMediaMessage
-                    }
-                  );
-                  if (buffer && buffer.length > 0) {
-                    console.log(`[WhatsApp:${userId}] Transcribing voice note (${buffer.length} bytes) via Deepgram...`);
-                    const transcribedText = await transcribeAudio(
-                      buffer,
-                      audioMsg.mimetype || "audio/ogg; codecs=opus"
-                    );
-                    if (transcribedText && transcribedText.trim().length > 0) {
-                      console.log(`[WhatsApp:${userId}] Voice note transcribed: "${transcribedText}"`);
-                      await queueMessage(sender, transcribedText, msg.pushName || "Customer", userId);
-                    } else {
-                      console.warn(`[WhatsApp:${userId}] Audio transcription returned empty.`);
-                    }
+          }
+          const isDirectChat = sender.endsWith("@s.whatsapp.net") || sender.endsWith("@lid");
+          const isGroupChat = sender.endsWith("@g.us");
+          if (!isDirectChat && !isGroupChat) {
+            continue;
+          }
+          const myJid = newSock.user?.id ? newSock.user.id.split(":")[0] + "@s.whatsapp.net" : null;
+          const isSelfChat = Boolean(myJid && sender.split(":")[0] === myJid.split(":")[0]);
+          if (msg.key.fromMe && !isSelfChat) {
+            continue;
+          }
+          const textMessage = extractIncomingText(msg.message);
+          if (textMessage) {
+            console.log(`[WhatsApp:${userId}] \u{1F4E9} Received message from ${sender}: "${textMessage}"`);
+            await queueMessage(sender, textMessage, msg.pushName || "Customer", userId);
+          } else {
+            const audioMsg = msg.message.audioMessage || msg.message.ephemeralMessage?.message?.audioMessage || msg.message.viewOnceMessage?.message?.audioMessage;
+            if (audioMsg) {
+              console.log(`[WhatsApp:${userId}] \u{1F399}\uFE0F Received voice message from ${sender}. Downloading audio...`);
+              try {
+                const buffer = await (0, import_baileys.downloadMediaMessage)(
+                  msg,
+                  "buffer",
+                  {},
+                  {
+                    logger: (0, import_pino.default)({ level: "silent" }),
+                    reuploadRequest: newSock.updateMediaMessage
                   }
-                } catch (audioErr) {
-                  console.error(`[WhatsApp:${userId}] Error downloading/transcribing audio:`, audioErr);
+                );
+                if (buffer && buffer.length > 0) {
+                  console.log(`[WhatsApp:${userId}] Transcribing voice note (${buffer.length} bytes) via Deepgram...`);
+                  const transcribedText = await transcribeAudio(
+                    buffer,
+                    audioMsg.mimetype || "audio/ogg; codecs=opus"
+                  );
+                  if (transcribedText && transcribedText.trim().length > 0) {
+                    console.log(`[WhatsApp:${userId}] Voice note transcribed: "${transcribedText}"`);
+                    await queueMessage(sender, transcribedText, msg.pushName || "Customer", userId);
+                  } else {
+                    console.warn(`[WhatsApp:${userId}] Audio transcription returned empty.`);
+                  }
                 }
+              } catch (audioErr) {
+                console.error(`[WhatsApp:${userId}] Error downloading/transcribing audio:`, audioErr);
               }
             }
           }
@@ -3465,9 +3490,14 @@ async function sendMessage(jid, text, userId) {
     return;
   }
   try {
-    const formattedJid = jid.includes("@") ? jid : `${jid}@s.whatsapp.net`;
+    const rawJid = jid.includes("@") ? jid : `${jid}@s.whatsapp.net`;
+    const formattedJid = rawJid.replace(/:\d+@/, "@");
     console.log(`[WhatsApp:${userId || "default"}] Sending reply to ${formattedJid}: "${text}"`);
-    await targetSock.sendMessage(formattedJid, { text });
+    const sent = await targetSock.sendMessage(formattedJid, { text });
+    if (sent?.key?.id) {
+      sentMessageIds.add(sent.key.id);
+      setTimeout(() => sentMessageIds.delete(sent.key.id), 6e4);
+    }
     console.log(`[WhatsApp:${userId || "default"}] Message successfully sent to ${formattedJid}`);
   } catch (error) {
     console.error(`[WhatsApp:${userId || "default"}] Error delivering message to ${jid}:`, error);
@@ -3654,7 +3684,7 @@ function setupWhatsAppRoutes(app) {
     res.json({ success: true });
   });
 }
-var import_baileys, import_pino, import_qrcode, import_promises8, import_path8, userSessions;
+var import_baileys, import_pino, import_qrcode, import_promises8, import_path8, userSessions, sentMessageIds;
 var init_whatsapp = __esm({
   "src/server/whatsapp.ts"() {
     import_baileys = require("@whiskeysockets/baileys");
@@ -3667,6 +3697,7 @@ var init_whatsapp = __esm({
     import_promises8 = __toESM(require("fs/promises"), 1);
     import_path8 = __toESM(require("path"), 1);
     userSessions = /* @__PURE__ */ new Map();
+    sentMessageIds = /* @__PURE__ */ new Set();
     setTimeout(async () => {
       try {
         const authBaseDir = import_path8.default.join(process.cwd(), "data", "auth");

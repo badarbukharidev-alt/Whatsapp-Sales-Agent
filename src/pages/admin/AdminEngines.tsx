@@ -1,4 +1,5 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
+import axios from "axios";
 import {
   Cpu,
   Sparkles,
@@ -11,8 +12,11 @@ import {
   Layers,
   Save,
 } from "lucide-react";
+import { AgentSettings } from "../../types";
 
 export default function AdminEngines() {
+  const [settings, setSettings] = useState<AgentSettings | null>(null);
+  const [salesSkillEnabled, setSalesSkillEnabled] = useState(true);
   const [primaryEngine, setPrimaryEngine] = useState("gemini");
   const [enableFallback, setEnableFallback] = useState(true);
   const [temperature, setTemperature] = useState(0.7);
@@ -21,9 +25,33 @@ export default function AdminEngines() {
   const [typingDelayMax, setTypingDelayMax] = useState(6);
   const [isSaved, setIsSaved] = useState(false);
 
-  const handleSave = () => {
-    setIsSaved(true);
-    setTimeout(() => setIsSaved(false), 2500);
+  useEffect(() => {
+    axios.get("/api/settings")
+      .then(res => {
+        if (res.data) {
+          setSettings(res.data);
+          setSalesSkillEnabled(res.data.salesSkillEnabled !== false);
+          if (res.data.preferredApi) setPrimaryEngine(res.data.preferredApi);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const handleSave = async () => {
+    try {
+      const updated = {
+        ...settings,
+        preferredApi: primaryEngine,
+        salesSkillEnabled,
+      };
+      await axios.put("/api/settings", updated);
+      setSettings(updated);
+      setIsSaved(true);
+      setTimeout(() => setIsSaved(false), 2500);
+    } catch (e) {
+      console.error("Failed to save engine config:", e);
+      alert("Failed to save settings");
+    }
   };
 
   const engineList = [
@@ -83,6 +111,45 @@ export default function AdminEngines() {
           <Save className="w-3.5 h-3.5" />
           <span>{isSaved ? "Saved Successfully!" : "Save Engine Config"}</span>
         </button>
+      </div>
+
+      {/* SALES CLOSER SKILL (SKILL.MD) ENGINE TOGGLE */}
+      <div className="bg-white p-6 rounded-3xl border border-purple-200/80 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="flex items-center gap-4">
+          <div className="w-12 h-12 rounded-2xl bg-purple-50 text-purple-600 flex items-center justify-center border border-purple-100 shrink-0">
+            <Sparkles className="w-6 h-6" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h3 className="text-base font-bold text-slate-900">Sales Closer Skill Mode (SKILL.md)</h3>
+              <span className={`text-[10px] font-extrabold px-2.5 py-0.5 rounded-full uppercase tracking-wider ${
+                salesSkillEnabled
+                  ? "bg-purple-100 text-purple-700"
+                  : "bg-slate-100 text-slate-600"
+              }`}>
+                {salesSkillEnabled ? "Active Closer Intelligence" : "Standard Direct Mode"}
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 mt-1">
+              Activates the high-converting closing intelligence from SKILL.md across all connected WhatsApp chats (Progressive Discovery, Value Selling, Objection Handling, Pakistani Roman Urdu mirroring, and 1-Step Closing).
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3 shrink-0 self-end md:self-auto">
+          <span className="text-xs font-bold text-slate-600">
+            {salesSkillEnabled ? "Skill Enabled" : "Skill Disabled"}
+          </span>
+          <label className="relative inline-flex items-center cursor-pointer">
+            <input
+              type="checkbox"
+              checked={salesSkillEnabled}
+              onChange={(e) => setSalesSkillEnabled(e.target.checked)}
+              className="sr-only peer"
+            />
+            <div className="w-12 h-7 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-6 after:w-6 after:transition-all peer-checked:bg-purple-600"></div>
+          </label>
+        </div>
       </div>
 
       {/* Model Cards Grid */}

@@ -1,5 +1,6 @@
-import React from "react";
+import React, { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
+import axios from "axios";
 import {
   Users,
   ShieldCheck,
@@ -16,7 +17,7 @@ import {
   CheckCircle2,
   AlertCircle,
 } from "lucide-react";
-import { User, SystemDiagnostics } from "../../types";
+import { User, SystemDiagnostics, AgentSettings } from "../../types";
 
 interface AdminDashboardProps {
   users: User[];
@@ -31,6 +32,30 @@ export default function AdminDashboard({
   loading,
   onRefresh,
 }: AdminDashboardProps) {
+  const [settings, setSettings] = useState<AgentSettings | null>(null);
+  const [isUpdatingSkill, setIsUpdatingSkill] = useState(false);
+
+  useEffect(() => {
+    axios.get("/api/settings")
+      .then(res => setSettings(res.data || null))
+      .catch(() => {});
+  }, []);
+
+  const toggleSalesSkill = async () => {
+    if (!settings) return;
+    const nextVal = settings.salesSkillEnabled === false;
+    setIsUpdatingSkill(true);
+    try {
+      const updated = { ...settings, salesSkillEnabled: nextVal };
+      await axios.put("/api/settings", updated);
+      setSettings(updated);
+    } catch (e) {
+      console.error("Failed to update sales skill:", e);
+    } finally {
+      setIsUpdatingSkill(false);
+    }
+  };
+
   const totalUsers = users.length;
   const activeUsers = users.filter((u) => u.status === "active").length;
   const adminUsers = users.filter((u) => u.role === "admin").length;
@@ -84,6 +109,46 @@ export default function AdminDashboard({
           >
             <Cpu className="w-4 h-4" /> AI Gateway Models
           </Link>
+        </div>
+      </div>
+
+      {/* SALES CLOSER SKILL (SKILL.MD) MASTER ADMIN SWITCH */}
+      <div className="bg-white p-6 rounded-3xl border border-purple-200/80 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="flex items-center gap-4">
+          <div className="w-12 h-12 rounded-2xl bg-purple-50 text-purple-600 flex items-center justify-center border border-purple-100 shrink-0">
+            <Sparkles className="w-6 h-6" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h3 className="text-base font-bold text-slate-900">Sales Closer Skill Mode (SKILL.md)</h3>
+              <span className={`text-[10px] font-extrabold px-2.5 py-0.5 rounded-full uppercase tracking-wider ${
+                settings?.salesSkillEnabled !== false
+                  ? "bg-purple-100 text-purple-700"
+                  : "bg-slate-100 text-slate-600"
+              }`}>
+                {settings?.salesSkillEnabled !== false ? "Active Closer Skill" : "Standard Direct Mode"}
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 mt-1">
+              When enabled, the AI strictly follows the comprehensive closing framework from SKILL.md (Progressive Discovery, Value Selling, Objection Handling, Pakistani Roman Urdu mirroring, and 1-Step Closing).
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3 shrink-0 self-end md:self-auto">
+          <span className="text-xs font-bold text-slate-600">
+            {settings?.salesSkillEnabled !== false ? "Skill Enabled" : "Skill Disabled"}
+          </span>
+          <label className="relative inline-flex items-center cursor-pointer">
+            <input
+              type="checkbox"
+              disabled={isUpdatingSkill}
+              checked={settings?.salesSkillEnabled !== false}
+              onChange={toggleSalesSkill}
+              className="sr-only peer"
+            />
+            <div className="w-12 h-7 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-6 after:w-6 after:transition-all peer-checked:bg-purple-600"></div>
+          </label>
         </div>
       </div>
 

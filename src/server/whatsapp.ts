@@ -22,6 +22,24 @@ export interface UserWASession {
 }
 
 const userSessions = new Map<string, UserWASession>();
+const sentMessageIds = new Set<string>();
+
+function extractIncomingText(message: any): string | null {
+  if (!message) return null;
+  if (message.conversation) return message.conversation;
+  if (message.extendedTextMessage?.text) return message.extendedTextMessage.text;
+  if (message.imageMessage?.caption) return message.imageMessage.caption;
+  if (message.videoMessage?.caption) return message.videoMessage.caption;
+  if (message.documentMessage?.caption) return message.documentMessage.caption;
+  if (message.templateButtonReplyMessage?.selectedId) return message.templateButtonReplyMessage.selectedId;
+  if (message.buttonsResponseMessage?.selectedButtonId) return message.buttonsResponseMessage.selectedButtonId;
+  if (message.listResponseMessage?.singleSelectReply?.selectedRowId) return message.listResponseMessage.singleSelectReply.selectedRowId;
+  if (message.ephemeralMessage?.message) return extractIncomingText(message.ephemeralMessage.message);
+  if (message.viewOnceMessage?.message) return extractIncomingText(message.viewOnceMessage.message);
+  if (message.viewOnceMessageV2?.message) return extractIncomingText(message.viewOnceMessageV2.message);
+  if (message.documentWithCaptionMessage?.message) return extractIncomingText(message.documentWithCaptionMessage.message);
+  return null;
+}
 
 export function getUserWASession(userId?: string): UserWASession {
   const effectiveId = userId || "usr_admin_badar";
@@ -172,92 +190,102 @@ export async function connectToWhatsApp(userId = "usr_admin_badar", usePairingCo
     newSock.ev.on("messages.upsert", async (m) => {
       if (m.type === "notify" || m.type === "append") {
         for (const msg of m.messages) {
-          if (!msg.key.fromMe && msg.message) {
-            const sender = msg.key.remoteJid;
-            if (!sender) continue;
+          if (!msg.message) continue;
 
-            // 1. STRICT CHANNEL & BROADCAST FILTER:
-            // WhatsApp Channels/Newsletters (@newsletter) or Status Broadcasts (@broadcast) must NEVER be processed
-            if (
-              sender.includes("@newsletter") ||
-              sender.includes("@broadcast") ||
-              sender.includes("status@broadcast") ||
-              sender.includes("@call")
-            ) {
+          // If this message was sent by our bot, skip it to avoid processing our own replies
+          if (msg.key.id && sentMessageIds.has(msg.key.id)) {
+            sentMessageIds.delete(msg.key.id);
+            continue;
+          }
+
+          const rawSender = msg.key.remoteJid;
+          if (!rawSender) continue;
+
+          // Normalize sender (strip device suffix like :12@s.whatsapp.net)
+          const sender = rawSender.replace(/:\d+@/, "@");
+
+          // 1. STRICT CHANNEL & BROADCAST FILTER:
+          // WhatsApp Channels/Newsletters (@newsletter) or Status Broadcasts (@broadcast) must NEVER be processed
+          if (
+            sender.includes("@newsletter") ||
+            sender.includes("@broadcast") ||
+            sender.includes("status@broadcast") ||
+            sender.includes("@call")
+          ) {
+            continue;
+          }
+
+          // 2. GROUP FILTER:
+          // Skip groups (@g.us) unless explicitly enabled in user settings
+          if (sender.includes("@g.us")) {
+            const settings = await getSettings(userId);
+            if (!settings.allowGroups) {
               continue;
             }
+          }
 
-            // 2. GROUP FILTER:
-            // Skip groups (@g.us) unless explicitly enabled in user settings
-            if (sender.includes("@g.us")) {
-              const settings = await getSettings(userId);
-              if (!settings.allowGroups) {
-                continue;
-              }
-            }
+          // 3. ALLOW DIRECT CHATS (@s.whatsapp.net & @lid) OR ALLOWED GROUPS
+          const isDirectChat = sender.endsWith("@s.whatsapp.net") || sender.endsWith("@lid");
+          const isGroupChat = sender.endsWith("@g.us");
+          if (!isDirectChat && !isGroupChat) {
+            continue;
+          }
 
-            // 3. ONLY ALLOW VALID 1-ON-1 SENDER OR ALLOWED GROUP
-            const isDirectChat = sender.endsWith("@s.whatsapp.net");
-            const isGroupChat = sender.endsWith("@g.us");
-            if (!isDirectChat && !isGroupChat) {
-              continue;
-            }
-              const textMessage =
-                msg.message.conversation ||
-                msg.message.extendedTextMessage?.text ||
-                msg.message.ephemeralMessage?.message?.extendedTextMessage?.text ||
-                msg.message.ephemeralMessage?.message?.conversation ||
-                msg.message.imageMessage?.caption ||
-                msg.message.videoMessage?.caption ||
-                msg.message.documentMessage?.caption ||
-                msg.message.templateButtonReplyMessage?.selectedId ||
-                msg.message.buttonsResponseMessage?.selectedButtonId ||
-                msg.message.listResponseMessage?.singleSelectReply?.selectedRowId;
+          // 4. FROM ME / SELF-TEST CHECK:
+          // Allow self-testing if user messages their own connected number in WhatsApp
+          const myJid = newSock.user?.id ? newSock.user.id.split(":")[0] + "@s.whatsapp.net" : null;
+          const isSelfChat = Boolean(myJid && sender.split(":")[0] === myJid.split(":")[0]);
+          if (msg.key.fromMe && !isSelfChat) {
+            // Normal message sent by user to an external contact -> do not auto-reply
+            continue;
+          }
 
-              if (textMessage) {
-                console.log(`[WhatsApp:${userId}] Received message from ${sender}: "${textMessage}"`);
-                await queueMessage(sender, textMessage, msg.pushName || "Customer", userId);
-              } else {
-                const audioMsg =
-                  msg.message.audioMessage ||
-                  msg.message.ephemeralMessage?.message?.audioMessage;
+          const textMessage = extractIncomingText(msg.message);
 
-                if (audioMsg) {
-                  console.log(`[WhatsApp:${userId}] Received voice message from ${sender}. Downloading audio...`);
-                  try {
-                    const buffer = await downloadMediaMessage(
-                      msg,
-                      "buffer",
-                      {},
-                      {
-                        logger: pino({ level: "silent" }) as any,
-                        reuploadRequest: newSock.updateMediaMessage,
-                      }
-                    );
+          if (textMessage) {
+            console.log(`[WhatsApp:${userId}] 📩 Received message from ${sender}: "${textMessage}"`);
+            await queueMessage(sender, textMessage, msg.pushName || "Customer", userId);
+          } else {
+            const audioMsg =
+              msg.message.audioMessage ||
+              msg.message.ephemeralMessage?.message?.audioMessage ||
+              msg.message.viewOnceMessage?.message?.audioMessage;
 
-                    if (buffer && buffer.length > 0) {
-                      console.log(`[WhatsApp:${userId}] Transcribing voice note (${buffer.length} bytes) via Deepgram...`);
-                      const transcribedText = await transcribeAudio(
-                        buffer as Buffer,
-                        audioMsg.mimetype || "audio/ogg; codecs=opus"
-                      );
+            if (audioMsg) {
+              console.log(`[WhatsApp:${userId}] 🎙️ Received voice message from ${sender}. Downloading audio...`);
+              try {
+                const buffer = await downloadMediaMessage(
+                  msg,
+                  "buffer",
+                  {},
+                  {
+                    logger: pino({ level: "silent" }) as any,
+                    reuploadRequest: newSock.updateMediaMessage,
+                  }
+                );
 
-                      if (transcribedText && transcribedText.trim().length > 0) {
-                        console.log(`[WhatsApp:${userId}] Voice note transcribed: "${transcribedText}"`);
-                        await queueMessage(sender, transcribedText, msg.pushName || "Customer", userId);
-                      } else {
-                        console.warn(`[WhatsApp:${userId}] Audio transcription returned empty.`);
-                      }
-                    }
-                  } catch (audioErr) {
-                    console.error(`[WhatsApp:${userId}] Error downloading/transcribing audio:`, audioErr);
+                if (buffer && buffer.length > 0) {
+                  console.log(`[WhatsApp:${userId}] Transcribing voice note (${buffer.length} bytes) via Deepgram...`);
+                  const transcribedText = await transcribeAudio(
+                    buffer as Buffer,
+                    audioMsg.mimetype || "audio/ogg; codecs=opus"
+                  );
+
+                  if (transcribedText && transcribedText.trim().length > 0) {
+                    console.log(`[WhatsApp:${userId}] Voice note transcribed: "${transcribedText}"`);
+                    await queueMessage(sender, transcribedText, msg.pushName || "Customer", userId);
+                  } else {
+                    console.warn(`[WhatsApp:${userId}] Audio transcription returned empty.`);
                   }
                 }
+              } catch (audioErr) {
+                console.error(`[WhatsApp:${userId}] Error downloading/transcribing audio:`, audioErr);
               }
             }
           }
         }
-      });
+      }
+    });
   } catch (error) {
     session.connectionStatus = "disconnected";
     console.error(`[WhatsApp:${userId}] Connect error:`, error);
@@ -275,9 +303,14 @@ export async function sendMessage(jid: string, text: string, userId?: string) {
     return;
   }
   try {
-    const formattedJid = jid.includes("@") ? jid : `${jid}@s.whatsapp.net`;
+    const rawJid = jid.includes("@") ? jid : `${jid}@s.whatsapp.net`;
+    const formattedJid = rawJid.replace(/:\d+@/, "@");
     console.log(`[WhatsApp:${userId || "default"}] Sending reply to ${formattedJid}: "${text}"`);
-    await targetSock.sendMessage(formattedJid, { text });
+    const sent = await targetSock.sendMessage(formattedJid, { text });
+    if (sent?.key?.id) {
+      sentMessageIds.add(sent.key.id);
+      setTimeout(() => sentMessageIds.delete(sent.key.id!), 60000);
+    }
     console.log(`[WhatsApp:${userId || "default"}] Message successfully sent to ${formattedJid}`);
   } catch (error) {
     console.error(`[WhatsApp:${userId || "default"}] Error delivering message to ${jid}:`, error);
