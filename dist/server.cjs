@@ -4209,40 +4209,42 @@ async function deployLatestCommit() {
   const config = await getGitHubConfig();
   const logs = [];
   try {
-    logs.push(`[1/4] Preparing Git deployment from ${config.username}/${config.repo} (${config.branch})...`);
+    logs.push(`[1/5] Preparing deployment from ${config.username}/${config.repo} (${config.branch})...`);
+    const remoteUrl = config.token ? `https://${config.username}:${config.token}@github.com/${config.username}/${config.repo}.git` : `https://github.com/${config.username}/${config.repo}.git`;
     try {
-      const { stdout: stashOut } = await execAsync('git stash push -m "Auto-stash before deploy"');
-      if (stashOut && !stashOut.includes("No local changes")) {
-        logs.push(`[Info] Local changes stashed: ${stashOut.trim()}`);
-      }
+      await execAsync(`git remote set-url origin "${remoteUrl}"`);
     } catch {
+      await execAsync(`git remote add origin "${remoteUrl}"`);
     }
-    if (config.token) {
-      const authenticatedUrl = `https://${config.username}:${config.token}@github.com/${config.username}/${config.repo}.git`;
-      await execAsync(`git remote set-url origin "${authenticatedUrl}"`);
-    }
-    logs.push(`[2/4] Fetching latest commits from origin/${config.branch}...`);
+    logs.push(`[2/5] Fetching latest commits from origin/${config.branch}...`);
     const { stdout: fetchOut, stderr: fetchErr } = await execAsync(`git fetch origin ${config.branch}`);
     if (fetchOut) logs.push(fetchOut.trim());
     if (fetchErr) logs.push(fetchErr.trim());
-    logs.push(`[3/4] Checking out and fast-forwarding to origin/${config.branch}...`);
+    logs.push(`[3/5] Updating workspace to latest origin/${config.branch}...`);
+    const { stdout: pullOut } = await execAsync(`git reset --hard origin/${config.branch}`);
+    if (pullOut) logs.push(pullOut.trim());
+    logs.push(`[4/5] Synchronizing production HTML & assets...`);
     try {
-      await execAsync(`git checkout ${config.branch}`);
-    } catch {
-      await execAsync(`git checkout -B ${config.branch} origin/${config.branch}`);
+      const rootIndex = import_path10.default.join(process.cwd(), "index.html");
+      const distIndex = import_path10.default.join(process.cwd(), "dist", "index.html");
+      await import_promises10.default.copyFile(distIndex, rootIndex);
+      logs.push("Synchronized root index.html with dist/index.html");
+    } catch (e) {
+      logs.push(`[Info] Assets sync note: ${e.message}`);
     }
-    const { stdout: pullOut } = await execAsync(`git merge origin/${config.branch} --ff-only`).catch(async () => {
-      return await execAsync(`git reset --hard origin/${config.branch}`);
-    });
-    logs.push(pullOut.trim());
+    logs.push(`[5/5] Reloading application server...`);
     try {
-      await execAsync("git stash pop");
-      logs.push("[Info] Restored local workspace stashed changes.");
-    } catch {
+      const tmpDir = import_path10.default.join(process.cwd(), "tmp");
+      await import_promises10.default.mkdir(tmpDir, { recursive: true });
+      await import_promises10.default.writeFile(import_path10.default.join(tmpDir, "restart.txt"), Date.now().toString());
+      logs.push("Touched tmp/restart.txt - Phusion Passenger application reloaded.");
+    } catch (e) {
+      logs.push(`[Info] Restart trigger note: ${e.message}`);
     }
     const { stdout: newHeadOut } = await execAsync("git rev-parse HEAD");
     const deployedSha = newHeadOut.trim();
-    logs.push(`[4/4] Successfully deployed version: ${deployedSha.substring(0, 7)}`);
+    logs.push(`
+Deployment completed successfully! Current version: ${deployedSha.substring(0, 7)}`);
     await saveGitHubConfig({
       lastDeployment: {
         sha: deployedSha,
@@ -4288,21 +4290,28 @@ async function deployLatestCommit() {
 async function rollbackToCommit(commitSha) {
   const logs = [];
   try {
-    logs.push(`[1/3] Preparing rollback to commit ${commitSha.substring(0, 7)}...`);
-    try {
-      const { stdout: stashOut } = await execAsync(`git stash push -m "Auto-stash before rollback to ${commitSha.substring(0, 7)}"`);
-      if (stashOut && !stashOut.includes("No local changes")) {
-        logs.push(`[Info] Local changes stashed: ${stashOut.trim()}`);
-      }
-    } catch {
-    }
-    logs.push(`[2/3] Checking out commit ${commitSha.substring(0, 7)}...`);
-    const { stdout: coOut, stderr: coErr } = await execAsync(`git checkout ${commitSha}`);
+    logs.push(`[1/4] Preparing rollback to commit ${commitSha.substring(0, 7)}...`);
+    logs.push(`[2/4] Checking out commit ${commitSha}...`);
+    const { stdout: coOut, stderr: coErr } = await execAsync(`git reset --hard ${commitSha}`);
     if (coOut) logs.push(coOut.trim());
     if (coErr) logs.push(coErr.trim());
+    logs.push(`[3/4] Synchronizing production HTML...`);
+    try {
+      const rootIndex = import_path10.default.join(process.cwd(), "index.html");
+      const distIndex = import_path10.default.join(process.cwd(), "dist", "index.html");
+      await import_promises10.default.copyFile(distIndex, rootIndex);
+    } catch {
+    }
+    logs.push(`[4/4] Reloading application server...`);
+    try {
+      const tmpDir = import_path10.default.join(process.cwd(), "tmp");
+      await import_promises10.default.mkdir(tmpDir, { recursive: true });
+      await import_promises10.default.writeFile(import_path10.default.join(tmpDir, "restart.txt"), Date.now().toString());
+    } catch {
+    }
     const { stdout: headOut } = await execAsync("git rev-parse HEAD");
     const activeSha = headOut.trim();
-    logs.push(`[3/3] Successfully rolled back. Active commit is now: ${activeSha.substring(0, 7)}`);
+    logs.push(`Successfully rolled back. Active commit is now: ${activeSha.substring(0, 7)}`);
     await saveGitHubConfig({
       lastDeployment: {
         sha: activeSha,
