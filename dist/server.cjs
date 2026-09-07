@@ -3455,16 +3455,16 @@ async function connectToWhatsApp(userId = "usr_admin_badar", usePairingCode = fa
                   }
                 );
                 if (buffer && buffer.length > 0) {
-                  console.log(`[WhatsApp:${userId}] Transcribing voice note (${buffer.length} bytes) via Deepgram...`);
-                  const transcribedText = await transcribeAudio(
-                    buffer,
-                    audioMsg.mimetype || "audio/ogg; codecs=opus"
-                  );
-                  if (transcribedText && transcribedText.trim().length > 0) {
-                    console.log(`[WhatsApp:${userId}] Voice note transcribed: "${transcribedText}"`);
-                    await queueMessage(sender, transcribedText, msg.pushName || "Customer", userId);
+                  const result = await transcribeAudio(buffer, {
+                    mimetype: audioMsg.mimetype || "audio/ogg; codecs=opus",
+                    customerJid: sender
+                  });
+                  const text = typeof result === "string" ? result : result?.transcript;
+                  if (text && text.trim().length > 0) {
+                    console.log(`[WhatsApp:${userId}] \u{1F399}\uFE0F Voice note transcribed: "${text.trim()}"`);
+                    await queueMessage(sender, text.trim(), msg.pushName || "Customer", userId);
                   } else {
-                    console.warn(`[WhatsApp:${userId}] Audio transcription returned empty.`);
+                    console.warn(`[WhatsApp:${userId}] Audio transcription returned empty or failed:`, result?.error || "No transcript produced");
                   }
                 }
               } catch (audioErr) {

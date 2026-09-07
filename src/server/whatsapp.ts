@@ -265,17 +265,18 @@ export async function connectToWhatsApp(userId = "usr_admin_badar", usePairingCo
                 );
 
                 if (buffer && buffer.length > 0) {
-                  console.log(`[WhatsApp:${userId}] Transcribing voice note (${buffer.length} bytes) via Deepgram...`);
-                  const transcribedText = await transcribeAudio(
-                    buffer as Buffer,
-                    audioMsg.mimetype || "audio/ogg; codecs=opus"
-                  );
+                  const result = await transcribeAudio(buffer as Buffer, {
+                    mimetype: audioMsg.mimetype || "audio/ogg; codecs=opus",
+                    customerJid: sender,
+                  });
 
-                  if (transcribedText && transcribedText.trim().length > 0) {
-                    console.log(`[WhatsApp:${userId}] Voice note transcribed: "${transcribedText}"`);
-                    await queueMessage(sender, transcribedText, msg.pushName || "Customer", userId);
+                  const text = typeof result === "string" ? result : result?.transcript;
+
+                  if (text && text.trim().length > 0) {
+                    console.log(`[WhatsApp:${userId}] 🎙️ Voice note transcribed: "${text.trim()}"`);
+                    await queueMessage(sender, text.trim(), msg.pushName || "Customer", userId);
                   } else {
-                    console.warn(`[WhatsApp:${userId}] Audio transcription returned empty.`);
+                    console.warn(`[WhatsApp:${userId}] Audio transcription returned empty or failed:`, (result as any)?.error || "No transcript produced");
                   }
                 }
               } catch (audioErr) {
