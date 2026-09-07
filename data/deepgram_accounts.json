@@ -9,7 +9,7 @@
     "enabled": true,
     "balance": 14.85,
     "currency": "USD",
-    "lastChecked": "2026-09-07T12:06:53.712Z",
+    "lastChecked": "2026-09-07T12:11:53.501Z",
     "lastSuccessfulRequest": "2026-09-02T03:46:09.180Z",
     "lastError": "[HTTP 404] Request failed with status code 404",
     "totalRequests": 84,
@@ -18,7 +18,7 @@
     "totalAudioDurationSec": 1840,
     "consecutiveFailures": 0,
     "createdAt": "2026-08-26T03:46:09.180Z",
-    "updatedAt": "2026-09-07T12:06:53.712Z"
+    "updatedAt": "2026-09-07T12:11:53.501Z"
   },
   {
     "id": "dgr_acc_secondary",
@@ -30,7 +30,7 @@
     "enabled": true,
     "balance": 8.5,
     "currency": "USD",
-    "lastChecked": "2026-09-07T12:06:53.989Z",
+    "lastChecked": "2026-09-07T12:11:53.782Z",
     "lastSuccessfulRequest": "2026-09-02T02:46:09.180Z",
     "lastError": "[HTTP 404] Request failed with status code 404",
     "totalRequests": 28,
@@ -39,7 +39,7 @@
     "totalAudioDurationSec": 610,
     "consecutiveFailures": 0,
     "createdAt": "2026-08-28T03:46:09.180Z",
-    "updatedAt": "2026-09-07T12:06:53.989Z"
+    "updatedAt": "2026-09-07T12:11:53.782Z"
   },
   {
     "id": "dgr_acc_failover",
@@ -51,7 +51,7 @@
     "enabled": true,
     "balance": 25,
     "currency": "USD",
-    "lastChecked": "2026-09-07T12:06:54.266Z",
+    "lastChecked": "2026-09-07T12:11:54.063Z",
     "lastSuccessfulRequest": null,
     "lastError": "[HTTP 404] Request failed with status code 404",
     "totalRequests": 12,
@@ -60,6 +60,6 @@
     "totalAudioDurationSec": 245,
     "consecutiveFailures": 0,
     "createdAt": "2026-08-31T03:46:09.180Z",
-    "updatedAt": "2026-09-07T12:06:54.266Z"
+    "updatedAt": "2026-09-07T12:11:54.063Z"
   }
 ]
