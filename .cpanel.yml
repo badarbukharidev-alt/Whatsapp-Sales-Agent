@@ -6,7 +6,7 @@ deployment:
     - /bin/cp index.html $DEPLOYPATH
     - /bin/cp -R assets $DEPLOYPATH
     - /bin/cp -R dist $DEPLOYPATH
-    - /bin/cp -R data $DEPLOYPATH
+    - /bin/mkdir -p $DEPLOYPATH/data
     - /bin/cp app.js $DEPLOYPATH
     - /bin/cp package.json $DEPLOYPATH
     - /bin/mkdir -p $DEPLOYPATH/tmp

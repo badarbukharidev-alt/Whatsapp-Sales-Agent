@@ -4494,10 +4494,28 @@ init_agent();
 import_dotenv.default.config();
 async function initializeDataDirs() {
   const dataDir = import_path11.default.join(process.cwd(), "data");
+  const defaultsDir = import_path11.default.join(process.cwd(), "data_defaults");
   const toolImagesDir = import_path11.default.join(dataDir, "tool-images");
   try {
     await import_promises11.default.mkdir(dataDir, { recursive: true });
     await import_promises11.default.mkdir(toolImagesDir, { recursive: true });
+    try {
+      const defaultFiles = await import_promises11.default.readdir(defaultsDir);
+      for (const file of defaultFiles) {
+        const src = import_path11.default.join(defaultsDir, file);
+        const dest = import_path11.default.join(dataDir, file);
+        const stat = await import_promises11.default.stat(src);
+        if (stat.isFile()) {
+          try {
+            await import_promises11.default.access(dest);
+          } catch {
+            await import_promises11.default.copyFile(src, dest);
+            console.log(`[Init] Seeded default file: ${file}`);
+          }
+        }
+      }
+    } catch {
+    }
     await getUsers();
     await getLists();
     const files = ["customers.json", "tools.json", "settings.json"];
@@ -4506,7 +4524,7 @@ async function initializeDataDirs() {
       try {
         await import_promises11.default.access(filePath);
       } catch {
-        const defaultContent = file === "settings.json" ? JSON.stringify({ aiAgentEnabled: true, preferredApi: "gemini", defaultLLM: "Gemini", language: "Roman Urdu", autoReply: true, allowImageReplies: true }, null, 2) : JSON.stringify(file === "tools.json" ? [] : {}, null, 2);
+        const defaultContent = file === "settings.json" ? JSON.stringify({ aiAgentEnabled: true, preferredApi: "gemini", defaultLLM: "Gemini", language: "Roman Urdu", autoReply: true, allowImageReplies: true, salesSkillEnabled: true, allowGroups: false, allowChannels: false }, null, 2) : JSON.stringify(file === "tools.json" ? [] : {}, null, 2);
         await import_promises11.default.writeFile(filePath, defaultContent);
       }
     }

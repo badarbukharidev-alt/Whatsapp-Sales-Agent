@@ -21,11 +21,32 @@ import { startAgent } from "./src/server/agent.js";
 
 async function initializeDataDirs() {
   const dataDir = path.join(process.cwd(), "data");
+  const defaultsDir = path.join(process.cwd(), "data_defaults");
   const toolImagesDir = path.join(dataDir, "tool-images");
   try {
     await fs.mkdir(dataDir, { recursive: true });
     await fs.mkdir(toolImagesDir, { recursive: true });
     
+    // Seed missing files from data_defaults without ever overwriting existing user data
+    try {
+      const defaultFiles = await fs.readdir(defaultsDir);
+      for (const file of defaultFiles) {
+        const src = path.join(defaultsDir, file);
+        const dest = path.join(dataDir, file);
+        const stat = await fs.stat(src);
+        if (stat.isFile()) {
+          try {
+            await fs.access(dest);
+          } catch {
+            await fs.copyFile(src, dest);
+            console.log(`[Init] Seeded default file: ${file}`);
+          }
+        }
+      }
+    } catch {
+      // defaults directory may be absent
+    }
+
     // Initialize users & default lists
     await getUsers();
     await getLists();
@@ -38,7 +59,7 @@ async function initializeDataDirs() {
         await fs.access(filePath);
       } catch {
         const defaultContent = file === "settings.json" ? 
-          JSON.stringify({ aiAgentEnabled: true, preferredApi: "gemini", defaultLLM: "Gemini", language: "Roman Urdu", autoReply: true, allowImageReplies: true }, null, 2) : 
+          JSON.stringify({ aiAgentEnabled: true, preferredApi: "gemini", defaultLLM: "Gemini", language: "Roman Urdu", autoReply: true, allowImageReplies: true, salesSkillEnabled: true, allowGroups: false, allowChannels: false }, null, 2) : 
           JSON.stringify(file === "tools.json" ? [] : {}, null, 2);
         await fs.writeFile(filePath, defaultContent);
       }
