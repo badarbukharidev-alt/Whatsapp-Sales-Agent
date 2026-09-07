@@ -1,4 +1,8 @@
-<!doctype html>
+const fs = require('fs');
+const path = require('path');
+
+const indexPath = path.join(process.cwd(), 'index.html');
+const sourceHtml = `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
@@ -12,10 +16,13 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
-    <script type="module" crossorigin src="/assets/index-t5qRjbdZ.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-BAKtSX6E.css">
   </head>
   <body class="noise antialiased">
     <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
+`;
+
+fs.writeFileSync(indexPath, sourceHtml, 'utf8');
+console.log('[prebuild] Restored source index.html pointing to /src/main.tsx');
