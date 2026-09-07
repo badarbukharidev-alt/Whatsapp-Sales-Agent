@@ -22,7 +22,7 @@ jobs:
           server: ${{ secrets.FTP_SERVER }}
           username: ${{ secrets.FTP_USERNAME }}
           password: ${{ secrets.FTP_PASSWORD }}
-          server-dir: public_html/sales-agent.toolsfinity.io/
+          server-dir: public_html/whatsapp-agent.toolsfinity.io/
           exclude: |
             **/.git*
             **/.git*/**
