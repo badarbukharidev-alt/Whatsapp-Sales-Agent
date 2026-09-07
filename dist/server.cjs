@@ -28,280 +28,6 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// src/server/paths.ts
-function getAppRootDir() {
-  if (process.env.APP_ROOT) {
-    return import_path.default.resolve(process.env.APP_ROOT);
-  }
-  if (typeof __dirname !== "undefined") {
-    const isDistFolder = import_path.default.basename(__dirname) === "dist";
-    return isDistFolder ? import_path.default.resolve(__dirname, "..") : import_path.default.resolve(__dirname);
-  }
-  return process.cwd();
-}
-var import_path, ROOT_DIR, DATA_DIR, DIST_DIR, AUTH_DIR, TOOL_IMAGES_DIR;
-var init_paths = __esm({
-  "src/server/paths.ts"() {
-    import_path = __toESM(require("path"), 1);
-    ROOT_DIR = getAppRootDir();
-    DATA_DIR = import_path.default.join(ROOT_DIR, "data");
-    DIST_DIR = import_path.default.join(ROOT_DIR, "dist");
-    AUTH_DIR = import_path.default.join(DATA_DIR, "auth");
-    TOOL_IMAGES_DIR = import_path.default.join(DATA_DIR, "tool-images");
-    try {
-      if (process.cwd() !== ROOT_DIR) {
-        process.chdir(ROOT_DIR);
-        console.log(`[Paths] Working directory synchronized to app root: ${ROOT_DIR}`);
-      }
-    } catch (err) {
-      console.warn(`[Paths] Could not set working directory to ${ROOT_DIR}:`, err);
-    }
-  }
-});
-
-// src/server/settings.ts
-async function getSettings() {
-  try {
-    const data = await import_promises.default.readFile(getSettingsFile(), "utf-8");
-    const parsed = JSON.parse(data);
-    return {
-      ...DEFAULT_SETTINGS,
-      ...parsed,
-      preferredApi: parsed.preferredApi || (parsed.defaultLLM ? parsed.defaultLLM.toLowerCase() : "gemini")
-    };
-  } catch (error) {
-    return { ...DEFAULT_SETTINGS };
-  }
-}
-async function saveSettings(newSettings) {
-  const current = await getSettings();
-  const merged = {
-    ...current,
-    ...newSettings
-  };
-  if (merged.preferredApi) {
-    if (merged.preferredApi.includes("deepseek")) merged.defaultLLM = "DeepSeek";
-    else if (merged.preferredApi.includes("claude")) merged.defaultLLM = "Claude";
-    else if (merged.preferredApi.includes("gptlogic")) merged.defaultLLM = "GPTLogic";
-    else merged.defaultLLM = "Gemini";
-  }
-  await import_promises.default.writeFile(getSettingsFile(), JSON.stringify(merged, null, 2));
-  return merged;
-}
-function setupSettingsRoutes(app) {
-  app.get("/api/settings", async (req, res) => {
-    try {
-      const settings = await getSettings();
-      res.json(settings);
-    } catch (error) {
-      res.status(500).json({ error: "Failed to load settings" });
-    }
-  });
-  app.post("/api/settings", async (req, res) => {
-    try {
-      const saved = await saveSettings(req.body);
-      res.json({ success: true, settings: saved });
-    } catch (error) {
-      res.status(500).json({ error: "Failed to save settings" });
-    }
-  });
-  app.put("/api/settings", async (req, res) => {
-    try {
-      const saved = await saveSettings(req.body);
-      res.json({ success: true, settings: saved });
-    } catch (error) {
-      res.status(500).json({ error: "Failed to save settings" });
-    }
-  });
-  app.post("/api/ai/test", async (req, res) => {
-    try {
-      const prompt = req.body?.prompt || "Salam bhai, can you help me with tools?";
-      const systemPrompt = req.body?.systemPrompt;
-      const reply = await askAI(prompt, systemPrompt);
-      res.json({ success: true, reply });
-    } catch (error) {
-      res.status(500).json({ error: error?.message || "AI Test failed" });
-    }
-  });
-}
-var import_promises, import_path2, getSettingsFile, DEFAULT_SETTINGS;
-var init_settings = __esm({
-  "src/server/settings.ts"() {
-    import_promises = __toESM(require("fs/promises"), 1);
-    import_path2 = __toESM(require("path"), 1);
-    init_ai();
-    init_paths();
-    getSettingsFile = () => import_path2.default.join(DATA_DIR, "settings.json");
-    DEFAULT_SETTINGS = {
-      aiAgentEnabled: true,
-      preferredApi: "gemini",
-      defaultLLM: "Gemini",
-      language: "Roman Urdu",
-      autoReply: true,
-      humanLikeMode: true,
-      chatStyle: "casual_roman_urdu",
-      maxTokens: 150,
-      systemPrompt: "",
-      allowImageReplies: true,
-      paymentInstructions: "Payment send karne ke baad screenshot/receipt share karein, verification ke foran baad access mil jaye ga.",
-      responseDelaySeconds: 1.5,
-      paymentMethods: [
-        {
-          id: "pm_easypaisa_1",
-          provider: "Easypaisa",
-          accountTitle: "Account Title",
-          accountNumber: "03001234567",
-          bankName: "Easypaisa Wallet",
-          instructions: "Send via Easypaisa App",
-          isActive: true
-        },
-        {
-          id: "pm_jazzcash_1",
-          provider: "JazzCash",
-          accountTitle: "Account Title",
-          accountNumber: "03001234567",
-          bankName: "JazzCash Mobile Account",
-          instructions: "Send via JazzCash App",
-          isActive: true
-        }
-      ]
-    };
-  }
-});
-
-// src/server/ai.ts
-function getGeminiClient() {
-  if (!geminiClient && process.env.GEMINI_API_KEY) {
-    try {
-      geminiClient = new import_genai.GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-    } catch (e) {
-      console.warn("[AI] Failed to init GoogleGenAI SDK:", e);
-    }
-  }
-  return geminiClient;
-}
-async function callOfficialGemini(prompt, systemPrompt) {
-  const client = getGeminiClient();
-  if (!client) return { success: false, text: "", provider: "Gemini (Official)" };
-  try {
-    console.log("[AI] Requesting Official Gemini API...");
-    const response = await client.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: prompt,
-      config: {
-        systemInstruction: systemPrompt || void 0,
-        temperature: 0.7
-      }
-    });
-    const text = response.text?.trim();
-    if (text) {
-      return { success: true, text, provider: "Gemini (Official)" };
-    }
-  } catch (err) {
-    console.warn("[AI] Official Gemini API failed:", err?.message || err);
-  }
-  return { success: false, text: "", provider: "Gemini (Official)" };
-}
-function buildProviderUrl(provider, query, systemPrompt) {
-  const encodedQuery = encodeURIComponent(query);
-  switch (provider) {
-    case "Gemini":
-      return `https://api-rebix.zone.id/api/gemini?q=${encodedQuery}`;
-    case "DeepSeek":
-      return `https://api-rebix.zone.id/api/deepseek-v3?q=${encodedQuery}`;
-    case "Claude":
-      return `https://api-rebix.zone.id/api/claude-haiku?q=${encodedQuery}`;
-    case "GPTLogic": {
-      const prompt = encodeURIComponent(systemPrompt || "You are a helpful WhatsApp sales agent.");
-      return `https://api-rebix.zone.id/api/gptlogic?q=${encodedQuery}&prompt=${prompt}`;
-    }
-    default:
-      return `https://api-rebix.zone.id/api/gemini?q=${encodedQuery}`;
-  }
-}
-async function callSingleProvider(provider, query, systemPrompt) {
-  if (provider === "Gemini" && process.env.GEMINI_API_KEY) {
-    const officialRes = await callOfficialGemini(query, systemPrompt);
-    if (officialRes.success && officialRes.text) {
-      return officialRes;
-    }
-  }
-  const url = buildProviderUrl(provider, query, systemPrompt);
-  try {
-    console.log(`[AI] Requesting ${provider} API...`);
-    const response = await import_axios.default.get(url, {
-      timeout: 15e3,
-      headers: {
-        "User-Agent": "WhatsApp-Sales-Agent/1.0",
-        "Accept": "application/json, text/plain, */*"
-      }
-    });
-    const data = response.data;
-    if (!data) {
-      console.warn(`[AI] ${provider} returned empty response body.`);
-      return { success: false, text: "", provider };
-    }
-    let extractedText = "";
-    if (typeof data === "string") {
-      extractedText = data.trim();
-    } else if (typeof data === "object") {
-      const candidate = data.message ?? data.response ?? data.result ?? data.reply ?? data.text ?? data.content ?? data.data;
-      if (typeof candidate === "string") {
-        extractedText = candidate.trim();
-      } else if (candidate && typeof candidate === "object") {
-        extractedText = JSON.stringify(candidate);
-      }
-    }
-    if (extractedText && extractedText.length > 0) {
-      console.log(`[AI] Successfully received response from ${provider} (${extractedText.length} chars)`);
-      return {
-        success: true,
-        text: extractedText,
-        provider
-      };
-    } else {
-      console.warn(`[AI] ${provider} returned JSON but no usable text field found:`, JSON.stringify(data));
-      return { success: false, text: "", provider };
-    }
-  } catch (error) {
-    const errorMsg = error?.response?.status ? `HTTP ${error.response.status}` : error?.message || error;
-    console.warn(`[AI] ${provider} failed (reason: ${errorMsg}).`);
-    return { success: false, text: "", provider };
-  }
-}
-async function askAI(prompt, systemPrompt) {
-  const settings = await getSettings();
-  const preferred = settings.defaultLLM || "Gemini";
-  const fallbackOrder = [
-    preferred,
-    ...ALL_PROVIDERS.filter((p) => p !== preferred)
-  ];
-  console.log(`[AI] Starting request. Provider sequence: ${fallbackOrder.join(" -> ")}`);
-  for (const provider of fallbackOrder) {
-    const res = await callSingleProvider(provider, prompt, systemPrompt);
-    if (res.success && res.text) {
-      return res.text;
-    }
-    console.log(`[AI] Trying next available fallback provider in chain...`);
-  }
-  console.error("[AI] All AI endpoints failed or timed out.");
-  const lang = settings.language || "Roman Urdu";
-  if (lang.toLowerCase().includes("urdu")) {
-    return "Haan bhai, abhi thoda network issue hai. Thodi der baad msg krna ya try krlo.";
-  }
-  return "Hey, having a brief network issue. Please try again in a moment.";
-}
-var import_axios, import_genai, ALL_PROVIDERS, geminiClient;
-var init_ai = __esm({
-  "src/server/ai.ts"() {
-    import_axios = __toESM(require("axios"), 1);
-    import_genai = require("@google/genai");
-    init_settings();
-    ALL_PROVIDERS = ["Gemini", "DeepSeek", "Claude", "GPTLogic"];
-    geminiClient = null;
-  }
-});
-
 // src/server/auth.ts
 function hashPassword(password) {
   return import_crypto.default.createHash("sha256").update(password.trim()).digest("hex");
@@ -309,24 +35,24 @@ function hashPassword(password) {
 async function getPlans() {
   if (plansCache) return plansCache;
   try {
-    const data = await import_promises2.default.readFile(PLANS_FILE, "utf-8");
+    const data = await import_promises.default.readFile(PLANS_FILE, "utf-8");
     plansCache = JSON.parse(data);
     return plansCache;
   } catch {
     plansCache = DEFAULT_PLANS;
-    await import_promises2.default.mkdir(import_path3.default.dirname(PLANS_FILE), { recursive: true });
-    await import_promises2.default.writeFile(PLANS_FILE, JSON.stringify(DEFAULT_PLANS, null, 2));
+    await import_promises.default.mkdir(import_path.default.dirname(PLANS_FILE), { recursive: true });
+    await import_promises.default.writeFile(PLANS_FILE, JSON.stringify(DEFAULT_PLANS, null, 2));
     return plansCache;
   }
 }
 async function savePlans(plans) {
   plansCache = plans;
-  await import_promises2.default.mkdir(import_path3.default.dirname(PLANS_FILE), { recursive: true });
-  await import_promises2.default.writeFile(PLANS_FILE, JSON.stringify(plans, null, 2));
+  await import_promises.default.mkdir(import_path.default.dirname(PLANS_FILE), { recursive: true });
+  await import_promises.default.writeFile(PLANS_FILE, JSON.stringify(plans, null, 2));
 }
 async function getUsers() {
   try {
-    const data = await import_promises2.default.readFile(USERS_FILE, "utf-8");
+    const data = await import_promises.default.readFile(USERS_FILE, "utf-8");
     let users = JSON.parse(data);
     const adminEmail = "baddarbukhari@gmail.com";
     const adminPassHash = hashPassword("B@dar85299211");
@@ -416,14 +142,14 @@ async function getUsers() {
   }
 }
 async function saveUsers(users) {
-  await import_promises2.default.mkdir(import_path3.default.dirname(USERS_FILE), { recursive: true });
-  await import_promises2.default.writeFile(USERS_FILE, JSON.stringify(users, null, 2));
+  await import_promises.default.mkdir(import_path.default.dirname(USERS_FILE), { recursive: true });
+  await import_promises.default.writeFile(USERS_FILE, JSON.stringify(users, null, 2));
 }
 async function recordAuditLog(action, performedBy, details) {
   try {
     let logs = [];
     try {
-      const data = await import_promises2.default.readFile(AUDIT_LOGS_FILE, "utf-8");
+      const data = await import_promises.default.readFile(AUDIT_LOGS_FILE, "utf-8");
       logs = JSON.parse(data);
     } catch {
       logs = [];
@@ -438,15 +164,15 @@ async function recordAuditLog(action, performedBy, details) {
     if (logs.length > 200) {
       logs = logs.slice(0, 200);
     }
-    await import_promises2.default.mkdir(import_path3.default.dirname(AUDIT_LOGS_FILE), { recursive: true });
-    await import_promises2.default.writeFile(AUDIT_LOGS_FILE, JSON.stringify(logs, null, 2));
+    await import_promises.default.mkdir(import_path.default.dirname(AUDIT_LOGS_FILE), { recursive: true });
+    await import_promises.default.writeFile(AUDIT_LOGS_FILE, JSON.stringify(logs, null, 2));
   } catch (err) {
     console.warn("[Auth] Failed to write audit log:", err);
   }
 }
 async function getAuditLogs() {
   try {
-    const data = await import_promises2.default.readFile(AUDIT_LOGS_FILE, "utf-8");
+    const data = await import_promises.default.readFile(AUDIT_LOGS_FILE, "utf-8");
     return JSON.parse(data);
   } catch {
     return [];
@@ -500,8 +226,8 @@ function setupAuthRoutes(app) {
       if (users.some((u) => u.email.toLowerCase() === cleanEmail)) {
         return res.status(400).json({ error: "An account with this email already exists." });
       }
-      const selectedPlan = plan || "Pro";
-      const baseLimits = DEFAULT_PLAN_LIMITS[selectedPlan] || DEFAULT_PLAN_LIMITS.Pro;
+      const selectedPlan = "Free";
+      const baseLimits = DEFAULT_PLAN_LIMITS.Free;
       const newUser = {
         id: "usr_" + Date.now() + "_" + Math.random().toString(36).substring(2, 6),
         name: name.trim(),
@@ -770,8 +496,8 @@ function setupAuthRoutes(app) {
       if (!adminUser || adminUser.role !== "admin") {
         return res.status(403).json({ error: "Admin role required." });
       }
-      const groupsCache = import_path3.default.join(DATA_DIR, "groups_cache.json");
-      await import_promises2.default.rm(groupsCache, { force: true }).catch(() => {
+      const groupsCache = import_path.default.join(process.cwd(), "data", "groups_cache.json");
+      await import_promises.default.rm(groupsCache, { force: true }).catch(() => {
       });
       await recordAuditLog("Cache Cleared", adminUser.email, "System cache purged by admin");
       res.json({ success: true, message: "System cache cleared successfully." });
@@ -924,16 +650,15 @@ function setupAuthRoutes(app) {
     }
   });
 }
-var import_promises2, import_path3, import_crypto, USERS_FILE, AUDIT_LOGS_FILE, PLANS_FILE, activeSessions, DEFAULT_PLAN_LIMITS, DEFAULT_PLANS, plansCache;
+var import_promises, import_path, import_crypto, USERS_FILE, AUDIT_LOGS_FILE, PLANS_FILE, activeSessions, DEFAULT_PLAN_LIMITS, DEFAULT_PLANS, plansCache;
 var init_auth = __esm({
   "src/server/auth.ts"() {
-    import_promises2 = __toESM(require("fs/promises"), 1);
-    import_path3 = __toESM(require("path"), 1);
+    import_promises = __toESM(require("fs/promises"), 1);
+    import_path = __toESM(require("path"), 1);
     import_crypto = __toESM(require("crypto"), 1);
-    init_paths();
-    USERS_FILE = import_path3.default.join(DATA_DIR, "users.json");
-    AUDIT_LOGS_FILE = import_path3.default.join(DATA_DIR, "audit_logs.json");
-    PLANS_FILE = import_path3.default.join(DATA_DIR, "plans.json");
+    USERS_FILE = import_path.default.join(process.cwd(), "data", "users.json");
+    AUDIT_LOGS_FILE = import_path.default.join(process.cwd(), "data", "audit_logs.json");
+    PLANS_FILE = import_path.default.join(process.cwd(), "data", "plans.json");
     activeSessions = /* @__PURE__ */ new Map();
     DEFAULT_PLAN_LIMITS = {
       Free: {
@@ -1071,6 +796,260 @@ var init_auth = __esm({
   }
 });
 
+// src/server/settings.ts
+async function getSettings(userId) {
+  try {
+    const targetFile = getSettingsFile(userId);
+    const data = await import_promises2.default.readFile(targetFile, "utf-8");
+    const parsed = JSON.parse(data);
+    return {
+      ...DEFAULT_SETTINGS,
+      ...parsed,
+      preferredApi: parsed.preferredApi || (parsed.defaultLLM ? parsed.defaultLLM.toLowerCase() : "gemini")
+    };
+  } catch (error) {
+    if (userId && userId !== "usr_admin_badar" && userId !== "admin") {
+      try {
+        const globalData = await import_promises2.default.readFile(getSettingsFile(), "utf-8");
+        const parsed = JSON.parse(globalData);
+        return {
+          ...DEFAULT_SETTINGS,
+          ...parsed
+        };
+      } catch {
+        return { ...DEFAULT_SETTINGS };
+      }
+    }
+    return { ...DEFAULT_SETTINGS };
+  }
+}
+async function saveSettings(newSettings, userId) {
+  const current = await getSettings(userId);
+  const merged = {
+    ...current,
+    ...newSettings
+  };
+  if (merged.preferredApi) {
+    if (merged.preferredApi.includes("deepseek")) merged.defaultLLM = "DeepSeek";
+    else if (merged.preferredApi.includes("claude")) merged.defaultLLM = "Claude";
+    else if (merged.preferredApi.includes("gptlogic")) merged.defaultLLM = "GPTLogic";
+    else merged.defaultLLM = "Gemini";
+  }
+  const targetFile = getSettingsFile(userId);
+  await import_promises2.default.writeFile(targetFile, JSON.stringify(merged, null, 2));
+  return merged;
+}
+function setupSettingsRoutes(app) {
+  app.get("/api/settings", async (req, res) => {
+    try {
+      const user = await getUserByToken(req.headers.authorization);
+      const settings = await getSettings(user?.id);
+      res.json(settings);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to load settings" });
+    }
+  });
+  app.post("/api/settings", async (req, res) => {
+    try {
+      const user = await getUserByToken(req.headers.authorization);
+      const saved = await saveSettings(req.body, user?.id);
+      res.json({ success: true, settings: saved });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to save settings" });
+    }
+  });
+  app.put("/api/settings", async (req, res) => {
+    try {
+      const user = await getUserByToken(req.headers.authorization);
+      const saved = await saveSettings(req.body, user?.id);
+      res.json({ success: true, settings: saved });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to save settings" });
+    }
+  });
+}
+var import_promises2, import_path2, getSettingsFile, DEFAULT_SETTINGS;
+var init_settings = __esm({
+  "src/server/settings.ts"() {
+    import_promises2 = __toESM(require("fs/promises"), 1);
+    import_path2 = __toESM(require("path"), 1);
+    init_auth();
+    getSettingsFile = (userId) => {
+      if (!userId || userId === "usr_admin_badar" || userId === "admin") {
+        return import_path2.default.join(process.cwd(), "data", "settings.json");
+      }
+      return import_path2.default.join(process.cwd(), "data", `settings_${userId}.json`);
+    };
+    DEFAULT_SETTINGS = {
+      aiAgentEnabled: true,
+      preferredApi: "gemini",
+      defaultLLM: "Gemini",
+      language: "Roman Urdu",
+      autoReply: true,
+      humanLikeMode: true,
+      chatStyle: "casual_roman_urdu",
+      maxTokens: 150,
+      systemPrompt: "",
+      allowImageReplies: true,
+      paymentInstructions: "Payment send karne ke baad screenshot/receipt share karein, verification ke foran baad access mil jaye ga.",
+      responseDelaySeconds: 1.5,
+      paymentMethods: [
+        {
+          id: "pm_easypaisa_1",
+          provider: "Easypaisa",
+          accountTitle: "Account Title",
+          accountNumber: "03001234567",
+          bankName: "Easypaisa Wallet",
+          instructions: "Send via Easypaisa App",
+          isActive: true
+        },
+        {
+          id: "pm_jazzcash_1",
+          provider: "JazzCash",
+          accountTitle: "Account Title",
+          accountNumber: "03001234567",
+          bankName: "JazzCash Mobile Account",
+          instructions: "Send via JazzCash App",
+          isActive: true
+        }
+      ]
+    };
+  }
+});
+
+// src/server/ai.ts
+function getGeminiClient() {
+  if (!geminiClient && process.env.GEMINI_API_KEY) {
+    try {
+      geminiClient = new import_genai.GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    } catch (e) {
+      console.warn("[AI] Failed to init GoogleGenAI SDK:", e);
+    }
+  }
+  return geminiClient;
+}
+async function callOfficialGemini(prompt, systemPrompt) {
+  const client = getGeminiClient();
+  if (!client) return { success: false, text: "", provider: "Gemini (Official)" };
+  try {
+    console.log("[AI] Requesting Official Gemini API...");
+    const response = await client.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: prompt,
+      config: {
+        systemInstruction: systemPrompt || void 0,
+        temperature: 0.7
+      }
+    });
+    const text = response.text?.trim();
+    if (text) {
+      return { success: true, text, provider: "Gemini (Official)" };
+    }
+  } catch (err) {
+    console.warn("[AI] Official Gemini API failed:", err?.message || err);
+  }
+  return { success: false, text: "", provider: "Gemini (Official)" };
+}
+function buildProviderUrl(provider, query, systemPrompt) {
+  const encodedQuery = encodeURIComponent(query);
+  switch (provider) {
+    case "Gemini":
+      return `https://api-rebix.zone.id/api/gemini?q=${encodedQuery}`;
+    case "DeepSeek":
+      return `https://api-rebix.zone.id/api/deepseek-v3?q=${encodedQuery}`;
+    case "Claude":
+      return `https://api-rebix.zone.id/api/claude-haiku?q=${encodedQuery}`;
+    case "GPTLogic": {
+      const prompt = encodeURIComponent(systemPrompt || "You are a helpful WhatsApp sales agent.");
+      return `https://api-rebix.zone.id/api/gptlogic?q=${encodedQuery}&prompt=${prompt}`;
+    }
+    default:
+      return `https://api-rebix.zone.id/api/gemini?q=${encodedQuery}`;
+  }
+}
+async function callSingleProvider(provider, query, systemPrompt) {
+  if (provider === "Gemini" && process.env.GEMINI_API_KEY) {
+    const officialRes = await callOfficialGemini(query, systemPrompt);
+    if (officialRes.success && officialRes.text) {
+      return officialRes;
+    }
+  }
+  const url = buildProviderUrl(provider, query, systemPrompt);
+  try {
+    console.log(`[AI] Requesting ${provider} API...`);
+    const response = await import_axios.default.get(url, {
+      timeout: 15e3,
+      headers: {
+        "User-Agent": "WhatsApp-Sales-Agent/1.0",
+        "Accept": "application/json, text/plain, */*"
+      }
+    });
+    const data = response.data;
+    if (!data) {
+      console.warn(`[AI] ${provider} returned empty response body.`);
+      return { success: false, text: "", provider };
+    }
+    let extractedText = "";
+    if (typeof data === "string") {
+      extractedText = data.trim();
+    } else if (typeof data === "object") {
+      const candidate = data.message ?? data.response ?? data.result ?? data.reply ?? data.text ?? data.content ?? data.data;
+      if (typeof candidate === "string") {
+        extractedText = candidate.trim();
+      } else if (candidate && typeof candidate === "object") {
+        extractedText = JSON.stringify(candidate);
+      }
+    }
+    if (extractedText && extractedText.length > 0) {
+      console.log(`[AI] Successfully received response from ${provider} (${extractedText.length} chars)`);
+      return {
+        success: true,
+        text: extractedText,
+        provider
+      };
+    } else {
+      console.warn(`[AI] ${provider} returned JSON but no usable text field found:`, JSON.stringify(data));
+      return { success: false, text: "", provider };
+    }
+  } catch (error) {
+    const errorMsg = error?.response?.status ? `HTTP ${error.response.status}` : error?.message || error;
+    console.warn(`[AI] ${provider} failed (reason: ${errorMsg}).`);
+    return { success: false, text: "", provider };
+  }
+}
+async function askAI(prompt, systemPrompt) {
+  const settings = await getSettings();
+  const preferred = settings.defaultLLM || "Gemini";
+  const fallbackOrder = [
+    preferred,
+    ...ALL_PROVIDERS.filter((p) => p !== preferred)
+  ];
+  console.log(`[AI] Starting request. Provider sequence: ${fallbackOrder.join(" -> ")}`);
+  for (const provider of fallbackOrder) {
+    const res = await callSingleProvider(provider, prompt, systemPrompt);
+    if (res.success && res.text) {
+      return res.text;
+    }
+    console.log(`[AI] Trying next available fallback provider in chain...`);
+  }
+  console.error("[AI] All AI endpoints failed or timed out.");
+  const lang = settings.language || "Roman Urdu";
+  if (lang.toLowerCase().includes("urdu")) {
+    return "Haan bhai, abhi thoda network issue hai. Thodi der baad msg krna ya try krlo.";
+  }
+  return "Hey, having a brief network issue. Please try again in a moment.";
+}
+var import_axios, import_genai, ALL_PROVIDERS, geminiClient;
+var init_ai = __esm({
+  "src/server/ai.ts"() {
+    import_axios = __toESM(require("axios"), 1);
+    import_genai = require("@google/genai");
+    init_settings();
+    ALL_PROVIDERS = ["Gemini", "DeepSeek", "Claude", "GPTLogic"];
+    geminiClient = null;
+  }
+});
+
 // src/server/usage.ts
 function getTodayKey() {
   const d = /* @__PURE__ */ new Date();
@@ -1142,7 +1121,7 @@ async function getUsage() {
 async function saveUsage(usage) {
   usageCache = usage;
   usage.lastUpdated = (/* @__PURE__ */ new Date()).toISOString();
-  await import_promises3.default.mkdir(import_path4.default.dirname(USAGE_FILE), { recursive: true });
+  await import_promises3.default.mkdir(import_path3.default.dirname(USAGE_FILE), { recursive: true });
   await import_promises3.default.writeFile(USAGE_FILE, JSON.stringify(usage, null, 2), "utf-8");
 }
 async function recordAiReply(userId) {
@@ -1242,15 +1221,14 @@ function setupUsageRoutes(app) {
     }
   });
 }
-var import_promises3, import_path4, USAGE_FILE, usageCache;
+var import_promises3, import_path3, USAGE_FILE, usageCache;
 var init_usage = __esm({
   "src/server/usage.ts"() {
     import_promises3 = __toESM(require("fs/promises"), 1);
-    import_path4 = __toESM(require("path"), 1);
+    import_path3 = __toESM(require("path"), 1);
     init_memory();
     init_auth();
-    init_paths();
-    USAGE_FILE = import_path4.default.join(DATA_DIR, "usage.json");
+    USAGE_FILE = import_path3.default.join(process.cwd(), "data", "usage.json");
     usageCache = null;
   }
 });
@@ -1270,7 +1248,7 @@ __export(lists_exports, {
 });
 async function getLists() {
   try {
-    await import_promises4.default.mkdir(import_path5.default.dirname(LISTS_FILE), { recursive: true });
+    await import_promises4.default.mkdir(import_path4.default.dirname(LISTS_FILE), { recursive: true });
     const data = await import_promises4.default.readFile(LISTS_FILE, "utf-8");
     const parsed = JSON.parse(data);
     let updated = false;
@@ -1291,7 +1269,7 @@ async function getLists() {
   }
 }
 async function saveLists(lists) {
-  await import_promises4.default.mkdir(import_path5.default.dirname(LISTS_FILE), { recursive: true });
+  await import_promises4.default.mkdir(import_path4.default.dirname(LISTS_FILE), { recursive: true });
   await import_promises4.default.writeFile(LISTS_FILE, JSON.stringify(lists, null, 2), "utf-8");
 }
 async function createCustomList(name, color, description) {
@@ -1357,8 +1335,8 @@ async function deleteList(id) {
 }
 function getWhatsAppLabelSyncStatus() {
   const connection = getConnectionStatus();
-  const sock2 = getSocket();
-  if (connection !== "connected" || !sock2) {
+  const sock = getSocket();
+  if (connection !== "connected" || !sock) {
     return {
       isSupported: false,
       isBusinessAccount: false,
@@ -1366,7 +1344,7 @@ function getWhatsAppLabelSyncStatus() {
       reason: "WhatsApp is not connected. Connect your WhatsApp device to check native label support."
     };
   }
-  const hasLabelApi = typeof sock2.addChatLabel === "function" || typeof sock2.getLabels === "function" || typeof sock2.chatModify === "function";
+  const hasLabelApi = typeof sock.addChatLabel === "function" || typeof sock.getLabels === "function" || typeof sock.chatModify === "function";
   return {
     isSupported: hasLabelApi,
     isBusinessAccount: false,
@@ -1377,12 +1355,12 @@ function getWhatsAppLabelSyncStatus() {
   };
 }
 async function syncCustomerToWhatsAppNativeLabel(phoneNumber, status) {
-  const sock2 = getSocket();
-  if (!sock2) return;
+  const sock = getSocket();
+  if (!sock) return;
   try {
-    if (typeof sock2.addChatLabel === "function") {
+    if (typeof sock.addChatLabel === "function") {
       const jid = phoneNumber.includes("@s.whatsapp.net") ? phoneNumber : `${phoneNumber.replace(/[^0-9]/g, "")}@s.whatsapp.net`;
-      await sock2.addChatLabel(jid, status);
+      await sock.addChatLabel(jid, status);
     }
   } catch (err) {
     console.debug(`[WhatsApp Labels] Native label sync notice for ${phoneNumber}:`, err);
@@ -1477,15 +1455,14 @@ function setupListRoutes(app) {
     }
   });
 }
-var import_promises4, import_path5, LISTS_FILE, DEFAULT_LISTS;
+var import_promises4, import_path4, LISTS_FILE, DEFAULT_LISTS;
 var init_lists = __esm({
   "src/server/lists.ts"() {
     import_promises4 = __toESM(require("fs/promises"), 1);
-    import_path5 = __toESM(require("path"), 1);
+    import_path4 = __toESM(require("path"), 1);
     init_whatsapp();
     init_memory();
-    init_paths();
-    LISTS_FILE = import_path5.default.join(DATA_DIR, "lists.json");
+    LISTS_FILE = import_path4.default.join(process.cwd(), "data", "lists.json");
     DEFAULT_LISTS = [
       {
         id: "new-customer",
@@ -1606,7 +1583,7 @@ async function saveCustomers(data) {
   } else {
     record = data;
   }
-  await import_promises5.default.mkdir(import_path6.default.dirname(getCustomersFile()), { recursive: true });
+  await import_promises5.default.mkdir(import_path5.default.dirname(getCustomersFile()), { recursive: true });
   await import_promises5.default.writeFile(getCustomersFile(), JSON.stringify(record, null, 2), "utf-8");
 }
 async function saveCustomer(phoneNumber, data) {
@@ -1831,13 +1808,12 @@ function setupMemoryRoutes(app) {
     }
   });
 }
-var import_promises5, import_path6, VALID_CUSTOMER_STATUSES, getCustomersFile;
+var import_promises5, import_path5, VALID_CUSTOMER_STATUSES, getCustomersFile;
 var init_memory = __esm({
   "src/server/memory.ts"() {
     import_promises5 = __toESM(require("fs/promises"), 1);
-    import_path6 = __toESM(require("path"), 1);
+    import_path5 = __toESM(require("path"), 1);
     init_usage();
-    init_paths();
     VALID_CUSTOMER_STATUSES = [
       "New Customer",
       "Interested",
@@ -1847,15 +1823,24 @@ var init_memory = __esm({
       "Follow Up",
       "Important"
     ];
-    getCustomersFile = () => import_path6.default.join(DATA_DIR, "customers.json");
+    getCustomersFile = () => import_path5.default.join(process.cwd(), "data", "customers.json");
   }
 });
 
 // src/server/tools.ts
-async function getTools() {
+async function getTools(userId) {
   try {
     const data = await import_promises6.default.readFile(getToolsFile(), "utf-8");
-    return JSON.parse(data);
+    const tools = JSON.parse(data);
+    if (!userId) {
+      return tools;
+    }
+    return tools.filter((t) => {
+      if (t.userId) {
+        return t.userId === userId;
+      }
+      return userId === "usr_admin_badar" || userId === "admin";
+    });
   } catch (error) {
     return [];
   }
@@ -1866,41 +1851,51 @@ async function saveTools(tools) {
 function setupToolsRoutes(app) {
   app.get("/api/tools", async (req, res) => {
     try {
-      const tools = await getTools();
-      res.json(tools);
+      const user = await getUserByToken(req.headers.authorization);
+      const allTools = await getTools();
+      if (!user || user.role === "admin") {
+        return res.json(allTools);
+      }
+      const userTools = allTools.filter((t) => t.userId === user.id);
+      res.json(userTools);
     } catch (error) {
       res.status(500).json({ error: "Failed to load tools" });
     }
   });
   app.post("/api/tools/upload-image", async (req, res) => {
     try {
+      const user = await getUserByToken(req.headers.authorization);
       const { filename, data, title, description, toolId } = req.body;
       if (!filename || !data || !description) {
         return res.status(400).json({ error: "Filename, image data, and description are required." });
       }
       const imagesDir = getToolImagesDir();
       await import_promises6.default.mkdir(imagesDir, { recursive: true });
-      const ext = import_path7.default.extname(filename) || ".png";
-      const baseName = import_path7.default.basename(filename, ext).replace(/[^a-zA-Z0-9_-]/g, "_").toLowerCase();
+      const ext = import_path6.default.extname(filename) || ".png";
+      const baseName = import_path6.default.basename(filename, ext).replace(/[^a-zA-Z0-9_-]/g, "_").toLowerCase();
       const uniqueFilename = `${Date.now()}_${baseName}${ext}`;
-      const targetPath = import_path7.default.join(imagesDir, uniqueFilename);
+      const targetPath = import_path6.default.join(imagesDir, uniqueFilename);
       const base64Data = data.includes("base64,") ? data.split("base64,")[1] : data;
       const buffer = Buffer.from(base64Data, "base64");
       await import_promises6.default.writeFile(targetPath, buffer);
       const imageObject = {
         id: `img_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
         filename: uniqueFilename,
-        filepath: import_path7.default.join("data", "tool-images", uniqueFilename),
+        filepath: import_path6.default.join("data", "tool-images", uniqueFilename),
         url: `/tool-images/${uniqueFilename}`,
         title: title?.trim() || "",
         description: description.trim(),
         toolId: toolId || void 0,
+        userId: user ? user.id : void 0,
         createdAt: (/* @__PURE__ */ new Date()).toISOString()
       };
       if (toolId) {
         let tools = await getTools();
         const toolIdx = tools.findIndex((t) => t.id === toolId);
         if (toolIdx !== -1) {
+          if (user && user.role !== "admin" && tools[toolIdx].userId && tools[toolIdx].userId !== user.id) {
+            return res.status(403).json({ error: "Not authorized to modify this tool" });
+          }
           tools[toolIdx].images = tools[toolIdx].images || [];
           tools[toolIdx].images.push(imageObject);
           await saveTools(tools);
@@ -1914,6 +1909,7 @@ function setupToolsRoutes(app) {
   });
   app.post("/api/tools", async (req, res) => {
     try {
+      const user = await getUserByToken(req.headers.authorization);
       const { name, rawInfo, images } = req.body;
       const prompt = `Convert the following raw tool information into a clean structured JSON format. 
 DO NOT OUTPUT ANY TEXT EXCEPT THE RAW JSON.
@@ -1954,6 +1950,7 @@ ${rawInfo}
         };
       }
       parsedTool.id = Date.now().toString();
+      parsedTool.userId = user ? user.id : "usr_admin_badar";
       parsedTool.images = Array.isArray(images) ? images : [];
       const tools = await getTools();
       tools.push(parsedTool);
@@ -1966,6 +1963,7 @@ ${rawInfo}
   });
   app.put("/api/tools/:id", async (req, res) => {
     try {
+      const user = await getUserByToken(req.headers.authorization);
       const { id } = req.params;
       const updatedData = req.body;
       let tools = await getTools();
@@ -1973,11 +1971,15 @@ ${rawInfo}
       if (index === -1) {
         return res.status(404).json({ error: "Tool not found" });
       }
+      if (user && user.role !== "admin" && tools[index].userId && tools[index].userId !== user.id) {
+        return res.status(403).json({ error: "You can only edit your own tools." });
+      }
       tools[index] = {
         ...tools[index],
         ...updatedData,
-        id
+        id,
         // preserve ID
+        userId: tools[index].userId || (user ? user.id : "usr_admin_badar")
       };
       await saveTools(tools);
       res.json({ success: true, tool: tools[index] });
@@ -1988,7 +1990,15 @@ ${rawInfo}
   });
   app.delete("/api/tools/:id", async (req, res) => {
     try {
+      const user = await getUserByToken(req.headers.authorization);
       let tools = await getTools();
+      const existing = tools.find((t) => t.id === req.params.id);
+      if (!existing) {
+        return res.status(404).json({ error: "Tool not found" });
+      }
+      if (user && user.role !== "admin" && existing.userId && existing.userId !== user.id) {
+        return res.status(403).json({ error: "You can only delete your own tools." });
+      }
       tools = tools.filter((t) => t.id !== req.params.id);
       await saveTools(tools);
       res.json({ success: true });
@@ -1997,15 +2007,15 @@ ${rawInfo}
     }
   });
 }
-var import_promises6, import_path7, getToolsFile, getToolImagesDir;
+var import_promises6, import_path6, getToolsFile, getToolImagesDir;
 var init_tools = __esm({
   "src/server/tools.ts"() {
     import_promises6 = __toESM(require("fs/promises"), 1);
-    import_path7 = __toESM(require("path"), 1);
+    import_path6 = __toESM(require("path"), 1);
     init_ai();
-    init_paths();
-    getToolsFile = () => import_path7.default.join(DATA_DIR, "tools.json");
-    getToolImagesDir = () => TOOL_IMAGES_DIR;
+    init_auth();
+    getToolsFile = () => import_path6.default.join(process.cwd(), "data", "tools.json");
+    getToolImagesDir = () => import_path6.default.join(process.cwd(), "data", "tool-images");
   }
 });
 
@@ -2013,21 +2023,24 @@ var init_tools = __esm({
 function startAgent() {
   console.log("[Agent] Ultra-Natural WhatsApp Conversation Engine initialized.");
 }
-async function queueMessage(phoneNumber, message, name) {
+async function queueMessage(phoneNumber, message, name, userId) {
   const seq = ++globalSequenceCounter;
-  console.log(`[Agent] [Seq #${seq}] Queued message from ${phoneNumber} (${name || "Customer"}): "${message}"`);
-  let state = customerQueues.get(phoneNumber);
+  const queueKey = `${userId || "default"}:${phoneNumber}`;
+  console.log(`[Agent:${userId || "default"}] [Seq #${seq}] Queued message from ${phoneNumber} (${name || "Customer"}): "${message}"`);
+  let state = customerQueues.get(queueKey);
   if (!state) {
     state = {
       phoneNumber,
+      userId,
       name,
       pendingMessages: [],
       debounceTimer: null,
       isProcessing: false
     };
-    customerQueues.set(phoneNumber, state);
+    customerQueues.set(queueKey, state);
   }
   if (name) state.name = name;
+  if (userId) state.userId = userId;
   state.pendingMessages.push({
     seq,
     text: message.trim(),
@@ -2040,12 +2053,12 @@ async function queueMessage(phoneNumber, message, name) {
   state.debounceTimer = setTimeout(() => {
     if (state) {
       state.debounceTimer = null;
-      triggerCustomerProcessing(phoneNumber);
+      triggerCustomerProcessing(queueKey);
     }
   }, 1350);
 }
-async function triggerCustomerProcessing(phoneNumber) {
-  const state = customerQueues.get(phoneNumber);
+async function triggerCustomerProcessing(queueKey) {
+  const state = customerQueues.get(queueKey);
   if (!state || state.isProcessing || state.pendingMessages.length === 0) {
     return;
   }
@@ -2053,48 +2066,48 @@ async function triggerCustomerProcessing(phoneNumber) {
   const batch = [...state.pendingMessages];
   state.pendingMessages = [];
   try {
-    await handleCustomerMessageBatch(phoneNumber, batch, state.name);
+    await handleCustomerMessageBatch(state.phoneNumber, batch, state.name, state.userId);
   } catch (error) {
-    console.error(`[Agent] Error processing customer ${phoneNumber}:`, error);
+    console.error(`[Agent] Error processing customer ${state.phoneNumber}:`, error);
   } finally {
     state.isProcessing = false;
     if (state.pendingMessages.length > 0) {
-      triggerCustomerProcessing(phoneNumber);
+      triggerCustomerProcessing(queueKey);
     }
   }
 }
-async function handleCustomerMessageBatch(phoneNumber, batch, name) {
-  const settings = await getSettings();
+async function handleCustomerMessageBatch(phoneNumber, batch, name, userId) {
+  const settings = await getSettings(userId);
   if (!settings.aiAgentEnabled) {
-    console.log(`[Agent] AI Agent is disabled in settings. Skipping reply to ${phoneNumber}.`);
+    console.log(`[Agent:${userId || "default"}] AI Agent is disabled in settings. Skipping reply to ${phoneNumber}.`);
     return;
   }
   const combinedUserText = batch.map((m) => m.text).filter(Boolean).join("\n");
   if (!combinedUserText) return;
-  console.log(`[Agent] Processing incoming batch (${batch.length} msg(s)) for ${phoneNumber}:
+  console.log(`[Agent:${userId || "default"}] Processing incoming batch (${batch.length} msg(s)) for ${phoneNumber}:
 "${combinedUserText}"`);
   await updateCustomerMemory(phoneNumber, combinedUserText, "user");
   await recordUserMessage();
   const quota = await checkAiReplyQuota();
   if (!quota.allowed) {
     console.log(
-      `[Agent] Monthly AI reply limit reached (${quota.usedThisMonth}/${quota.limit} replies used on ${quota.plan} plan). Skipping AI reply to ${phoneNumber}. Deleting customers does NOT reset this quota.`
+      `[Agent:${userId || "default"}] Monthly AI reply limit reached (${quota.usedThisMonth}/${quota.limit} replies used on ${quota.plan} plan). Skipping AI reply to ${phoneNumber}. Deleting customers does NOT reset this quota.`
     );
     return;
   }
-  const response = await generateResponse(phoneNumber, combinedUserText, name, batch);
+  const response = await generateResponse(phoneNumber, combinedUserText, name, batch, userId);
   if (!response || response.textMessages.length === 0 && !response.imageToSend) {
     return;
   }
   const delaySec = settings.responseDelaySeconds || 1.4;
-  await sendResponse(phoneNumber, response.textMessages, response.imageToSend, delaySec);
+  await sendResponse(phoneNumber, response.textMessages, response.imageToSend, delaySec, userId);
   await recordAiReply();
 }
-async function generateResponse(phoneNumber, latestCustomerText, name, batch) {
-  const settings = await getSettings();
+async function generateResponse(phoneNumber, latestCustomerText, name, batch, userId) {
+  const settings = await getSettings(userId);
   const customers = await getCustomers();
   const customer = customers[phoneNumber] || { phoneNumber, status: "New Customer", messages: [] };
-  const tools = await getTools();
+  const tools = await getTools(userId);
   const toolContext = tools.length > 0 ? tools.map((t) => {
     let block = `=== TOOL: ${t.name} ===
 Category: ${t.category || "AI Tools"}
@@ -2331,23 +2344,23 @@ ${rawReply}`);
     imageToSend
   };
 }
-async function sendResponse(phoneNumber, textMessages, imageToSend, delaySec) {
+async function sendResponse(phoneNumber, textMessages, imageToSend, delaySec, userId) {
   const memoryText = textMessages.join("\n\n") + (imageToSend ? `
 [Sent Image: ${imageToSend}]` : "");
   await updateCustomerMemory(phoneNumber, memoryText, "agent");
   for (let i = 0; i < textMessages.length; i++) {
     const msg = textMessages[i];
-    console.log(`[Agent] Sending split message [${i + 1}/${textMessages.length}] to ${phoneNumber}: "${msg}"`);
-    await sendMessage(phoneNumber, msg);
+    console.log(`[Agent:${userId || "default"}] Sending split message [${i + 1}/${textMessages.length}] to ${phoneNumber}: "${msg}"`);
+    await sendMessage(phoneNumber, msg, userId);
     if (i < textMessages.length - 1) {
       const waitMs = Math.max(900, Math.min(2500, delaySec * 1e3));
       await new Promise((resolve) => setTimeout(resolve, waitMs));
     }
   }
   if (imageToSend) {
-    console.log(`[Agent] Delivering tool screenshot to ${phoneNumber}: ${imageToSend}`);
+    console.log(`[Agent:${userId || "default"}] Delivering tool screenshot to ${phoneNumber}: ${imageToSend}`);
     await new Promise((resolve) => setTimeout(resolve, 1e3));
-    await sendToolImage(phoneNumber, imageToSend);
+    await sendToolImage(phoneNumber, imageToSend, void 0, userId);
   }
 }
 async function evaluateAndApplyCustomerStatus(phoneNumber, customer, latestCustomerText, aiStatusTag) {
@@ -3185,17 +3198,17 @@ function setupDeepgramRoutes(app) {
     }
   });
 }
-var import_promises7, import_path8, import_axios2, ACCOUNTS_FILE, CONFIG_FILE, LOGS_FILE, accountsCache, configCache, logsCache, roundRobinIndex, balanceRefreshTimer, DEFAULT_CONFIG;
+var import_promises7, import_path7, import_axios2, DATA_DIR, ACCOUNTS_FILE, CONFIG_FILE, LOGS_FILE, accountsCache, configCache, logsCache, roundRobinIndex, balanceRefreshTimer, DEFAULT_CONFIG;
 var init_deepgram = __esm({
   "src/server/deepgram.ts"() {
     import_promises7 = __toESM(require("fs/promises"), 1);
-    import_path8 = __toESM(require("path"), 1);
+    import_path7 = __toESM(require("path"), 1);
     import_axios2 = __toESM(require("axios"), 1);
     init_tools();
-    init_paths();
-    ACCOUNTS_FILE = import_path8.default.join(DATA_DIR, "deepgram_accounts.json");
-    CONFIG_FILE = import_path8.default.join(DATA_DIR, "deepgram_config.json");
-    LOGS_FILE = import_path8.default.join(DATA_DIR, "deepgram_logs.json");
+    DATA_DIR = import_path7.default.join(process.cwd(), "data");
+    ACCOUNTS_FILE = import_path7.default.join(DATA_DIR, "deepgram_accounts.json");
+    CONFIG_FILE = import_path7.default.join(DATA_DIR, "deepgram_config.json");
+    LOGS_FILE = import_path7.default.join(DATA_DIR, "deepgram_logs.json");
     accountsCache = null;
     configCache = null;
     logsCache = null;
@@ -3232,96 +3245,124 @@ var init_deepgram = __esm({
 });
 
 // src/server/whatsapp.ts
-function getAuthDir() {
-  return AUTH_DIR;
+function getUserWASession(userId) {
+  const effectiveId = userId || "usr_admin_badar";
+  let session = userSessions.get(effectiveId);
+  if (!session) {
+    session = {
+      userId: effectiveId,
+      sock: null,
+      qrCodeDataUrl: null,
+      pairingCodeData: null,
+      connectionStatus: "disconnected",
+      isIntentionallyDisconnected: false,
+      isConnecting: false,
+      reconnectTimer: null
+    };
+    userSessions.set(effectiveId, session);
+  }
+  return session;
 }
-async function ensureAuthDir() {
-  const authDir = getAuthDir();
+function getAuthDir(userId) {
+  if (!userId || userId === "usr_admin_badar" || userId === "admin") {
+    return import_path8.default.join(process.cwd(), "data", "auth", "admin");
+  }
+  return import_path8.default.join(process.cwd(), "data", "auth", userId);
+}
+async function ensureAuthDir(userId) {
+  const authDir = getAuthDir(userId);
   await import_promises8.default.mkdir(authDir, { recursive: true });
-  const oldAuthDir = import_path9.default.join(ROOT_DIR, "auth");
-  try {
-    const oldCreds = import_path9.default.join(oldAuthDir, "creds.json");
-    await import_promises8.default.access(oldCreds);
-    const newCreds = import_path9.default.join(authDir, "creds.json");
+  if (userId === "usr_admin_badar" || userId === "admin") {
+    const legacyAuthDir = import_path8.default.join(process.cwd(), "data", "auth");
     try {
-      await import_promises8.default.access(newCreds);
-    } catch {
-      const files = await import_promises8.default.readdir(oldAuthDir);
-      for (const file of files) {
-        await import_promises8.default.copyFile(import_path9.default.join(oldAuthDir, file), import_path9.default.join(authDir, file));
+      const legacyCreds = import_path8.default.join(legacyAuthDir, "creds.json");
+      await import_promises8.default.access(legacyCreds);
+      const targetCreds = import_path8.default.join(authDir, "creds.json");
+      try {
+        await import_promises8.default.access(targetCreds);
+      } catch {
+        const files = await import_promises8.default.readdir(legacyAuthDir);
+        for (const file of files) {
+          const srcFile = import_path8.default.join(legacyAuthDir, file);
+          const stat = await import_promises8.default.stat(srcFile);
+          if (stat.isFile()) {
+            await import_promises8.default.copyFile(srcFile, import_path8.default.join(authDir, file));
+          }
+        }
+        console.log("[WhatsApp] Migrated legacy credentials to data/auth/admin");
       }
-      console.log("[WhatsApp] Migrated legacy auth files to data/auth");
+    } catch {
     }
-  } catch {
   }
   return authDir;
 }
-async function connectToWhatsApp(usePairingCode = false) {
-  if (reconnectTimer) {
-    clearTimeout(reconnectTimer);
-    reconnectTimer = null;
+async function connectToWhatsApp(userId = "usr_admin_badar", usePairingCode = false) {
+  const session = getUserWASession(userId);
+  if (session.reconnectTimer) {
+    clearTimeout(session.reconnectTimer);
+    session.reconnectTimer = null;
   }
-  if (isConnecting || connectionStatus === "connected" && sock) {
+  if (session.isConnecting || session.connectionStatus === "connected" && session.sock) {
     return;
   }
-  isConnecting = true;
+  session.isConnecting = true;
   try {
-    isIntentionallyDisconnected = false;
-    const authDir = await ensureAuthDir();
+    session.isIntentionallyDisconnected = false;
+    const authDir = await ensureAuthDir(userId);
     const { state, saveCreds } = await (0, import_baileys.useMultiFileAuthState)(authDir);
-    connectionStatus = "connecting";
-    qrCodeDataUrl = null;
-    pairingCodeData = null;
-    if (sock) {
+    session.connectionStatus = "connecting";
+    session.qrCodeDataUrl = null;
+    session.pairingCodeData = null;
+    if (session.sock) {
       try {
-        sock.ev.removeAllListeners("connection.update");
-        sock.ev.removeAllListeners("creds.update");
-        sock.ev.removeAllListeners("messages.upsert");
-        sock.end(void 0);
+        session.sock.ev.removeAllListeners("connection.update");
+        session.sock.ev.removeAllListeners("creds.update");
+        session.sock.ev.removeAllListeners("messages.upsert");
+        session.sock.end(void 0);
       } catch {
       }
-      sock = null;
+      session.sock = null;
     }
     const newSock = (0, import_baileys.makeWASocket)({
       auth: state,
-      printQRInTerminal: !usePairingCode,
+      printQRInTerminal: !usePairingCode && (userId === "usr_admin_badar" || userId === "admin"),
       browser: usePairingCode ? ["Ubuntu", "Chrome", "20.0.04"] : import_baileys.Browsers.macOS("Desktop"),
       syncFullHistory: false,
       markOnlineOnConnect: true,
       logger: (0, import_pino.default)({ level: "silent" })
     });
-    sock = newSock;
+    session.sock = newSock;
     newSock.ev.on("connection.update", async (update) => {
       const { connection, lastDisconnect, qr } = update;
       if (qr && !usePairingCode) {
-        qrCodeDataUrl = await import_qrcode.default.toDataURL(qr);
+        session.qrCodeDataUrl = await import_qrcode.default.toDataURL(qr);
       }
       if (connection === "close") {
         const statusCode = lastDisconnect?.error?.output?.statusCode;
         const isLoggedOut = statusCode === import_baileys.DisconnectReason.loggedOut;
         const isReplaced = statusCode === import_baileys.DisconnectReason.connectionReplaced || statusCode === 440;
-        const shouldReconnect = !isLoggedOut && !isReplaced && !isIntentionallyDisconnected;
-        connectionStatus = "disconnected";
-        console.log(`[WhatsApp] Connection closed. Reason: ${statusCode || lastDisconnect?.error}. Should reconnect: ${shouldReconnect}`);
+        const shouldReconnect = !isLoggedOut && !isReplaced && !session.isIntentionallyDisconnected;
+        session.connectionStatus = "disconnected";
+        console.log(`[WhatsApp:${userId}] Connection closed. Reason: ${statusCode || lastDisconnect?.error}. Should reconnect: ${shouldReconnect}`);
         if (shouldReconnect) {
           const delay = statusCode === import_baileys.DisconnectReason.restartRequired ? 1e3 : 5e3;
-          if (reconnectTimer) clearTimeout(reconnectTimer);
-          reconnectTimer = setTimeout(() => {
-            connectToWhatsApp(usePairingCode).catch(console.error);
+          if (session.reconnectTimer) clearTimeout(session.reconnectTimer);
+          session.reconnectTimer = setTimeout(() => {
+            connectToWhatsApp(userId, usePairingCode).catch(console.error);
           }, delay);
-        } else if (isLoggedOut && !isIntentionallyDisconnected) {
-          console.log("[WhatsApp] Session logged out. Cleaning auth data to prevent reconnect loop.");
+        } else if (isLoggedOut && !session.isIntentionallyDisconnected) {
+          console.log(`[WhatsApp:${userId}] Session logged out. Cleaning auth directory.`);
           try {
             await import_promises8.default.rm(authDir, { recursive: true, force: true });
           } catch (e) {
-            console.error("[WhatsApp] Failed to clean auth dir:", e);
+            console.error(`[WhatsApp:${userId}] Failed to clean auth dir:`, e);
           }
         }
       } else if (connection === "open") {
-        console.log("[WhatsApp] Connection opened successfully and session saved!");
-        connectionStatus = "connected";
-        qrCodeDataUrl = null;
-        pairingCodeData = null;
+        console.log(`[WhatsApp:${userId}] Connection opened successfully and session saved!`);
+        session.connectionStatus = "connected";
+        session.qrCodeDataUrl = null;
+        session.pairingCodeData = null;
       }
     });
     newSock.ev.on("creds.update", async () => {
@@ -3335,14 +3376,14 @@ async function connectToWhatsApp(usePairingCode = false) {
             if (sender && !sender.includes("@g.us") && !sender.includes("status@broadcast")) {
               const textMessage = msg.message.conversation || msg.message.extendedTextMessage?.text || msg.message.ephemeralMessage?.message?.extendedTextMessage?.text || msg.message.ephemeralMessage?.message?.conversation || msg.message.imageMessage?.caption || msg.message.videoMessage?.caption || msg.message.documentMessage?.caption || msg.message.templateButtonReplyMessage?.selectedId || msg.message.buttonsResponseMessage?.selectedButtonId || msg.message.listResponseMessage?.singleSelectReply?.selectedRowId;
               if (textMessage) {
-                console.log(`[WhatsApp] Received message from ${sender}: "${textMessage}"`);
-                await queueMessage(sender, textMessage, msg.pushName || "Customer");
+                console.log(`[WhatsApp:${userId}] Received message from ${sender}: "${textMessage}"`);
+                await queueMessage(sender, textMessage, msg.pushName || "Customer", userId);
               } else {
-                const audioMsg = msg.message.audioMessage || msg.message.ephemeralMessage?.message?.audioMessage || msg.message.viewOnceMessage?.message?.audioMessage || msg.message.viewOnceMessageV2?.message?.audioMessage;
+                const audioMsg = msg.message.audioMessage || msg.message.ephemeralMessage?.message?.audioMessage;
                 if (audioMsg) {
-                  console.log(`[WhatsApp] Received voice message from ${sender} (Duration: ${audioMsg.seconds || "?"}s, PTT: ${audioMsg.ptt ? "Yes" : "No"}). Initiating Deepgram transcription...`);
+                  console.log(`[WhatsApp:${userId}] Received voice message from ${sender}. Downloading audio...`);
                   try {
-                    const audioBuffer = await (0, import_baileys.downloadMediaMessage)(
+                    const buffer = await (0, import_baileys.downloadMediaMessage)(
                       msg,
                       "buffer",
                       {},
@@ -3351,20 +3392,21 @@ async function connectToWhatsApp(usePairingCode = false) {
                         reuploadRequest: newSock.updateMediaMessage
                       }
                     );
-                    if (audioBuffer && audioBuffer.length > 0) {
-                      const result = await transcribeAudio(audioBuffer, {
-                        customerJid: sender,
-                        mimetype: audioMsg.mimetype || "audio/ogg; codecs=opus"
-                      });
-                      if (result.success && result.transcript) {
-                        console.log(`[WhatsApp] Voice message transcribed via ${result.providerUsed}: "${result.transcript}"`);
-                        await queueMessage(sender, result.transcript, msg.pushName || "Customer");
+                    if (buffer && buffer.length > 0) {
+                      console.log(`[WhatsApp:${userId}] Transcribing voice note (${buffer.length} bytes) via Deepgram...`);
+                      const transcribedText = await transcribeAudio(
+                        buffer,
+                        audioMsg.mimetype || "audio/ogg; codecs=opus"
+                      );
+                      if (transcribedText && transcribedText.trim().length > 0) {
+                        console.log(`[WhatsApp:${userId}] Voice note transcribed: "${transcribedText}"`);
+                        await queueMessage(sender, transcribedText, msg.pushName || "Customer", userId);
                       } else {
-                        console.warn(`[WhatsApp] Voice message transcription failed: ${result.error}`);
+                        console.warn(`[WhatsApp:${userId}] Audio transcription returned empty.`);
                       }
                     }
-                  } catch (err) {
-                    console.error(`[WhatsApp] Error processing voice note from ${sender}:`, err);
+                  } catch (audioErr) {
+                    console.error(`[WhatsApp:${userId}] Error downloading/transcribing audio:`, audioErr);
                   }
                 }
               }
@@ -3373,30 +3415,99 @@ async function connectToWhatsApp(usePairingCode = false) {
         }
       }
     });
+  } catch (error) {
+    session.connectionStatus = "disconnected";
+    console.error(`[WhatsApp:${userId}] Connect error:`, error);
   } finally {
-    isConnecting = false;
+    session.isConnecting = false;
   }
 }
-function getWhatsAppConnectionStatus() {
-  return connectionStatus;
-}
-async function fetchAllGroups() {
-  const cachePath = import_path9.default.join(DATA_DIR, "groups_cache.json");
-  if (cachedGroups && Date.now() - lastGroupFetchTime < GROUP_CACHE_TTL) {
-    return cachedGroups;
-  }
-  if (!sock || connectionStatus !== "connected") {
-    try {
-      const data = await import_promises8.default.readFile(cachePath, "utf-8");
-      return JSON.parse(data);
-    } catch {
-      return null;
-    }
+async function sendMessage(jid, text, userId) {
+  const session = getUserWASession(userId);
+  const targetSock = session.sock || (userId ? getUserWASession("usr_admin_badar").sock : null);
+  if (!targetSock) {
+    console.warn(`[WhatsApp:${userId || "default"}] Cannot send message: socket is not connected.`);
+    return;
   }
   try {
-    const groupsObj = await sock.groupFetchAllParticipating();
+    const formattedJid = jid.includes("@") ? jid : `${jid}@s.whatsapp.net`;
+    console.log(`[WhatsApp:${userId || "default"}] Sending reply to ${formattedJid}: "${text}"`);
+    await targetSock.sendMessage(formattedJid, { text });
+    console.log(`[WhatsApp:${userId || "default"}] Message successfully sent to ${formattedJid}`);
+  } catch (error) {
+    console.error(`[WhatsApp:${userId || "default"}] Error delivering message to ${jid}:`, error);
+  }
+}
+async function sendToolImage(jid, imagePath, caption, userId) {
+  const session = getUserWASession(userId);
+  const targetSock = session.sock || (userId ? getUserWASession("usr_admin_badar").sock : null);
+  if (!targetSock) {
+    console.warn(`[WhatsApp:${userId || "default"}] Cannot send image: socket is not connected.`);
+    return false;
+  }
+  try {
+    const formattedJid = jid.includes("@") ? jid : `${jid}@s.whatsapp.net`;
+    const fullPath = import_path8.default.isAbsolute(imagePath) ? imagePath : import_path8.default.join(process.cwd(), imagePath);
+    try {
+      await import_promises8.default.access(fullPath);
+    } catch {
+      console.warn(`[WhatsApp:${userId || "default"}] Tool image file not found on disk at: ${fullPath}`);
+      return false;
+    }
+    const imageBuffer = await import_promises8.default.readFile(fullPath);
+    console.log(`[WhatsApp:${userId || "default"}] Sending tool image (${import_path8.default.basename(fullPath)}) to ${formattedJid}`);
+    await targetSock.sendMessage(formattedJid, {
+      image: imageBuffer,
+      caption: caption || void 0
+    });
+    console.log(`[WhatsApp:${userId || "default"}] Tool image successfully sent to ${formattedJid}`);
+    return true;
+  } catch (error) {
+    console.error(`[WhatsApp:${userId || "default"}] Error sending tool image to ${jid}:`, error);
+    return false;
+  }
+}
+async function sendCampaignMessage(jidOrPhone, text, userId) {
+  const session = getUserWASession(userId);
+  const targetSock = session.sock;
+  if (!targetSock || session.connectionStatus !== "connected") {
+    return { success: false, error: "WhatsApp is not connected for this account." };
+  }
+  try {
+    let clean = jidOrPhone.trim();
+    if (!clean.includes("@")) {
+      clean = clean.replace(/[^0-9]/g, "");
+      clean = `${clean}@s.whatsapp.net`;
+    }
+    await targetSock.sendMessage(clean, { text });
+    return { success: true };
+  } catch (error) {
+    console.error(`[WhatsApp:${userId || "default"}] Failed to send campaign message to ${jidOrPhone}:`, error);
+    return {
+      success: false,
+      error: error?.message || error?.toString() || "Unknown WhatsApp transmission error"
+    };
+  }
+}
+function getSocket(userId) {
+  return getUserWASession(userId).sock;
+}
+function getConnectionStatus(userId) {
+  return getUserWASession(userId).connectionStatus;
+}
+function getWhatsAppConnectionStatus(userId) {
+  return getConnectionStatus(userId);
+}
+async function fetchAllGroups(forceRefresh = false, userId) {
+  const session = getUserWASession(userId);
+  const targetSock = session.sock;
+  if (!targetSock || session.connectionStatus !== "connected") {
+    return null;
+  }
+  try {
+    const groups = await targetSock.groupFetchAllParticipating();
     const result = [];
-    for (const [jid, meta] of Object.entries(groupsObj)) {
+    for (const [jid, meta] of Object.entries(groups)) {
       const participants = (meta.participants || []).map((p) => {
         const rawId = p.id || "";
         const cleanNumber = rawId.split("@")[0].split(":")[0];
@@ -3413,125 +3524,57 @@ async function fetchAllGroups() {
         participants
       });
     }
-    cachedGroups = result;
-    lastGroupFetchTime = Date.now();
-    try {
-      await import_promises8.default.writeFile(cachePath, JSON.stringify(result, null, 2));
-    } catch (err) {
-      console.warn("[WhatsApp] Failed to write groups cache:", err);
-    }
     return result;
-  } catch (error) {
-    if (error?.message?.includes("Connection Closed")) {
-      console.warn("[WhatsApp] Warning: Connection closed while fetching groups. Using cache.");
-    } else {
-      console.error("[WhatsApp] Error fetching participating groups:", error);
-    }
-    try {
-      const data = await import_promises8.default.readFile(cachePath, "utf-8");
-      return JSON.parse(data);
-    } catch {
-      return null;
-    }
+  } catch (err) {
+    console.warn("[WhatsApp] Failed to fetch participating groups:", err);
+    return null;
   }
-}
-async function sendCampaignMessage(jidOrPhone, text) {
-  if (!sock || connectionStatus !== "connected") {
-    return { success: false, error: "WhatsApp is not connected." };
-  }
-  try {
-    let clean = jidOrPhone.trim();
-    if (!clean.includes("@")) {
-      clean = clean.replace(/[^0-9]/g, "");
-      clean = `${clean}@s.whatsapp.net`;
-    }
-    await sock.sendMessage(clean, { text });
-    return { success: true };
-  } catch (error) {
-    console.error(`[WhatsApp] Failed to send campaign message to ${jidOrPhone}:`, error);
-    return {
-      success: false,
-      error: error?.message || error?.toString() || "Unknown WhatsApp transmission error"
-    };
-  }
-}
-async function sendMessage(jid, text) {
-  if (!sock) {
-    console.warn("[WhatsApp] Cannot send message: WhatsApp socket is not connected.");
-    return;
-  }
-  try {
-    const formattedJid = jid.includes("@") ? jid : `${jid}@s.whatsapp.net`;
-    console.log(`[WhatsApp] Sending reply to ${formattedJid}: "${text}"`);
-    await sock.sendMessage(formattedJid, { text });
-    console.log(`[WhatsApp] Message successfully sent to ${formattedJid}`);
-  } catch (error) {
-    console.error(`[WhatsApp] Error delivering message to ${jid}:`, error);
-  }
-}
-async function sendToolImage(jid, imagePath, caption) {
-  if (!sock) {
-    console.warn("[WhatsApp] Cannot send image: WhatsApp socket is not connected.");
-    return false;
-  }
-  try {
-    const formattedJid = jid.includes("@") ? jid : `${jid}@s.whatsapp.net`;
-    const fullPath = import_path9.default.isAbsolute(imagePath) ? imagePath : import_path9.default.join(ROOT_DIR, imagePath);
-    try {
-      await import_promises8.default.access(fullPath);
-    } catch {
-      console.warn(`[WhatsApp] Tool image file not found on disk at: ${fullPath}`);
-      return false;
-    }
-    const imageBuffer = await import_promises8.default.readFile(fullPath);
-    console.log(`[WhatsApp] Sending tool image (${import_path9.default.basename(fullPath)}) to ${formattedJid}`);
-    await sock.sendMessage(formattedJid, {
-      image: imageBuffer,
-      caption: caption || void 0
-    });
-    console.log(`[WhatsApp] Tool image successfully sent to ${formattedJid}`);
-    return true;
-  } catch (error) {
-    console.error(`[WhatsApp] Error sending tool image to ${jid}:`, error);
-    return false;
-  }
-}
-function getSocket() {
-  return sock;
-}
-function getConnectionStatus() {
-  return connectionStatus;
 }
 function setupWhatsAppRoutes(app) {
-  app.get("/api/whatsapp/status", (req, res) => {
-    res.json({
-      status: connectionStatus,
-      qr: qrCodeDataUrl,
-      pairingCode: pairingCodeData
-    });
+  app.get("/api/whatsapp/status", async (req, res) => {
+    try {
+      const user = await getUserByToken(req.headers.authorization);
+      const session = getUserWASession(user?.id);
+      res.json({
+        status: session.connectionStatus,
+        qr: session.qrCodeDataUrl,
+        pairingCode: session.pairingCodeData
+      });
+    } catch {
+      const fallback = getUserWASession();
+      res.json({
+        status: fallback.connectionStatus,
+        qr: fallback.qrCodeDataUrl,
+        pairingCode: fallback.pairingCodeData
+      });
+    }
   });
   app.post("/api/whatsapp/connect", async (req, res) => {
-    if (connectionStatus === "disconnected") {
-      await connectToWhatsApp(false);
+    const user = await getUserByToken(req.headers.authorization);
+    const session = getUserWASession(user?.id);
+    if (session.connectionStatus === "disconnected") {
+      await connectToWhatsApp(user?.id, false);
     }
-    res.json({ success: true, status: connectionStatus });
+    res.json({ success: true, status: session.connectionStatus });
   });
   app.post("/api/whatsapp/pair", async (req, res) => {
+    const user = await getUserByToken(req.headers.authorization);
+    const session = getUserWASession(user?.id);
     const { phoneNumber } = req.body;
     if (!phoneNumber) return res.status(400).json({ error: "Phone number required" });
     try {
-      if (sock && connectionStatus !== "disconnected") {
-        isIntentionallyDisconnected = true;
-        sock.ws.close();
-        connectionStatus = "disconnected";
+      if (session.sock && session.connectionStatus !== "disconnected") {
+        session.isIntentionallyDisconnected = true;
+        session.sock.ws.close();
+        session.connectionStatus = "disconnected";
         await new Promise((resolve) => setTimeout(resolve, 500));
       }
-      await connectToWhatsApp(true);
+      await connectToWhatsApp(user?.id, true);
       const cleanNumber = phoneNumber.replace(/[^0-9]/g, "");
       await new Promise((resolve) => setTimeout(resolve, 1500));
-      if (!sock?.authState.creds.registered) {
-        const code = await sock.requestPairingCode(cleanNumber);
-        pairingCodeData = code;
+      if (!session.sock?.authState.creds.registered) {
+        const code = await session.sock.requestPairingCode(cleanNumber);
+        session.pairingCodeData = code;
         res.json({ success: true, code });
       } else {
         res.status(400).json({ error: "Already registered/connected." });
@@ -3543,14 +3586,16 @@ function setupWhatsAppRoutes(app) {
   });
   app.post("/api/whatsapp/send", async (req, res) => {
     try {
+      const user = await getUserByToken(req.headers.authorization);
+      const session = getUserWASession(user?.id);
       const { phoneNumber, message } = req.body;
       if (!phoneNumber || !message) {
         return res.status(400).json({ error: "Phone number and message are required." });
       }
-      if (connectionStatus !== "connected" || !sock) {
-        return res.status(400).json({ error: "WhatsApp is not connected." });
+      if (session.connectionStatus !== "connected" || !session.sock) {
+        return res.status(400).json({ error: "WhatsApp is not connected for your account." });
       }
-      await sendMessage(phoneNumber, message);
+      await sendMessage(phoneNumber, message, user?.id);
       const { updateCustomerMemory: updateCustomerMemory2 } = await Promise.resolve().then(() => (init_memory(), memory_exports));
       await updateCustomerMemory2(phoneNumber, message, "agent");
       res.json({ success: true });
@@ -3560,48 +3605,58 @@ function setupWhatsAppRoutes(app) {
     }
   });
   app.post("/api/whatsapp/disconnect", async (req, res) => {
-    if (sock) {
-      isIntentionallyDisconnected = true;
-      sock.logout().catch(() => sock?.ws?.close());
-      connectionStatus = "disconnected";
-      pairingCodeData = null;
-      qrCodeDataUrl = null;
-      const authDir = getAuthDir();
+    const user = await getUserByToken(req.headers.authorization);
+    const session = getUserWASession(user?.id);
+    if (session.sock) {
+      session.isIntentionallyDisconnected = true;
+      session.sock.logout().catch(() => session.sock?.ws?.close());
+      session.connectionStatus = "disconnected";
+      session.pairingCodeData = null;
+      session.qrCodeDataUrl = null;
+      const authDir = getAuthDir(session.userId);
       await import_promises8.default.rm(authDir, { recursive: true, force: true }).catch(console.error);
     }
     res.json({ success: true });
   });
 }
-var import_baileys, import_pino, import_qrcode, import_promises8, import_path9, sock, qrCodeDataUrl, pairingCodeData, connectionStatus, isIntentionallyDisconnected, isConnecting, reconnectTimer, cachedGroups, lastGroupFetchTime, GROUP_CACHE_TTL;
+var import_baileys, import_pino, import_qrcode, import_promises8, import_path8, userSessions;
 var init_whatsapp = __esm({
   "src/server/whatsapp.ts"() {
     import_baileys = require("@whiskeysockets/baileys");
     init_agent();
     init_deepgram();
+    init_auth();
     import_pino = __toESM(require("pino"), 1);
     import_qrcode = __toESM(require("qrcode"), 1);
     import_promises8 = __toESM(require("fs/promises"), 1);
-    import_path9 = __toESM(require("path"), 1);
-    init_paths();
-    sock = null;
-    qrCodeDataUrl = null;
-    pairingCodeData = null;
-    connectionStatus = "disconnected";
-    isIntentionallyDisconnected = false;
-    isConnecting = false;
-    reconnectTimer = null;
-    cachedGroups = null;
-    lastGroupFetchTime = 0;
-    GROUP_CACHE_TTL = 5 * 60 * 1e3;
+    import_path8 = __toESM(require("path"), 1);
+    userSessions = /* @__PURE__ */ new Map();
     setTimeout(async () => {
       try {
-        const authDir = await ensureAuthDir();
-        const creds = import_path9.default.join(authDir, "creds.json");
-        await import_promises8.default.access(creds);
-        console.log("[WhatsApp] Existing session found in data/auth. Auto-reconnecting to WhatsApp...");
-        await connectToWhatsApp(false);
-      } catch {
-        console.log("[WhatsApp] No existing credentials found in data/auth. Ready for QR or Pairing code.");
+        const authBaseDir = import_path8.default.join(process.cwd(), "data", "auth");
+        await import_promises8.default.mkdir(authBaseDir, { recursive: true });
+        try {
+          const adminAuthDir = await ensureAuthDir("usr_admin_badar");
+          const creds = import_path8.default.join(adminAuthDir, "creds.json");
+          await import_promises8.default.access(creds);
+          console.log("[WhatsApp] Admin session found. Auto-reconnecting admin WhatsApp...");
+          await connectToWhatsApp("usr_admin_badar", false);
+        } catch {
+        }
+        const entries = await import_promises8.default.readdir(authBaseDir, { withFileTypes: true });
+        for (const entry of entries) {
+          if (entry.isDirectory() && entry.name !== "admin") {
+            const userCreds = import_path8.default.join(authBaseDir, entry.name, "creds.json");
+            try {
+              await import_promises8.default.access(userCreds);
+              console.log(`[WhatsApp] Existing session found for user ${entry.name}. Auto-reconnecting...`);
+              await connectToWhatsApp(entry.name, false);
+            } catch {
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("[WhatsApp] Session auto-loader notice:", err);
       }
     }, 1200);
   }
@@ -3611,10 +3666,9 @@ var init_whatsapp = __esm({
 var import_dotenv = __toESM(require("dotenv"), 1);
 var import_express = __toESM(require("express"), 1);
 var import_cors = __toESM(require("cors"), 1);
-var import_path12 = __toESM(require("path"), 1);
+var import_path11 = __toESM(require("path"), 1);
 var import_vite = require("vite");
 var import_promises11 = __toESM(require("fs/promises"), 1);
-init_paths();
 init_whatsapp();
 init_memory();
 init_tools();
@@ -3622,12 +3676,11 @@ init_settings();
 
 // src/server/campaign.ts
 var import_promises9 = __toESM(require("fs/promises"), 1);
-var import_path10 = __toESM(require("path"), 1);
+var import_path9 = __toESM(require("path"), 1);
 init_whatsapp();
 init_ai();
 init_tools();
-init_paths();
-var CAMPAIGN_FILE = import_path10.default.join(DATA_DIR, "campaign.json");
+var CAMPAIGN_FILE = import_path9.default.join(process.cwd(), "data", "campaign.json");
 var campaignState = {
   id: "camp_" + Date.now(),
   name: "Targeted Outreach Campaign",
@@ -3681,7 +3734,7 @@ async function loadCampaignState() {
 async function saveCampaignState() {
   campaignState.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
   try {
-    await import_promises9.default.mkdir(import_path10.default.dirname(CAMPAIGN_FILE), { recursive: true });
+    await import_promises9.default.mkdir(import_path9.default.dirname(CAMPAIGN_FILE), { recursive: true });
     await import_promises9.default.writeFile(CAMPAIGN_FILE, JSON.stringify(campaignState, null, 2));
   } catch (error) {
     console.error("[Campaign] Failed to save campaign state:", error);
@@ -4041,14 +4094,13 @@ init_usage();
 
 // src/server/deployment.ts
 var import_promises10 = __toESM(require("fs/promises"), 1);
-var import_path11 = __toESM(require("path"), 1);
+var import_path10 = __toESM(require("path"), 1);
 var import_child_process = require("child_process");
 var import_util = require("util");
 var import_axios3 = __toESM(require("axios"), 1);
 init_auth();
-init_paths();
 var execAsync = (0, import_util.promisify)(import_child_process.exec);
-var CONFIG_FILE2 = import_path11.default.join(DATA_DIR, "github_config.json");
+var CONFIG_FILE2 = import_path10.default.join(process.cwd(), "data", "github_config.json");
 var DEFAULT_CONFIG2 = {
   username: "badarbukharidev-alt",
   repo: "Whatsapp-Sales-Agent",
@@ -4365,14 +4417,16 @@ function setupDeploymentRoutes(app) {
 init_agent();
 import_dotenv.default.config();
 async function initializeDataDirs() {
+  const dataDir = import_path11.default.join(process.cwd(), "data");
+  const toolImagesDir = import_path11.default.join(dataDir, "tool-images");
   try {
-    await import_promises11.default.mkdir(DATA_DIR, { recursive: true });
-    await import_promises11.default.mkdir(TOOL_IMAGES_DIR, { recursive: true });
+    await import_promises11.default.mkdir(dataDir, { recursive: true });
+    await import_promises11.default.mkdir(toolImagesDir, { recursive: true });
     await getUsers();
     await getLists();
     const files = ["customers.json", "tools.json", "settings.json"];
     for (const file of files) {
-      const filePath = import_path12.default.join(DATA_DIR, file);
+      const filePath = import_path11.default.join(dataDir, file);
       try {
         await import_promises11.default.access(filePath);
       } catch {
@@ -4387,11 +4441,10 @@ async function initializeDataDirs() {
 async function startServer() {
   await initializeDataDirs();
   const app = (0, import_express.default)();
-  const rawPort = process.env.PORT;
-  const portOrSocket = typeof PhusionPassenger !== "undefined" ? "passenger" : (rawPort ? (isNaN(Number(rawPort)) ? rawPort : parseInt(rawPort, 10)) : 3001);
+  const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001;
   app.use((0, import_cors.default)());
   app.use(import_express.default.json({ limit: "50mb" }));
-  app.use("/tool-images", import_express.default.static(TOOL_IMAGES_DIR));
+  app.use("/tool-images", import_express.default.static(import_path11.default.join(process.cwd(), "data", "tool-images")));
   setupAuthRoutes(app);
   setupWhatsAppRoutes(app);
   setupMemoryRoutes(app);
@@ -4405,9 +4458,7 @@ async function startServer() {
   startAgent();
   startCampaignEngine();
   startDeepgramBalanceMonitor();
-  const isDev = process.env.NODE_ENV === "development";
-  if (isDev) {
-    console.log("[Development] Starting Vite dev server middleware...");
+  if (process.env.NODE_ENV !== "production") {
     const vite = await (0, import_vite.createServer)({
       server: {
         middlewareMode: true,
@@ -4422,7 +4473,7 @@ async function startServer() {
       if (req.method !== "GET") return next();
       const url = req.originalUrl;
       try {
-        let template = await import_promises11.default.readFile(import_path12.default.resolve(ROOT_DIR, "index.html"), "utf-8");
+        let template = await import_promises11.default.readFile(import_path11.default.resolve(process.cwd(), "index.html"), "utf-8");
         template = await vite.transformIndexHtml(url, template);
         res.status(200).set({ "Content-Type": "text/html" }).end(template);
       } catch (e) {
@@ -4431,41 +4482,23 @@ async function startServer() {
       }
     });
   } else {
-    console.log("[Production] Serving frontend assets from:", DIST_DIR);
-    app.use(import_express.default.static(DIST_DIR, {
-      index: false,
-      maxAge: "1d",
-      setHeaders: (res, filePath) => {
-        if (filePath.endsWith(".js") || filePath.endsWith(".mjs")) {
-          res.setHeader("Content-Type", "application/javascript; charset=UTF-8");
-        } else if (filePath.endsWith(".css")) {
-          res.setHeader("Content-Type", "text/css; charset=UTF-8");
-        } else if (filePath.endsWith(".json")) {
-          res.setHeader("Content-Type", "application/json; charset=UTF-8");
-        }
-      }
-    }));
-    app.use("/api", (req, res) => {
-      res.status(404).json({ error: `API route not found: ${req.method} ${req.originalUrl}` });
-    });
-    app.use("/assets", (req, res) => {
-      res.status(404).send("Asset not found");
-    });
+    const distPath = import_path11.default.join(process.cwd(), "dist");
+    app.use(import_express.default.static(distPath));
     app.get("*", (req, res) => {
-      const indexPath = import_path12.default.join(DIST_DIR, "index.html");
-      res.sendFile(indexPath, (err) => {
-        if (err) {
-          console.error("[Production Error] Failed to send index.html:", err);
-          if (!res.headersSent) {
-            res.status(500).send("Internal Server Error: SPA index.html missing");
-          }
-        }
-      });
+      res.sendFile(import_path11.default.join(distPath, "index.html"));
     });
   }
-  app.listen(portOrSocket, () => {
-    console.log(`Server running on ${typeof portOrSocket === "number" ? `http://localhost:${portOrSocket}` : portOrSocket}`);
-  });
+  const rawPort = process.env.PORT;
+  const portOrSocket = typeof globalThis.PhusionPassenger !== "undefined" ? "passenger" : rawPort ? isNaN(Number(rawPort)) ? rawPort : parseInt(rawPort, 10) : 3001;
+  if (portOrSocket === "passenger") {
+    app.listen("passenger", () => {
+      console.log("Server running via Phusion Passenger socket");
+    });
+  } else {
+    app.listen(Number(portOrSocket), "0.0.0.0", () => {
+      console.log(`Server running on http://localhost:${portOrSocket}`);
+    });
+  }
 }
 startServer().catch(console.error);
 //# sourceMappingURL=server.cjs.map
