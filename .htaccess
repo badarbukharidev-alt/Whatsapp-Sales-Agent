@@ -3,8 +3,7 @@ PassengerAppRoot "/home/syedweb4/public_html/whatsapp-agent.toolsfinity.io"
 PassengerBaseURI "/"
 PassengerNodejs "/home/syedweb4/nodevenv/public_html/whatsapp-agent.toolsfinity.io/24/bin/node"
 PassengerAppType node
-PassengerStartupFile app.js
-PassengerAppLogFile "/home/syedweb4/logs/whatsapp-agent-passenger.log"
+PassengerStartupFile dist/server.cjs
 # DO NOT REMOVE. CLOUDLINUX PASSENGER CONFIGURATION END
 # DO NOT REMOVE OR MODIFY. CLOUDLINUX ENV VARS CONFIGURATION BEGIN
 <IfModule Litespeed>
