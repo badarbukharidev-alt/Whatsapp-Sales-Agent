@@ -1,0 +1,58 @@
+[
+  {
+    "id": "new-customer",
+    "name": "New Customer",
+    "color": "#F59E0B",
+    "isDefault": true,
+    "description": "First time contacts or inquiries without active purchasing history",
+    "createdAt": "2026-09-02T00:47:01.809Z"
+  },
+  {
+    "id": "interested",
+    "name": "Interested",
+    "color": "#3B82F6",
+    "isDefault": true,
+    "description": "Customers who have shown active interest in tools or features",
+    "createdAt": "2026-09-02T00:47:01.809Z"
+  },
+  {
+    "id": "payment-pending",
+    "name": "Payment Pending",
+    "color": "#F97316",
+    "isDefault": true,
+    "description": "Customers who requested payment details or expressed buying intent",
+    "createdAt": "2026-09-02T00:47:01.809Z"
+  },
+  {
+    "id": "payment-done",
+    "name": "Payment Done",
+    "color": "#6366F1",
+    "isDefault": true,
+    "description": "Customers claiming payment has been sent (Requires admin verification)",
+    "createdAt": "2026-09-02T00:47:01.809Z"
+  },
+  {
+    "id": "order-complete",
+    "name": "Order Complete",
+    "color": "#10B981",
+    "isDefault": true,
+    "description": "Verified paid orders and completed deliveries",
+    "createdAt": "2026-09-02T00:47:01.809Z"
+  },
+  {
+    "id": "follow-up",
+    "name": "Follow Up",
+    "color": "#64748B",
+    "isDefault": true,
+    "description": "Customers who requested a callback or future check-in",
+    "createdAt": "2026-09-02T00:47:01.809Z"
+  },
+  {
+    "id": "important",
+    "name": "Important",
+    "color": "#F43F5E",
+    "isDefault": true,
+    "description": "High priority contacts, VIPs, or special attention cases",
+    "createdAt": "2026-09-02T00:47:01.809Z"
+  }
+]

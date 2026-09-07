@@ -1,0 +1,27 @@
+{
+  "rotationMode": "balance_aware",
+  "lowBalanceThreshold": 1,
+  "autoRefreshIntervalMinutes": 5,
+  "model": "nova-3",
+  "language": "multi",
+  "smartFormat": true,
+  "punctuate": true,
+  "numerals": true,
+  "customKeyterms": [
+    "VoiceDelta",
+    "ElevenLabs",
+    "OpenAI",
+    "Gemini",
+    "Microsoft",
+    "DeepSeek",
+    "Claude",
+    "ChatGPT",
+    "voice cloning",
+    "Roman Urdu",
+    "Easypaisa",
+    "JazzCash",
+    "Raast",
+    "WhatsApp",
+    "SalesAgent"
+  ]
+}

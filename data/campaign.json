@@ -1,0 +1,35 @@
+{
+  "id": "camp_1788310021809",
+  "name": "Targeted Outreach Campaign",
+  "status": "idle",
+  "targetGroups": [],
+  "allowedCountryCodes": [
+    "+92"
+  ],
+  "rateLimits": {
+    "messagesPerHour": 10,
+    "messagesPerCampaign": 30,
+    "dailyLimit": 50,
+    "delayBetweenMessagesSeconds": 20
+  },
+  "currentGroupIndex": 0,
+  "groupMemberPointers": {},
+  "contactedPhoneNumbers": [],
+  "messagesSent": 0,
+  "messagesFailed": 0,
+  "hourlySentCount": 0,
+  "hourlyWindowStart": 1788310021809,
+  "dailySentCount": 0,
+  "dailyWindowStart": 1788310021809,
+  "remainingQuota": 30,
+  "consecutiveFailures": 0,
+  "messageVariations": [
+    "Assalam o Alaikum! VoiceDelta AI voice generator available hai with 100+ realistic Pakistani & international voices. Interested hain to batayein!",
+    "Salam bhai, high quality AI video & audio tools check karein. Fast generation aur instant access available hai. Details chahiye?",
+    "Assalam o Alaikum! Latest AI marketing and voice tools ready hain. Affordable plans and instant setup. Reply for info!",
+    "Salam! Agar apko Urdu & English content ke liye AI voiceover ya video editing tool chahiye to check karein, free test available hai."
+  ],
+  "logs": [],
+  "createdAt": "2026-09-02T00:47:01.809Z",
+  "updatedAt": "2026-09-02T00:47:01.842Z"
+}

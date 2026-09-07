@@ -1,0 +1,155 @@
+[
+  {
+    "id": "Free",
+    "name": "Free Trial",
+    "price": "Rs. 0",
+    "period": "forever",
+    "color": "slate",
+    "popular": false,
+    "conversionCap": 30,
+    "maxAiReplies": 30,
+    "campaignsCap": 2,
+    "toolsCap": 5,
+    "dailyAiQuota": 1000,
+    "maxConversations": 100,
+    "models": [
+      "Gemini 2.5 Flash"
+    ],
+    "antiBan": false,
+    "branding": false,
+    "vipSupport": false,
+    "description": "Includes 30 AI replies. Test auto-responses & tool recommendations.",
+    "limits": {
+      "maxCampaigns": 2,
+      "maxTools": 5,
+      "dailyAiQuota": 1000,
+      "conversionLimit": 30,
+      "maxAiReplies": 30,
+      "maxConversations": 100,
+      "allowedAiModels": [
+        "gemini"
+      ],
+      "hasAntiBanPriority": false,
+      "hasCustomBranding": false,
+      "hasPrioritySupport": false
+    }
+  },
+  {
+    "id": "Pro",
+    "name": "Pro Growth",
+    "price": "Rs. 12,000",
+    "period": "/month",
+    "color": "emerald",
+    "popular": true,
+    "conversionCap": 250,
+    "maxAiReplies": 250,
+    "campaignsCap": 25,
+    "toolsCap": 50,
+    "dailyAiQuota": 10000,
+    "maxConversations": 1000,
+    "models": [
+      "Gemini 2.5 Flash",
+      "DeepSeek V3",
+      "Deterministic Rules"
+    ],
+    "antiBan": true,
+    "branding": false,
+    "vipSupport": false,
+    "description": "Ideal for growing e-commerce sellers and digital service agencies.",
+    "limits": {
+      "maxCampaigns": 25,
+      "maxTools": 50,
+      "dailyAiQuota": 10000,
+      "conversionLimit": 250,
+      "maxAiReplies": 250,
+      "maxConversations": 1000,
+      "allowedAiModels": [
+        "gemini",
+        "deepseek-v3",
+        "gptlogic"
+      ],
+      "hasAntiBanPriority": true,
+      "hasCustomBranding": false,
+      "hasPrioritySupport": false
+    }
+  },
+  {
+    "id": "Agency",
+    "name": "Agency Scale",
+    "price": "Rs. 35,000",
+    "period": "/month",
+    "color": "blue",
+    "popular": false,
+    "conversionCap": 1500,
+    "maxAiReplies": 1500,
+    "campaignsCap": 100,
+    "toolsCap": 200,
+    "dailyAiQuota": 50000,
+    "maxConversations": 5000,
+    "models": [
+      "Gemini 2.5",
+      "Claude 3.5 Haiku",
+      "DeepSeek V3",
+      "Deterministic Rules"
+    ],
+    "antiBan": true,
+    "branding": true,
+    "vipSupport": true,
+    "description": "High-volume multi-account outreach with custom whitelabel reports.",
+    "limits": {
+      "maxCampaigns": 100,
+      "maxTools": 200,
+      "dailyAiQuota": 50000,
+      "conversionLimit": 1500,
+      "maxAiReplies": 1500,
+      "maxConversations": 5000,
+      "allowedAiModels": [
+        "gemini",
+        "claude-haiku",
+        "deepseek-v3",
+        "gptlogic"
+      ],
+      "hasAntiBanPriority": true,
+      "hasCustomBranding": true,
+      "hasPrioritySupport": true
+    }
+  },
+  {
+    "id": "Enterprise",
+    "name": "Enterprise Custom",
+    "price": "Rs. 85,000+",
+    "period": "/month",
+    "color": "purple",
+    "popular": false,
+    "conversionCap": "Unlimited (99,999)",
+    "maxAiReplies": "Unlimited (99,999)",
+    "campaignsCap": "Unlimited (999)",
+    "toolsCap": "Unlimited (999)",
+    "dailyAiQuota": 500000,
+    "maxConversations": 99999,
+    "models": [
+      "All AI Engine Gateways & High-Concurrency Fallbacks"
+    ],
+    "antiBan": true,
+    "branding": true,
+    "vipSupport": true,
+    "description": "Dedicated server deployment with custom CRM API synchronization.",
+    "limits": {
+      "maxCampaigns": 999,
+      "maxTools": 999,
+      "dailyAiQuota": 500000,
+      "conversionLimit": 99999,
+      "maxAiReplies": 99999,
+      "maxConversations": 99999,
+      "allowedAiModels": [
+        "gemini",
+        "claude-haiku",
+        "deepseek-v3",
+        "gptlogic"
+      ],
+      "hasAntiBanPriority": true,
+      "hasCustomBranding": true,
+      "hasPrioritySupport": true
+    }
+  }
+]

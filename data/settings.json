@@ -1,0 +1,34 @@
+{
+  "aiAgentEnabled": true,
+  "preferredApi": "gemini",
+  "defaultLLM": "Gemini",
+  "language": "Roman Urdu",
+  "autoReply": true,
+  "humanLikeMode": true,
+  "chatStyle": "casual_roman_urdu",
+  "maxTokens": 150,
+  "systemPrompt": "",
+  "allowImageReplies": true,
+  "paymentInstructions": "Payment send karne ke baad screenshot/receipt share karein, verification ke foran baad account activate ho jaye ga.",
+  "responseDelaySeconds": 1.5,
+  "paymentMethods": [
+    {
+      "id": "pm_easypaisa_1",
+      "provider": "Easypaisa",
+      "accountTitle": "Badar Abbas Shah",
+      "accountNumber": "03079031153",
+      "bankName": "Easypaisa Wallet",
+      "instructions": "Send via Easypaisa App",
+      "isActive": true
+    },
+    {
+      "id": "pm_jazzcash_1",
+      "provider": "JazzCash",
+      "accountTitle": "Badar Abbas Shah",
+      "accountNumber": "03079031153",
+      "bankName": "JazzCash Mobile Account",
+      "instructions": "Send via JazzCash App or *786#",
+      "isActive": true
+    }
+  ]
+}
