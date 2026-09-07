@@ -1,12 +1,4 @@
-.htaccess
 node_modules/
 .env
 .env.local
 *.log
-src/
-server.ts
-tsconfig.json
-vite.config.ts
-.github/
-.cpanel.yml
-.env.example

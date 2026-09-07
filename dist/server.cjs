@@ -891,6 +891,9 @@ var init_settings = __esm({
       maxTokens: 150,
       systemPrompt: "",
       allowImageReplies: true,
+      salesSkillEnabled: true,
+      allowGroups: false,
+      allowChannels: false,
       paymentInstructions: "Payment send karne ke baad screenshot/receipt share karein, verification ke foran baad access mil jaye ga.",
       responseDelaySeconds: 1.5,
       paymentMethods: [
@@ -2024,6 +2027,10 @@ function startAgent() {
   console.log("[Agent] Ultra-Natural WhatsApp Conversation Engine initialized.");
 }
 async function queueMessage(phoneNumber, message, name, userId) {
+  if (phoneNumber.includes("@newsletter") || phoneNumber.includes("@broadcast") || phoneNumber.includes("status@broadcast")) {
+    console.log(`[Agent:${userId || "default"}] Ignored message from channel/broadcast: ${phoneNumber}`);
+    return;
+  }
   const seq = ++globalSequenceCounter;
   const queueKey = `${userId || "default"}:${phoneNumber}`;
   console.log(`[Agent:${userId || "default"}] [Seq #${seq}] Queued message from ${phoneNumber} (${name || "Customer"}): "${message}"`);
@@ -2161,6 +2168,35 @@ Payment Policy: ${settings.paymentInstructions}` : "") : "No manual bank account
   const customerMessages = customer.messages || [];
   const messageHistory = customerMessages.slice(-20).map((m) => `${m.role === "user" ? name || "Customer" : "You (Agent)"}: ${m.content}`).join("\n");
   const agentPastMessages = customerMessages.filter((m) => m.role === "agent").map((m) => m.content).join("\n");
+  const salesSkillInstructions = settings.salesSkillEnabled !== false ? `
+==================================================
+11. ADVANCED SALES CLOSER SKILL ENGINE (SKILL.MD)
+==================================================
+You are operating with the High-Converting WhatsApp Sales Closer Skill active:
+1. Core Mission:
+   - Understand what the customer wants, identify the best product or plan, communicate the value clearly, remove legitimate buying friction, and make the next step easy.
+   - Optimize for: Relevance before persuasion, Trust before pressure, Value before discount, Diagnosis before rebuttal, and One clear next step per message.
+2. Discovery Before Pitch:
+   - Do not dump product features immediately when customer's need is broad.
+   - Level 1 Need: "Aap mainly kis kaam ke liye tool dekh rahe hain?"
+   - Level 2 Pain: "Abhi manual karne me kitna time lagta hai?" or "Current setup mein kya missing hai?"
+   - Stop asking questions once you have enough information to make a confident recommendation.
+3. Value Selling:
+   - Translate features into outcomes: Feature -> What it changes -> Why the customer should care.
+   - Example: "Isme AI replies + automation hai, isliye aapko har lead manually handle nahi karni padegi aur koi customer wait nahi karega."
+4. Objection Handling Playbook:
+   - Objection "Mehnga hai / Too expensive": Diagnose first ("Aapka monthly budget kitna hai ya commitment ka issue lag raha hai?"). Highlight daily ROI or recommend starter plan if available.
+   - Objection "Soch ke bataunga / Later": Do not be pushy. Ask what specific question or point they are evaluating so you can provide clarity.
+   - Objection "Trust / Scam fear": Share genuine screenshots, explain clear step-by-step activation, and offer direct admin reassurance.
+5. Clean Closing:
+   - When customer shows buying intent ("chahiye", "buy karna hai", "account do", "price theek hai"), immediately provide ONE clear next step:
+     "Main exact payment details share kar deta hoon, transfer ke baad screenshot bhej dijiye ga taake foran access mil jaye."
+` : `
+==================================================
+11. STANDARD DIRECT MODE
+==================================================
+Answer questions directly and helpfully based on the tool knowledge.
+`;
   const prompt = `You are a real, natural Pakistani WhatsApp salesperson helping a customer on WhatsApp.
 You MUST behave like a genuine human Pakistani sales representative, NOT like an AI chatbot, corporate helpdesk, or product brochure.
 
@@ -2226,11 +2262,7 @@ If the customer already knows a fact (e.g. voice count, voice cloning, or price)
 - Goal: Understand \u2192 Recommend \u2192 Explain \u2192 Build confidence \u2192 Help decide.
 - NEVER pressure the customer or create fake urgency (NEVER say "only 2 slots left" or "offer ending today").
 - NEVER make fake claims or invent features, prices, limits, or links not found in Tool Knowledge.
-- DO NOT repeatedly ask pushy closing questions like:
-  - "Kya main link bhej doon?"
-  - "Kya aap buy karna chahenge?"
-  - "Kya trial karna hai?"
-  - "Aap kab payment karenge?"
+- DO NOT repeatedly ask pushy closing questions.
 - Only ask a question when it naturally helps the customer make a decision.
 
 ==================================================
@@ -2238,17 +2270,6 @@ If the customer already knows a fact (e.g. voice count, voice cloning, or price)
 ==================================================
 WhatsApp messages must be natural. Don't over-fragment every 2 words into a separate bubble, and don't dump everything into 1 huge block.
 Separate multi-message turns by placing "---MSG---" between them.
-BAD (Over-fragmented):
-"Han bhai."
-"VoiceDelta hai."
-"Isme voices hain."
-"3600+ voices hain."
-"Cloning bhi hai."
-
-GOOD (Natural conversation bubbles):
-"Han bhai, VoiceDelta hai iske liye. Isme 3,600+ AI voices hain \u2014 ElevenLabs, OpenAI, Gemini aur Microsoft ki."
----MSG---
-"Voice cloning bhi hai aur Pro me unlimited generation milti hai."
 
 ==================================================
 8. OFFICIAL PAYMENT DETAILS & SCREENSHOTS
@@ -2260,9 +2281,8 @@ If the customer asks how to pay or asks for payment accounts ("payment kahan kar
 ==================================================
 9. SCREENSHOT / IMAGE INTELLIGENCE
 ==================================================
-- Only attach an image if the customer explicitly asks to see the interface/screenshot/dashboard (e.g. "interface dikhao", "screenshot bhej do", "dashboard kesa lagta hai"), OR if an image is directly requested.
+- Only attach an image if the customer explicitly asks to see the interface/screenshot/dashboard, OR if an image is directly requested.
 - To send an image, append [SEND_IMAGE: <filepath>] to your response.
-- Otherwise, do NOT include [SEND_IMAGE: ...].
 
 ==================================================
 10. CUSTOMER STATUS AUTOMATION (MEMORY UPDATE)
@@ -2274,8 +2294,8 @@ Available statuses:
 - "New Customer": New contact or first-time inquiry asking about tools.
 - "Interested": Customer shows active or repeated product interest, asking about capabilities, features, or prices.
 - "Payment Pending": Customer clearly wants to buy, asks for payment account details, or says "buy karna hai", "account bhej do", "payment method", but has not confirmed paying yet.
-- "Payment Done": Customer states they have sent/transferred the payment, mentions transaction ID, sends receipt/screenshot, or says "payment kar di hai", "check kar lo payment". (Note: Payment Done is unverified customer claim).
-- "Follow Up": Customer explicitly asks to be contacted later ("kal baat karte hain", "busy hun abhi", "baad me batata hun", "shaam ko message karna").
+- "Payment Done": Customer states they have sent/transferred the payment, mentions transaction ID, sends receipt/screenshot, or says "payment kar di hai", "check kar lo payment".
+- "Follow Up": Customer explicitly asks to be contacted later ("kal baat karte hain", "busy hun abhi", "baad me batata hun").
 - "Order Complete": (CRITICAL: NEVER output this status. Only human admins can mark Order Complete upon payment verification).
 - "Important": Priority customer or VIP lead.
 
@@ -2284,6 +2304,8 @@ RULES FOR STATUS CHANGE:
 - Only change when there is clear conversation evidence.
 - If status should change, append [SET_STATUS: <StatusName>] to your response.
 - If current status should remain as is, do NOT include [SET_STATUS: ...].
+
+${salesSkillInstructions}
 
 ${settings.systemPrompt ? `Additional Custom Admin Persona/Instructions:
 ${settings.systemPrompt}
@@ -3373,41 +3395,54 @@ async function connectToWhatsApp(userId = "usr_admin_badar", usePairingCode = fa
         for (const msg of m.messages) {
           if (!msg.key.fromMe && msg.message) {
             const sender = msg.key.remoteJid;
-            if (sender && !sender.includes("@g.us") && !sender.includes("status@broadcast")) {
-              const textMessage = msg.message.conversation || msg.message.extendedTextMessage?.text || msg.message.ephemeralMessage?.message?.extendedTextMessage?.text || msg.message.ephemeralMessage?.message?.conversation || msg.message.imageMessage?.caption || msg.message.videoMessage?.caption || msg.message.documentMessage?.caption || msg.message.templateButtonReplyMessage?.selectedId || msg.message.buttonsResponseMessage?.selectedButtonId || msg.message.listResponseMessage?.singleSelectReply?.selectedRowId;
-              if (textMessage) {
-                console.log(`[WhatsApp:${userId}] Received message from ${sender}: "${textMessage}"`);
-                await queueMessage(sender, textMessage, msg.pushName || "Customer", userId);
-              } else {
-                const audioMsg = msg.message.audioMessage || msg.message.ephemeralMessage?.message?.audioMessage;
-                if (audioMsg) {
-                  console.log(`[WhatsApp:${userId}] Received voice message from ${sender}. Downloading audio...`);
-                  try {
-                    const buffer = await (0, import_baileys.downloadMediaMessage)(
-                      msg,
-                      "buffer",
-                      {},
-                      {
-                        logger: (0, import_pino.default)({ level: "silent" }),
-                        reuploadRequest: newSock.updateMediaMessage
-                      }
-                    );
-                    if (buffer && buffer.length > 0) {
-                      console.log(`[WhatsApp:${userId}] Transcribing voice note (${buffer.length} bytes) via Deepgram...`);
-                      const transcribedText = await transcribeAudio(
-                        buffer,
-                        audioMsg.mimetype || "audio/ogg; codecs=opus"
-                      );
-                      if (transcribedText && transcribedText.trim().length > 0) {
-                        console.log(`[WhatsApp:${userId}] Voice note transcribed: "${transcribedText}"`);
-                        await queueMessage(sender, transcribedText, msg.pushName || "Customer", userId);
-                      } else {
-                        console.warn(`[WhatsApp:${userId}] Audio transcription returned empty.`);
-                      }
+            if (!sender) continue;
+            if (sender.includes("@newsletter") || sender.includes("@broadcast") || sender.includes("status@broadcast") || sender.includes("@call")) {
+              continue;
+            }
+            if (sender.includes("@g.us")) {
+              const settings = await getSettings(userId);
+              if (!settings.allowGroups) {
+                continue;
+              }
+            }
+            const isDirectChat = sender.endsWith("@s.whatsapp.net");
+            const isGroupChat = sender.endsWith("@g.us");
+            if (!isDirectChat && !isGroupChat) {
+              continue;
+            }
+            const textMessage = msg.message.conversation || msg.message.extendedTextMessage?.text || msg.message.ephemeralMessage?.message?.extendedTextMessage?.text || msg.message.ephemeralMessage?.message?.conversation || msg.message.imageMessage?.caption || msg.message.videoMessage?.caption || msg.message.documentMessage?.caption || msg.message.templateButtonReplyMessage?.selectedId || msg.message.buttonsResponseMessage?.selectedButtonId || msg.message.listResponseMessage?.singleSelectReply?.selectedRowId;
+            if (textMessage) {
+              console.log(`[WhatsApp:${userId}] Received message from ${sender}: "${textMessage}"`);
+              await queueMessage(sender, textMessage, msg.pushName || "Customer", userId);
+            } else {
+              const audioMsg = msg.message.audioMessage || msg.message.ephemeralMessage?.message?.audioMessage;
+              if (audioMsg) {
+                console.log(`[WhatsApp:${userId}] Received voice message from ${sender}. Downloading audio...`);
+                try {
+                  const buffer = await (0, import_baileys.downloadMediaMessage)(
+                    msg,
+                    "buffer",
+                    {},
+                    {
+                      logger: (0, import_pino.default)({ level: "silent" }),
+                      reuploadRequest: newSock.updateMediaMessage
                     }
-                  } catch (audioErr) {
-                    console.error(`[WhatsApp:${userId}] Error downloading/transcribing audio:`, audioErr);
+                  );
+                  if (buffer && buffer.length > 0) {
+                    console.log(`[WhatsApp:${userId}] Transcribing voice note (${buffer.length} bytes) via Deepgram...`);
+                    const transcribedText = await transcribeAudio(
+                      buffer,
+                      audioMsg.mimetype || "audio/ogg; codecs=opus"
+                    );
+                    if (transcribedText && transcribedText.trim().length > 0) {
+                      console.log(`[WhatsApp:${userId}] Voice note transcribed: "${transcribedText}"`);
+                      await queueMessage(sender, transcribedText, msg.pushName || "Customer", userId);
+                    } else {
+                      console.warn(`[WhatsApp:${userId}] Audio transcription returned empty.`);
+                    }
                   }
+                } catch (audioErr) {
+                  console.error(`[WhatsApp:${userId}] Error downloading/transcribing audio:`, audioErr);
                 }
               }
             }
@@ -3626,6 +3661,7 @@ var init_whatsapp = __esm({
     init_agent();
     init_deepgram();
     init_auth();
+    init_settings();
     import_pino = __toESM(require("pino"), 1);
     import_qrcode = __toESM(require("qrcode"), 1);
     import_promises8 = __toESM(require("fs/promises"), 1);
@@ -4498,15 +4534,30 @@ async function startServer() {
     });
   }
   const rawPort = process.env.PORT;
-  const portOrSocket = typeof globalThis.PhusionPassenger !== "undefined" ? "passenger" : rawPort ? isNaN(Number(rawPort)) ? rawPort : parseInt(rawPort, 10) : 3001;
-  if (portOrSocket === "passenger") {
+  if (typeof globalThis.PhusionPassenger !== "undefined" || rawPort === "passenger") {
     app.listen("passenger", () => {
       console.log("Server running via Phusion Passenger socket");
     });
+  } else if (rawPort) {
+    if (isNaN(Number(rawPort))) {
+      app.listen(rawPort, () => {
+        console.log(`Server running on socket: ${rawPort}`);
+      });
+    } else {
+      app.listen(parseInt(rawPort, 10), "0.0.0.0", () => {
+        console.log(`Server running on port ${rawPort}`);
+      });
+    }
   } else {
-    app.listen(Number(portOrSocket), "0.0.0.0", () => {
-      console.log(`Server running on http://localhost:${portOrSocket}`);
-    });
+    if (process.env.PASSENGER_APP_ENV) {
+      app.listen("passenger", () => {
+        console.log("Server running via Passenger fallback");
+      });
+    } else {
+      app.listen(3001, "0.0.0.0", () => {
+        console.log("Server running on http://localhost:3001");
+      });
+    }
   }
 }
 startServer().catch(console.error);
