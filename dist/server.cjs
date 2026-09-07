@@ -4388,7 +4388,7 @@ async function startServer() {
   await initializeDataDirs();
   const app = (0, import_express.default)();
   const rawPort = process.env.PORT;
-  const portOrSocket = rawPort ? isNaN(Number(rawPort)) ? rawPort : parseInt(rawPort, 10) : 3001;
+  const portOrSocket = typeof PhusionPassenger !== "undefined" ? "passenger" : (rawPort ? (isNaN(Number(rawPort)) ? rawPort : parseInt(rawPort, 10)) : 3001);
   app.use((0, import_cors.default)());
   app.use(import_express.default.json({ limit: "50mb" }));
   app.use("/tool-images", import_express.default.static(TOOL_IMAGES_DIR));

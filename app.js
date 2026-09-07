@@ -1,2 +1,2 @@
 // Entry point for cPanel Phusion Passenger
-require('./dist/server.cjs');
+import('./dist/server.cjs');
