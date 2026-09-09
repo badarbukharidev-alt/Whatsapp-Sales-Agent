@@ -1,10 +1,11 @@
 import { askAI } from "./ai.js";
-import { getCustomers, updateCustomerMemory, updateCustomerStatus, normalizeCustomerStatus, VALID_CUSTOMER_STATUSES } from "./memory.js";
+import { getCustomers, updateCustomerMemory, updateCustomerStatus, normalizeCustomerStatus, VALID_CUSTOMER_STATUSES, saveCustomer } from "./memory.js";
 import { getTools } from "./tools.js";
 import { getSettings } from "./settings.js";
 import { sendMessage, sendToolImage } from "./whatsapp.js";
-import { Customer, CustomerStatus } from "../types.js";
+import { Customer, CustomerStatus, Tool } from "../types.js";
 import { checkAiReplyQuota, recordAiReply, recordUserMessage } from "./usage.js";
+import { matchTool, getUnstatedFacts, recordStatedFacts, clampPriceFloors, extractMentionedFacts } from "./tool-matcher.js";
 
 interface QueuedIncomingMessage {
   seq: number;
@@ -170,40 +171,78 @@ async function generateResponse(
 ): Promise<{ textMessages: string[]; imageToSend: string | null }> {
   const settings = await getSettings(userId);
   const customers = await getCustomers();
-  const customer: Customer = customers[phoneNumber] || { phoneNumber, status: 'New Customer', messages: [] };
+  const customer: Customer = customers[phoneNumber] || { phoneNumber, status: 'New Customer', messages: [], factsStated: {} };
+  if (!customer.factsStated) customer.factsStated = {};
   const tools = await getTools(userId);
 
-  // Format all tools dynamically from Tool Manager
-  const toolContext = tools.length > 0
-    ? tools.map((t: any) => {
-        let block = `=== TOOL: ${t.name} ===\nCategory: ${t.category || 'AI Tools'}\nStatus: ${t.status || 'active'}\nDescription: ${t.description || ''}`;
-        if (t.pricePkr || t.priceUsd) {
-          block += `\nPricing: ${t.pricePkr ? `Rs. ${t.pricePkr}/month` : ''} ${t.priceUsd ? `($${t.priceUsd}/mo)` : ''}`;
-        }
-        if (t.features && t.features.length > 0) {
-          block += `\nKey Features:\n` + t.features.map((f: string) => `  - ${f}`).join("\n");
-        }
-        if (t.use_cases && t.use_cases.length > 0) {
-          block += `\nUse Cases:\n` + t.use_cases.map((u: string) => `  - ${u}`).join("\n");
-        }
-        if (t.limitations && t.limitations.length > 0) {
-          block += `\nLimits & Limitations:\n` + t.limitations.map((l: string) => `  - ${l}`).join("\n");
-        }
-        if (t.how_to_use) {
-          block += `\nHow to Use / Access: ${t.how_to_use}`;
-        }
-        if (t.sales_points && t.sales_points.length > 0) {
-          block += `\nSales Points / Standout Advantages:\n` + t.sales_points.map((s: string) => `  - ${s}`).join("\n");
-        }
-        if (t.faq && t.faq.length > 0) {
-          block += `\nFAQs:\n` + t.faq.map((q: any) => `  Q: ${q.question} -> A: ${q.answer}`).join("\n");
-        }
-        if (t.images && Array.isArray(t.images) && t.images.length > 0) {
-          block += `\nAvailable Screenshots / UI Images:\n` + t.images.map((img: any) => `  - Image File: "${img.filepath || img.filename}" | Title: "${img.title || 'Screenshot'}" | Description: "${img.description}"`).join("\n");
-        }
-        return block;
-      }).join("\n\n")
-    : "No custom tools configured in Tool Manager.";
+  // Recent user messages for context-aware matching
+  const customerMessages = customer.messages || [];
+  const recentUserHistory = customerMessages
+    .filter((m: any) => m.role === 'user')
+    .slice(-3)
+    .map((m: any) => m.content);
+
+  // 1. Tool Matching Protocol
+  const match = matchTool(latestCustomerText, tools, recentUserHistory);
+
+  // 2. Format tool context based on match results
+  let toolContext = "";
+  if (match.confidence === "none" && match.isUnknownProduct) {
+    toolContext = `Customer asked about external uncataloged product: "${match.queryProduct}". No catalog tool matched.`;
+  } else if (match.matched.length > 0) {
+    // Only inject matched tools into context
+    toolContext = match.matched.map((t: Tool) => {
+      const minFloor = t.pricing?.min_negotiable_pkr || t.pricePkr || "N/A";
+      let block = `=== MATCHED TOOL: ${t.name} ===\nCategory: ${t.category || 'AI Tools'}\nStatus: ${t.status || 'active'}\nDescription: ${t.description || ''}`;
+
+      block += `\nPricing & Negotiation Floor:`;
+      block += `\n  - List Price: Rs. ${t.pricePkr || 'N/A'}/month ${t.priceUsd ? `($${t.priceUsd}/mo)` : ''}`;
+      block += `\n  - Minimum Negotiable Floor (DO NOT QUOTE BELOW THIS): Rs. ${minFloor}`;
+      if (t.pricing?.negotiation_notes) {
+        block += `\n  - Negotiation Rules: ${t.pricing.negotiation_notes}`;
+      }
+
+      const candidateFacts = [
+        ...(t.features || []),
+        ...(t.sales_points || []),
+        ...(t.use_cases || [])
+      ];
+      const statedFacts = (customer.factsStated && customer.factsStated[t.id]) || [];
+      const unstatedFacts = getUnstatedFacts(candidateFacts, statedFacts);
+
+      block += `\n\n[ANTI-REPETITION STATUS FOR THIS CUSTOMER]:`;
+      if (statedFacts.length > 0) {
+        block += `\nALREADY STATED TO THIS CUSTOMER (DO NOT REPEAT VERBATIM):\n` + statedFacts.map(f => `  - [ALREADY SAID]: ${f}`).join("\n");
+      } else {
+        block += `\nALREADY STATED: None yet.`;
+      }
+
+      if (unstatedFacts.length > 0) {
+        block += `\nFRESH FACTS TO REVEAL (DRAW FROM THESE):` + unstatedFacts.map(f => `\n  - [FRESH FACT]: ${f}`).join("");
+      } else {
+        block += `\nFRESH FACTS: All primary facts have been shared. Focus on answering their specific question or making the next step easy.`;
+      }
+
+      if (t.objection_responses && Object.keys(t.objection_responses).length > 0) {
+        block += `\n\nObjection Handling Playbook for ${t.name}:`;
+        if (t.objection_responses.too_expensive) block += `\n  - If customer says too expensive: ${t.objection_responses.too_expensive}`;
+        if (t.objection_responses.need_time) block += `\n  - If customer needs time: ${t.objection_responses.need_time}`;
+        if (t.objection_responses.comparing_competitor) block += `\n  - If customer compares with competitors: ${t.objection_responses.comparing_competitor}`;
+      }
+
+      if (t.images && Array.isArray(t.images) && t.images.length > 0) {
+        block += `\n\nAvailable Screenshots / UI Images:\n` + t.images.map((img: any) => `  - Image File: "${img.filepath || img.filename}" | Title: "${img.title || 'Screenshot'}" | Description: "${img.description}"`).join("\n");
+      }
+
+      return block;
+    }).join("\n\n");
+  } else {
+    // General chat / greeting without a specific tool match
+    toolContext = `Available Software Catalog in Store:
+- VoiceDelta: AI voice generator with 3,600+ AI voices, ElevenLabs/OpenAI models, and voice cloning (Rs. 1,199/mo).
+- ClipShield: YouTube video downloader, AI hook finder, and 9-layer anti-copyright claim protection (Rs. 1,500/mo).
+Do not dump feature lists. Greet naturally and ask 1 diagnostic question to understand what they are looking for.`;
+  }
 
   // Format active payment methods
   const activePayments = (settings.paymentMethods || []).filter((p: any) => p.isActive !== false);
@@ -214,48 +253,60 @@ async function generateResponse(
     : "No manual bank accounts configured. Ask customer to contact admin.";
 
   // Recent chat history
-  const customerMessages = customer.messages || [];
   const messageHistory = customerMessages
     .slice(-20)
     .map((m: any) => `${m.role === 'user' ? (name || 'Customer') : 'You (Agent)'}: ${m.content}`)
     .join("\n");
 
-  // Extract past points already mentioned by agent in this chat for strict anti-repetition
-  const agentPastMessages = customerMessages
+  // Check if agent recently claimed rate is fixed for negotiation consistency
+  const agentRecentlyClaimedFixed = customerMessages
     .filter((m: any) => m.role === 'agent')
-    .map((m: any) => m.content)
-    .join("\n");
+    .slice(-2)
+    .some((m: any) => /(?:fixed|kam nahi|rate final|final price|discount nahi)/i.test(m.content));
 
-  // Sales Closer Skill mode from SKILL.md
+  // Sales Closer Skill mode from SKILL.md v2
   const salesSkillInstructions = settings.salesSkillEnabled !== false ? `
 ==================================================
-11. ADVANCED SALES CLOSER SKILL ENGINE (SKILL.MD)
+11. SALES CLOSER SKILL ENGINE — V2 PROTOCOL
 ==================================================
-You are operating with the High-Converting WhatsApp Sales Closer Skill active:
-1. Core Mission:
-   - Understand what the customer wants, identify the best product or plan, communicate the value clearly, remove legitimate buying friction, and make the next step easy.
-   - Optimize for: Relevance before persuasion, Trust before pressure, Value before discount, Diagnosis before rebuttal, and One clear next step per message.
-2. Discovery Before Pitch:
-   - Do not dump product features immediately when customer's need is broad.
-   - Level 1 Need: "Aap mainly kis kaam ke liye tool dekh rahe hain?"
-   - Level 2 Pain: "Abhi manual karne me kitna time lagta hai?" or "Current setup mein kya missing hai?"
-   - Stop asking questions once you have enough information to make a confident recommendation.
-3. Value Selling:
-   - Translate features into outcomes: Feature -> What it changes -> Why the customer should care.
-   - Example: "Isme AI replies + automation hai, isliye aapko har lead manually handle nahi karni padegi aur koi customer wait nahi karega."
-4. Objection Handling Playbook:
-   - Objection "Mehnga hai / Too expensive": Diagnose first ("Aapka monthly budget kitna hai ya commitment ka issue lag raha hai?"). Highlight daily ROI or recommend starter plan if available.
-   - Objection "Soch ke bataunga / Later": Do not be pushy. Ask what specific question or point they are evaluating so you can provide clarity.
-   - Objection "Trust / Scam fear": Share genuine screenshots, explain clear step-by-step activation, and offer direct admin reassurance.
-5. Clean Closing:
-   - When customer shows buying intent ("chahiye", "buy karna hai", "account do", "price theek hai"), immediately provide ONE clear next step:
-     "Main exact payment details share kar deta hoon, transfer ke baad screenshot bhej dijiye ga taake foran access mil jaye."
+1. PERSONA:
+   - Casual Pakistani WhatsApp sales rep. Warm, direct, human, never robotic.
+   - 100% Roman Urdu ONLY. Never write in English, Hindi, or formal Urdu script.
+   - Vary sentence openers turn to turn. Do not start every message with the same line.
+2. TOOL IDENTIFICATION PROTOCOL:
+   - If a specific catalog tool matched: discuss ONLY that tool. Do not pivot to other tools unless asked.
+   - If no match found: be honest. Do NOT claim to carry it, do NOT invent details, and NEVER denigrate it.
+3. PROGRESSIVE DISCLOSURE & ANTI-REPETITION:
+   - Check ALREADY STATED facts. NEVER repeat those same feature lines verbatim.
+   - To reinforce value, draw from FRESH FACTS or address the new question directly.
+4. NEGOTIATION LADDER & HARD PRICE FLOORS:
+   - Step 1 (Anchor): State regular price confidently with value framing.
+   - Step 2 (Hold & Reframe): On pushback, reframe value from a fresh angle (daily cost, time saved, multi-engine access).
+   - Step 3 (Ask, don't fold): Ask what budget or setup works for them before conceding.
+   - Step 4 (Consistency): ${agentRecentlyClaimedFixed ? "You recently stated the rate is fixed. MAINTAIN CONSISTENCY. Do not immediately fold or drop the price in this message." : "Pick one stance and stay consistent within the conversation."}
+   - Step 5 (Conditional Concession): You may only concede down to the minimum floor in exchange for something concrete (e.g. 'Agar aap aaj payment confirm karte hain to Rs. X mein kar deta hoon'). Never give a discount for free!
+   - Step 6 (Absolute Floor): NEVER quote below the tool's minimum floor.
 ` : `
 ==================================================
 11. STANDARD DIRECT MODE
 ==================================================
 Answer questions directly and helpfully based on the tool knowledge.
 `;
+
+  // Specific unknown product instruction block if detected
+  const unknownProductDirective = match.isUnknownProduct ? `
+==================================================
+CRITICAL DIRECTIVE: UNKNOWN / EXTERNAL PRODUCT INQUIRY
+==================================================
+The customer is inquiring about: "${match.queryProduct}".
+WE DO NOT SELL OR CARRY THIS PRODUCT!
+MANDATORY BEHAVIOR:
+1. HONEST BOUNDARY: State clearly and politely in casual Roman Urdu that we do not carry or sell ${match.queryProduct}.
+2. NO FALSE CLAIMS: Never say we have it, never invent fake prices or access.
+3. ZERO DENIGRATION: Do NOT criticize or insult ${match.queryProduct}. Never call it "bekar", "small", "fake", or "inferior".
+4. DIAGNOSTIC QUESTION: Ask one friendly diagnostic question about what workflow they are trying to accomplish (e.g. "Aap mainly kis kaam ke liye tool dekh rahe hain? Video editing, voiceover ya automation?").
+5. DO NOT FORCE-PIVOT: Only mention catalog tools if genuinely relevant to their workflow after understanding their goal.
+` : "";
 
   const prompt = `You are a real, natural Pakistani WhatsApp salesperson helping a customer on WhatsApp.
 You MUST behave like a genuine human Pakistani sales representative, NOT like an AI chatbot, corporate helpdesk, or product brochure.
@@ -274,101 +325,37 @@ You MUST behave like a genuine human Pakistani sales representative, NOT like an
 - After providing enough relevant information, STOP and wait for the customer to reply.
 
 ==================================================
-2. TOOL RECOMMENDATIONS (NATURAL HIGHLIGHTS)
+2. MESSAGE SPLITTING RULES
 ==================================================
-When a customer asks for a tool (e.g. "voice over tool chahiye", "video downloader hai?", "script generator chahiye"):
-- Do NOT give only a lazy 1-line vague answer (like "Han available hai").
-- Provide the 2 to 4 most useful highlights from that tool's knowledge in 2-3 short, natural messages:
-  Example:
-  Message 1: "Han bhai, VoiceDelta hai iske liye."
-  Message 2: "Isme 3,600+ AI voices hain — ElevenLabs, OpenAI, Gemini aur Microsoft ki."
-  Message 3: "Voice cloning bhi hai aur Pro me unlimited voice generation milti hai."
-- Then STOP.
-- Do NOT dump every single feature, all limitations, all technical specs, FAQs, or full pricing tiers immediately.
-
-==================================================
-3. INTENT-BASED REPLIES (PRECISE ANSWERS)
-==================================================
-Answer according to EXACTLY what the customer asks:
-- "price?" / "kitne ka hai?" → Give price only in 1 short message (e.g. "VoiceDelta Pro Rs. 1,500/month ka hai.").
-- "link?" / "kahan se buy karun?" → Send link only in 1 short message (e.g. "Ye lo bhai 👇\nhttps://...").
-- "voice cloning hai?" / "urdu voices hain?" → Answer that specific question directly in 1 short message.
-- "features?" → Give top 2-3 most standout features.
-- "details?" / "aur batao" → Give 2-3 moderate NEW details that have NOT been mentioned yet in this chat.
-- DO NOT restart the complete product pitch after every question!
-
-==================================================
-4. PROGRESSIVE DISCLOSURE & INFORMATION SELECTION
-==================================================
-Stored tool knowledge contains many details. Before replying, select ONLY the information relevant to the customer's current intent.
-Priority:
-1. Direct answer to their immediate question
-2. Most useful supporting point
-3. Optional next detail
-Ignore everything else unless the customer explicitly asks for it.
-
-==================================================
-5. STRICT ANTI-REPETITION (NO DUPLICATE FACTS)
-==================================================
-Check the RECENT CHAT HISTORY below.
-If the customer already knows a fact (e.g. voice count, voice cloning, or price):
-- DO NOT repeat those same facts again unless the customer specifically asks to confirm them.
-- Reveal fresh, relevant points progressively.
-
-==================================================
-6. NATURAL SALES BEHAVIOR (BUILD CONFIDENCE)
-==================================================
-- Goal: Understand → Recommend → Explain → Build confidence → Help decide.
-- NEVER pressure the customer or create fake urgency (NEVER say "only 2 slots left" or "offer ending today").
-- NEVER make fake claims or invent features, prices, limits, or links not found in Tool Knowledge.
-- DO NOT repeatedly ask pushy closing questions.
-- Only ask a question when it naturally helps the customer make a decision.
-
-==================================================
-7. MESSAGE SPLITTING RULES
-==================================================
-WhatsApp messages must be natural. Don't over-fragment every 2 words into a separate bubble, and don't dump everything into 1 huge block.
 Separate multi-message turns by placing "---MSG---" between them.
 
 ==================================================
-8. OFFICIAL PAYMENT DETAILS & SCREENSHOTS
+3. OFFICIAL PAYMENT DETAILS & SCREENSHOTS
 ==================================================
 If the customer asks how to pay or asks for payment accounts ("payment kahan karni hai", "account number do", "easypaisa/jazzcash hai?"):
 - Send the official payment details cleanly from OFFICIAL PAYMENT ACCOUNTS below.
 - Ask them to send the payment screenshot/receipt after transferring so access can be activated.
 
 ==================================================
-9. SCREENSHOT / IMAGE INTELLIGENCE
+4. SCREENSHOT / IMAGE INTELLIGENCE
 ==================================================
 - Only attach an image if the customer explicitly asks to see the interface/screenshot/dashboard, OR if an image is directly requested.
 - To send an image, append [SEND_IMAGE: <filepath>] to your response.
 
 ==================================================
-10. CUSTOMER STATUS AUTOMATION (MEMORY UPDATE)
+5. CUSTOMER STATUS AUTOMATION (MEMORY UPDATE)
 ==================================================
 Current Customer Status: "${customer.status || 'New Customer'}"
-
-Analyze the conversation evidence and determine if the customer's status should change.
-Available statuses:
-- "New Customer": New contact or first-time inquiry asking about tools.
-- "Interested": Customer shows active or repeated product interest, asking about capabilities, features, or prices.
-- "Payment Pending": Customer clearly wants to buy, asks for payment account details, or says "buy karna hai", "account bhej do", "payment method", but has not confirmed paying yet.
-- "Payment Done": Customer states they have sent/transferred the payment, mentions transaction ID, sends receipt/screenshot, or says "payment kar di hai", "check kar lo payment".
-- "Follow Up": Customer explicitly asks to be contacted later ("kal baat karte hain", "busy hun abhi", "baad me batata hun").
-- "Order Complete": (CRITICAL: NEVER output this status. Only human admins can mark Order Complete upon payment verification).
-- "Important": Priority customer or VIP lead.
-
-RULES FOR STATUS CHANGE:
-- Do NOT change status on casual messages (e.g. "ok", "acha", "han", "theek").
-- Only change when there is clear conversation evidence.
-- If status should change, append [SET_STATUS: <StatusName>] to your response.
-- If current status should remain as is, do NOT include [SET_STATUS: ...].
+If status should change based on clear evidence, append [SET_STATUS: <StatusName>]. Available statuses: "New Customer", "Interested", "Payment Pending", "Payment Done", "Follow Up", "Important".
+(CRITICAL: NEVER output "Order Complete").
 
 ${salesSkillInstructions}
 
+${unknownProductDirective}
+
 ${settings.systemPrompt ? `Additional Custom Admin Persona/Instructions:\n${settings.systemPrompt}\n` : ""}
 
-STORED TOOL KNOWLEDGE (SOURCE OF TRUTH):
+STORED TOOL KNOWLEDGE:
 ${toolContext}
 
 OFFICIAL PAYMENT ACCOUNTS:
@@ -381,30 +368,25 @@ CUSTOMER'S NEW MESSAGE(S):
 "${latestCustomerText}"
 
 ==================================================
-MANDATORY FINAL LANGUAGE & BEHAVIOR DIRECTIVE:
+MANDATORY FINAL DIRECTIVES:
 ==================================================
-1. STRICT ROMAN URDU ONLY:
-   - Your reply MUST be 100% in natural Pakistani Roman Urdu (e.g. "Han bhai", "jee bilkul", "VoiceDelta Pro Rs. 1,199/month ka hai").
-   - NEVER write in English! Even if the customer writes in English or Hindi, YOU MUST REPLY IN ROMAN URDU!
-2. NO BROCHURE / NO BULLET LISTS:
-   - NEVER use markdown bold headers (e.g. **Elevate AI**), asterisks (* item), or numbered lists!
-   - Write like a real person sending 1 to 3 short WhatsApp bubbles.
-3. STRICT PRODUCT LOCK:
-   - Voiceover inquiry -> VoiceDelta ONLY (Rs. 1,199/mo).
-   - Video copyright inquiry -> ClipShield ONLY.
-   - NEVER mention any external tools.
+1. STRICT ROMAN URDU ONLY: Always reply in natural, casual Pakistani Roman Urdu.
+2. NO BULLET LISTS / NO BROCHURES: Write like a real person sending 1 to 3 short WhatsApp messages.
+3. ANTI-REPETITION: Do NOT repeat previously stated facts verbatim.
+4. HONESTY: Never claim to have tools not in the catalog.
+5. NEGOTIATION: Concessions must have a condition and never go below the minimum floor.
 
 Separate 1–3 short messages using "---MSG---". Provide your natural Roman Urdu reply below:`;
 
-  const systemInstruction = `You are a real Pakistani WhatsApp sales closer for VoiceDelta and ClipShield.
-CRITICAL LANGUAGE & STYLE MANDATE:
-- You MUST ALWAYS reply in 100% natural, casual Pakistani Roman Urdu using Latin alphabet (e.g. "han bhai", "jee bilkul", "VoiceDelta Pro Rs. 1,199/month ka hai", "scene ye hai", "batao kis type ke videos hain?").
-- NEVER reply in English!
-- NEVER reply in Hindi / Devanagari script!
-- NEVER output markdown bold headers, bullet lists, or corporate brochures!
-- Write strictly 1 to 3 short conversational sentences (15 to 40 words total).`;
+  let systemInstruction = "You are a real Pakistani WhatsApp sales closer. Reply in 1 to 3 short sentences in natural Roman Urdu.";
+  if (match.isUnknownProduct) {
+    systemInstruction = `You are a real Pakistani WhatsApp sales representative. The customer asked about "${match.queryProduct}", which we DO NOT sell. Reply honestly in Roman Urdu that you do not carry it, do not criticize it, and ask 1 diagnostic question about what they want to achieve.`;
+  } else if (match.matched.length > 0) {
+    const names = match.matched.map(t => t.name).join(", ");
+    systemInstruction = `You are a real Pakistani WhatsApp sales closer for ${names}. Reply strictly in 1 to 3 short conversational sentences (15 to 40 words total) in natural Roman Urdu. Never repeat already stated features.`;
+  }
 
-  console.log(`[Agent] Generating AI response for ${phoneNumber}...`);
+  console.log(`[Agent] Generating AI response for ${phoneNumber} (Matched: ${match.matched.map(t => t.name).join(", ") || (match.isUnknownProduct ? `Unknown:${match.queryProduct}` : 'None')})...`);
   const rawReply = await askAI(prompt, systemInstruction, userId);
   console.log(`[Agent] AI raw response for ${phoneNumber}:\n${rawReply}`);
 
@@ -434,6 +416,24 @@ CRITICAL LANGUAGE & STYLE MANDATE:
     .replace(/^["']|["']$/g, "")
     .trim();
 
+  // Task 4: Extract stated facts and persist to customer CRM record
+  if (match.matched.length > 0) {
+    let factsUpdated = false;
+    for (const tool of match.matched) {
+      const newlyStated = extractMentionedFacts(text, tool);
+      if (newlyStated.length > 0) {
+        recordStatedFacts(customer, tool.id, newlyStated);
+        factsUpdated = true;
+      }
+    }
+    if (factsUpdated) {
+      await saveCustomer(phoneNumber, { factsStated: customer.factsStated });
+    }
+  }
+
+  // Task 4: Clamp price floors in code to guarantee non-negotiable floor holds
+  text = clampPriceFloors(text, match.matched.length > 0 ? match.matched : tools);
+
   // Split response by "---MSG---" or multiple newlines
   let messages: string[] = [];
   if (text.includes("---MSG---")) {
@@ -442,7 +442,6 @@ CRITICAL LANGUAGE & STYLE MANDATE:
       .map((m) => m.trim())
       .filter((m) => m.length > 0);
   } else {
-    // If not separated by delimiter, split by double newlines if 2-3 clean paragraphs exist
     const paragraphs = text
       .split(/\n\s*\n/)
       .map((p) => p.trim())

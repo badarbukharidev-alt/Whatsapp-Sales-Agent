@@ -1765,6 +1765,9 @@ async function getCustomers() {
         if (!parsed[key].statusManagedBy) {
           parsed[key].statusManagedBy = parsed[key].status === "Order Complete" ? "Manual" : "AI managed";
         }
+        if (!parsed[key].factsStated) {
+          parsed[key].factsStated = {};
+        }
       }
     }
     return parsed;
@@ -1796,6 +1799,7 @@ async function saveCustomer(phoneNumber, data) {
     phoneNumber,
     messages: [],
     status: "New Customer",
+    factsStated: {},
     createdAt: (/* @__PURE__ */ new Date()).toISOString()
   };
   const status = normalizeCustomerStatus(data.status || existing.status);
@@ -2223,6 +2227,413 @@ var init_tools = __esm({
   }
 });
 
+// src/server/tool-matcher.ts
+function normalizeText(str) {
+  return str.toLowerCase().replace(/[^\w\s\-\–]/g, " ").replace(/\s+/g, " ").trim();
+}
+function extractBaseName(name) {
+  return name.split(/[\–\-\:\|]/)[0].trim().toLowerCase();
+}
+function detectUnknownProduct(text, tools) {
+  const norm = normalizeText(text);
+  for (const ext of COMMON_EXTERNAL_TOOLS) {
+    const extRegex = new RegExp(`\\b${ext.replace(/\s+/g, "\\s*")}\\b`, "i");
+    if (extRegex.test(norm)) {
+      const isCatalog = tools.some((t) => {
+        const base = extractBaseName(t.name);
+        return base.includes(ext) || (t.aliases || []).some((a) => a.toLowerCase().includes(ext));
+      });
+      if (!isCatalog) {
+        return ext.charAt(0).toUpperCase() + ext.slice(1);
+      }
+    }
+  }
+  const patterns = [
+    /(?:kya\s+)?([a-z0-9\-\_]{3,20})\s+(?:tool|app|software|account|subscription|bot|chahiye|available|mil\s*jayega)/i,
+    /(?:about|price\s+of|rate\s+for|details\s+of|buy)\s+([a-z0-9\-\_]{3,20})/i,
+    /(?:pass|pas)\s+([a-z0-9\-\_]{3,20})\s+(?:hai|available)/i
+  ];
+  for (const pat of patterns) {
+    const match = norm.match(pat);
+    if (match && match[1]) {
+      const candidate = match[1].toLowerCase().trim();
+      if (!COMMON_STOP_WORDS.has(candidate) && candidate.length >= 3) {
+        const isCatalog = tools.some((t) => {
+          const base = extractBaseName(t.name);
+          return base.includes(candidate) || (t.aliases || []).some((a) => a.toLowerCase().includes(candidate));
+        });
+        if (!isCatalog) {
+          return candidate.charAt(0).toUpperCase() + candidate.slice(1);
+        }
+      }
+    }
+  }
+  return void 0;
+}
+function matchTool(text, tools, conversationHistory) {
+  const normText = normalizeText(text);
+  const matchedDetails = [];
+  const matchedToolsSet = /* @__PURE__ */ new Map();
+  const historyText = conversationHistory && conversationHistory.length > 0 ? normalizeText(conversationHistory.slice(-3).join(" ")) : "";
+  for (const tool of tools) {
+    const fullNameNorm = normalizeText(tool.name);
+    const baseNameNorm = extractBaseName(tool.name);
+    const baseRegex = new RegExp(`\\b${baseNameNorm.replace(/\s+/g, "\\s*")}\\b`, "i");
+    const fullRegex = new RegExp(`\\b${fullNameNorm.replace(/\s+/g, "\\s*")}\\b`, "i");
+    if (baseRegex.test(normText) || fullRegex.test(normText)) {
+      matchedToolsSet.set(tool.id, tool);
+      matchedDetails.push({
+        toolId: tool.id,
+        toolName: tool.name,
+        matchedOn: "exact",
+        matchedToken: baseNameNorm
+      });
+    }
+  }
+  if (matchedToolsSet.size > 0) {
+    return {
+      matched: Array.from(matchedToolsSet.values()),
+      confidence: "exact",
+      isUnknownProduct: false,
+      matchedDetails
+    };
+  }
+  for (const tool of tools) {
+    const aliases = tool.aliases || [];
+    for (const alias of aliases) {
+      const normAlias = normalizeText(alias);
+      if (!normAlias || normAlias.length < 3) continue;
+      const aliasRegex = new RegExp(`\\b${normAlias.replace(/\s+/g, "\\s*")}\\b`, "i");
+      if (aliasRegex.test(normText)) {
+        matchedToolsSet.set(tool.id, tool);
+        matchedDetails.push({
+          toolId: tool.id,
+          toolName: tool.name,
+          matchedOn: "alias",
+          matchedToken: alias
+        });
+        break;
+      }
+    }
+  }
+  if (matchedToolsSet.size > 0) {
+    return {
+      matched: Array.from(matchedToolsSet.values()),
+      confidence: "alias",
+      isUnknownProduct: false,
+      matchedDetails
+    };
+  }
+  for (const tool of tools) {
+    const keywords = (tool.keywords || []).slice().sort((a, b) => b.length - a.length);
+    for (const kw of keywords) {
+      const normKw = normalizeText(kw);
+      if (!normKw || normKw.length < 3) continue;
+      const kwRegex = new RegExp(`\\b${normKw.replace(/\s+/g, "\\s*")}\\b`, "i");
+      if (kwRegex.test(normText)) {
+        matchedToolsSet.set(tool.id, tool);
+        matchedDetails.push({
+          toolId: tool.id,
+          toolName: tool.name,
+          matchedOn: "keyword",
+          matchedToken: kw
+        });
+        break;
+      }
+    }
+  }
+  if (matchedToolsSet.size > 0) {
+    return {
+      matched: Array.from(matchedToolsSet.values()),
+      confidence: "keyword",
+      isUnknownProduct: false,
+      matchedDetails
+    };
+  }
+  if (historyText) {
+    for (const tool of tools) {
+      const baseNameNorm = extractBaseName(tool.name);
+      const baseRegex = new RegExp(`\\b${baseNameNorm.replace(/\s+/g, "\\s*")}\\b`, "i");
+      if (baseRegex.test(historyText)) {
+        matchedToolsSet.set(tool.id, tool);
+        matchedDetails.push({
+          toolId: tool.id,
+          toolName: tool.name,
+          matchedOn: "alias",
+          matchedToken: `history:${baseNameNorm}`
+        });
+        break;
+      }
+    }
+    if (matchedToolsSet.size > 0) {
+      return {
+        matched: Array.from(matchedToolsSet.values()),
+        confidence: "alias",
+        isUnknownProduct: false,
+        matchedDetails
+      };
+    }
+  }
+  const unknownProd = detectUnknownProduct(text, tools);
+  if (unknownProd) {
+    return {
+      matched: [],
+      confidence: "none",
+      isUnknownProduct: true,
+      queryProduct: unknownProd,
+      matchedDetails: []
+    };
+  }
+  return {
+    matched: [],
+    confidence: "none",
+    isUnknownProduct: false,
+    matchedDetails: []
+  };
+}
+function extractFactKeyTokens(fact) {
+  const clean = fact.replace(/(\d+),(\d+)/g, "$1$2").toLowerCase().replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
+  return clean.split(/\s+/).filter((t) => {
+    if (!t) return false;
+    if (/^\d+$/.test(t)) return true;
+    if (COMMON_STOP_WORDS.has(t)) return false;
+    return t.length >= 3;
+  });
+}
+function getUnstatedFacts(allFacts, statedFacts = []) {
+  if (!statedFacts || statedFacts.length === 0) {
+    return [...allFacts];
+  }
+  const normalizedStated = statedFacts.map((s) => {
+    const clean = s.replace(/(\d+),(\d+)/g, "$1$2").toLowerCase();
+    return {
+      raw: normalizeText(s),
+      clean,
+      tokens: new Set(extractFactKeyTokens(s))
+    };
+  });
+  return allFacts.filter((candidate) => {
+    const candidateNorm = normalizeText(candidate);
+    const candidateClean = candidate.replace(/(\d+),(\d+)/g, "$1$2").toLowerCase();
+    if (!candidateNorm) return false;
+    const directHit = normalizedStated.some(
+      (stated) => stated.raw.includes(candidateNorm) || stated.clean.includes(candidateClean) || candidateNorm.includes(stated.raw)
+    );
+    if (directHit) return false;
+    const candidateTokens = extractFactKeyTokens(candidate);
+    if (candidateTokens.length === 0) return true;
+    const isCovered = normalizedStated.some((stated) => {
+      let matchedCount = 0;
+      for (const tok of candidateTokens) {
+        if (stated.tokens.has(tok) || stated.clean.includes(tok)) {
+          matchedCount++;
+        }
+      }
+      const ratio = matchedCount / candidateTokens.length;
+      return ratio >= 0.5 || candidateTokens.length >= 3 && matchedCount >= 2 && ratio >= 0.4;
+    });
+    return !isCovered;
+  });
+}
+function recordStatedFacts(customer, toolId, newFacts) {
+  if (!customer.factsStated) {
+    customer.factsStated = {};
+  }
+  if (!customer.factsStated[toolId]) {
+    customer.factsStated[toolId] = [];
+  }
+  const currentList = customer.factsStated[toolId];
+  for (const fact of newFacts) {
+    const trimmed = fact.trim();
+    if (!trimmed) continue;
+    const exists = currentList.some(
+      (existing) => normalizeText(existing) === normalizeText(trimmed)
+    );
+    if (!exists) {
+      currentList.push(trimmed);
+    }
+  }
+  return customer;
+}
+function extractMentionedFacts(replyText, tool) {
+  const candidateFacts = [
+    ...tool.features || [],
+    ...tool.sales_points || [],
+    ...tool.use_cases || []
+  ];
+  const cleanReply = replyText.toLowerCase().replace(/(\d+),(\d+)/g, "$1$2");
+  const mentioned = [];
+  for (const fact of candidateFacts) {
+    const cleanFact = fact.toLowerCase().replace(/(\d+),(\d+)/g, "$1$2");
+    const numbers = cleanFact.match(/\b\d+\b/g) || [];
+    const significantWords = cleanFact.replace(/[^\w\s]/g, " ").split(/\s+/).filter((w) => w.length >= 4 && !["with", "this", "that", "from", "plan", "user", "more"].includes(w));
+    let isHit = false;
+    if (numbers.length > 0) {
+      const anyNumPresent = numbers.some((n) => cleanReply.includes(n));
+      const hasWord = significantWords.some((w) => cleanReply.includes(w));
+      if (anyNumPresent && hasWord) isHit = true;
+    } else if (significantWords.length >= 2) {
+      let matchCount = 0;
+      for (const w of significantWords) {
+        if (cleanReply.includes(w)) matchCount++;
+      }
+      if (matchCount / significantWords.length >= 0.5) isHit = true;
+    }
+    if (isHit && !mentioned.includes(fact)) {
+      mentioned.push(fact);
+    }
+  }
+  return mentioned;
+}
+function clampPriceFloors(text, matchedTools) {
+  if (!matchedTools || matchedTools.length === 0) return text;
+  let clamped = text;
+  for (const tool of matchedTools) {
+    const floorPkr = tool.pricing?.min_negotiable_pkr;
+    if (floorPkr && floorPkr > 0) {
+      clamped = clamped.replace(
+        /(?:rs\.?|pkr|rupees)\s*([0-9]{2,6})(?!\s*(?:voices|characters|words|hours|mins|sec|users|slot))/gi,
+        (match, priceStr) => {
+          const num = parseInt(priceStr.replace(/,/g, ""), 10);
+          if (num > 0 && num < floorPkr) {
+            console.log(`[Agent] Price floor clamped in code: Rs. ${num} -> Rs. ${floorPkr} for ${tool.name}`);
+            return `Rs. ${floorPkr.toLocaleString()}`;
+          }
+          return match;
+        }
+      );
+      clamped = clamped.replace(
+        /\b([0-9]{2,6})\s*(?:rs|pkr|rupees)\b/gi,
+        (match, priceStr) => {
+          const num = parseInt(priceStr.replace(/,/g, ""), 10);
+          if (num > 0 && num < floorPkr) {
+            console.log(`[Agent] Price floor clamped in code: ${num} Rs -> Rs. ${floorPkr} for ${tool.name}`);
+            return `Rs. ${floorPkr.toLocaleString()}`;
+          }
+          return match;
+        }
+      );
+    }
+    const floorUsd = tool.pricing?.min_negotiable_usd;
+    if (floorUsd && floorUsd > 0) {
+      clamped = clamped.replace(/\$\s*([0-9]{1,4})\b/g, (match, priceStr) => {
+        const num = parseInt(priceStr, 10);
+        if (num > 0 && num < floorUsd) {
+          console.log(`[Agent] USD price floor clamped in code: $${num} -> $${floorUsd} for ${tool.name}`);
+          return `$${floorUsd}`;
+        }
+        return match;
+      });
+    }
+  }
+  return clamped;
+}
+var COMMON_EXTERNAL_TOOLS, COMMON_STOP_WORDS;
+var init_tool_matcher = __esm({
+  "src/server/tool-matcher.ts"() {
+    COMMON_EXTERNAL_TOOLS = [
+      "capcut",
+      "vrew",
+      "invideo",
+      "canva",
+      "filmora",
+      "synthesia",
+      "midjourney",
+      "suno",
+      "runway",
+      "pika",
+      "luma",
+      "adobe",
+      "premiere",
+      "photoshop",
+      "chatgpt",
+      "d-id",
+      "descript",
+      "opus clip",
+      "submagic",
+      "fliki",
+      "pictory",
+      "leonardo",
+      "murf",
+      "speechify",
+      "resemble",
+      "veed",
+      "cupcut",
+      "kamua"
+    ];
+    COMMON_STOP_WORDS = /* @__PURE__ */ new Set([
+      "kya",
+      "hai",
+      "yeh",
+      "woh",
+      "bhai",
+      "bro",
+      "sir",
+      "jee",
+      "han",
+      "nahi",
+      "ko",
+      "ka",
+      "ki",
+      "ke",
+      "me",
+      "mein",
+      "par",
+      "se",
+      "aur",
+      "ya",
+      "bhi",
+      "toh",
+      "ab",
+      "abhi",
+      "karo",
+      "karna",
+      "de",
+      "do",
+      "dena",
+      "le",
+      "lo",
+      "lena",
+      "chahiye",
+      "hoga",
+      "hogi",
+      "kitne",
+      "kitna",
+      "price",
+      "rate",
+      "cost",
+      "details",
+      "info",
+      "tool",
+      "app",
+      "software",
+      "account",
+      "link",
+      "demo",
+      "sample",
+      "test",
+      "video",
+      "audio",
+      "voice",
+      "generator",
+      "remover",
+      "cloning",
+      "youtube",
+      "tiktok",
+      "hello",
+      "hi",
+      "salam",
+      "aoa",
+      "assalam",
+      "walaikum",
+      "theek",
+      "acha",
+      "ok",
+      "okay"
+    ]);
+  }
+});
+
 // src/server/agent.ts
 function startAgent() {
   console.log("[Agent] Ultra-Natural WhatsApp Conversation Engine initialized.");
@@ -2314,90 +2725,130 @@ async function handleCustomerMessageBatch(phoneNumber, batch, name, userId) {
 async function generateResponse(phoneNumber, latestCustomerText, name, batch, userId) {
   const settings = await getSettings(userId);
   const customers = await getCustomers();
-  const customer = customers[phoneNumber] || { phoneNumber, status: "New Customer", messages: [] };
+  const customer = customers[phoneNumber] || { phoneNumber, status: "New Customer", messages: [], factsStated: {} };
+  if (!customer.factsStated) customer.factsStated = {};
   const tools = await getTools(userId);
-  const toolContext = tools.length > 0 ? tools.map((t) => {
-    let block = `=== TOOL: ${t.name} ===
+  const customerMessages = customer.messages || [];
+  const recentUserHistory = customerMessages.filter((m) => m.role === "user").slice(-3).map((m) => m.content);
+  const match = matchTool(latestCustomerText, tools, recentUserHistory);
+  let toolContext = "";
+  if (match.confidence === "none" && match.isUnknownProduct) {
+    toolContext = `Customer asked about external uncataloged product: "${match.queryProduct}". No catalog tool matched.`;
+  } else if (match.matched.length > 0) {
+    toolContext = match.matched.map((t) => {
+      const minFloor = t.pricing?.min_negotiable_pkr || t.pricePkr || "N/A";
+      let block = `=== MATCHED TOOL: ${t.name} ===
 Category: ${t.category || "AI Tools"}
 Status: ${t.status || "active"}
 Description: ${t.description || ""}`;
-    if (t.pricePkr || t.priceUsd) {
       block += `
-Pricing: ${t.pricePkr ? `Rs. ${t.pricePkr}/month` : ""} ${t.priceUsd ? `($${t.priceUsd}/mo)` : ""}`;
-    }
-    if (t.features && t.features.length > 0) {
+Pricing & Negotiation Floor:`;
       block += `
-Key Features:
-` + t.features.map((f) => `  - ${f}`).join("\n");
-    }
-    if (t.use_cases && t.use_cases.length > 0) {
+  - List Price: Rs. ${t.pricePkr || "N/A"}/month ${t.priceUsd ? `($${t.priceUsd}/mo)` : ""}`;
       block += `
-Use Cases:
-` + t.use_cases.map((u) => `  - ${u}`).join("\n");
-    }
-    if (t.limitations && t.limitations.length > 0) {
+  - Minimum Negotiable Floor (DO NOT QUOTE BELOW THIS): Rs. ${minFloor}`;
+      if (t.pricing?.negotiation_notes) {
+        block += `
+  - Negotiation Rules: ${t.pricing.negotiation_notes}`;
+      }
+      const candidateFacts = [
+        ...t.features || [],
+        ...t.sales_points || [],
+        ...t.use_cases || []
+      ];
+      const statedFacts = customer.factsStated && customer.factsStated[t.id] || [];
+      const unstatedFacts = getUnstatedFacts(candidateFacts, statedFacts);
       block += `
-Limits & Limitations:
-` + t.limitations.map((l) => `  - ${l}`).join("\n");
-    }
-    if (t.how_to_use) {
-      block += `
-How to Use / Access: ${t.how_to_use}`;
-    }
-    if (t.sales_points && t.sales_points.length > 0) {
-      block += `
-Sales Points / Standout Advantages:
-` + t.sales_points.map((s) => `  - ${s}`).join("\n");
-    }
-    if (t.faq && t.faq.length > 0) {
-      block += `
-FAQs:
-` + t.faq.map((q) => `  Q: ${q.question} -> A: ${q.answer}`).join("\n");
-    }
-    if (t.images && Array.isArray(t.images) && t.images.length > 0) {
-      block += `
+
+[ANTI-REPETITION STATUS FOR THIS CUSTOMER]:`;
+      if (statedFacts.length > 0) {
+        block += `
+ALREADY STATED TO THIS CUSTOMER (DO NOT REPEAT VERBATIM):
+` + statedFacts.map((f) => `  - [ALREADY SAID]: ${f}`).join("\n");
+      } else {
+        block += `
+ALREADY STATED: None yet.`;
+      }
+      if (unstatedFacts.length > 0) {
+        block += `
+FRESH FACTS TO REVEAL (DRAW FROM THESE):` + unstatedFacts.map((f) => `
+  - [FRESH FACT]: ${f}`).join("");
+      } else {
+        block += `
+FRESH FACTS: All primary facts have been shared. Focus on answering their specific question or making the next step easy.`;
+      }
+      if (t.objection_responses && Object.keys(t.objection_responses).length > 0) {
+        block += `
+
+Objection Handling Playbook for ${t.name}:`;
+        if (t.objection_responses.too_expensive) block += `
+  - If customer says too expensive: ${t.objection_responses.too_expensive}`;
+        if (t.objection_responses.need_time) block += `
+  - If customer needs time: ${t.objection_responses.need_time}`;
+        if (t.objection_responses.comparing_competitor) block += `
+  - If customer compares with competitors: ${t.objection_responses.comparing_competitor}`;
+      }
+      if (t.images && Array.isArray(t.images) && t.images.length > 0) {
+        block += `
+
 Available Screenshots / UI Images:
 ` + t.images.map((img) => `  - Image File: "${img.filepath || img.filename}" | Title: "${img.title || "Screenshot"}" | Description: "${img.description}"`).join("\n");
-    }
-    return block;
-  }).join("\n\n") : "No custom tools configured in Tool Manager.";
+      }
+      return block;
+    }).join("\n\n");
+  } else {
+    toolContext = `Available Software Catalog in Store:
+- VoiceDelta: AI voice generator with 3,600+ AI voices, ElevenLabs/OpenAI models, and voice cloning (Rs. 1,199/mo).
+- ClipShield: YouTube video downloader, AI hook finder, and 9-layer anti-copyright claim protection (Rs. 1,500/mo).
+Do not dump feature lists. Greet naturally and ask 1 diagnostic question to understand what they are looking for.`;
+  }
   const activePayments = (settings.paymentMethods || []).filter((p) => p.isActive !== false);
   const paymentContext = activePayments.length > 0 ? activePayments.map(
     (p) => `\u2022 ${p.provider}: ${p.accountTitle} | Number: ${p.accountNumber}${p.bankName ? ` (${p.bankName})` : ""}${p.iban ? ` | IBAN: ${p.iban}` : ""}${p.instructions ? ` - Note: ${p.instructions}` : ""}`
   ).join("\n") + (settings.paymentInstructions ? `
 Payment Policy: ${settings.paymentInstructions}` : "") : "No manual bank accounts configured. Ask customer to contact admin.";
-  const customerMessages = customer.messages || [];
   const messageHistory = customerMessages.slice(-20).map((m) => `${m.role === "user" ? name || "Customer" : "You (Agent)"}: ${m.content}`).join("\n");
-  const agentPastMessages = customerMessages.filter((m) => m.role === "agent").map((m) => m.content).join("\n");
+  const agentRecentlyClaimedFixed = customerMessages.filter((m) => m.role === "agent").slice(-2).some((m) => /(?:fixed|kam nahi|rate final|final price|discount nahi)/i.test(m.content));
   const salesSkillInstructions = settings.salesSkillEnabled !== false ? `
 ==================================================
-11. ADVANCED SALES CLOSER SKILL ENGINE (SKILL.MD)
+11. SALES CLOSER SKILL ENGINE \u2014 V2 PROTOCOL
 ==================================================
-You are operating with the High-Converting WhatsApp Sales Closer Skill active:
-1. Core Mission:
-   - Understand what the customer wants, identify the best product or plan, communicate the value clearly, remove legitimate buying friction, and make the next step easy.
-   - Optimize for: Relevance before persuasion, Trust before pressure, Value before discount, Diagnosis before rebuttal, and One clear next step per message.
-2. Discovery Before Pitch:
-   - Do not dump product features immediately when customer's need is broad.
-   - Level 1 Need: "Aap mainly kis kaam ke liye tool dekh rahe hain?"
-   - Level 2 Pain: "Abhi manual karne me kitna time lagta hai?" or "Current setup mein kya missing hai?"
-   - Stop asking questions once you have enough information to make a confident recommendation.
-3. Value Selling:
-   - Translate features into outcomes: Feature -> What it changes -> Why the customer should care.
-   - Example: "Isme AI replies + automation hai, isliye aapko har lead manually handle nahi karni padegi aur koi customer wait nahi karega."
-4. Objection Handling Playbook:
-   - Objection "Mehnga hai / Too expensive": Diagnose first ("Aapka monthly budget kitna hai ya commitment ka issue lag raha hai?"). Highlight daily ROI or recommend starter plan if available.
-   - Objection "Soch ke bataunga / Later": Do not be pushy. Ask what specific question or point they are evaluating so you can provide clarity.
-   - Objection "Trust / Scam fear": Share genuine screenshots, explain clear step-by-step activation, and offer direct admin reassurance.
-5. Clean Closing:
-   - When customer shows buying intent ("chahiye", "buy karna hai", "account do", "price theek hai"), immediately provide ONE clear next step:
-     "Main exact payment details share kar deta hoon, transfer ke baad screenshot bhej dijiye ga taake foran access mil jaye."
+1. PERSONA:
+   - Casual Pakistani WhatsApp sales rep. Warm, direct, human, never robotic.
+   - 100% Roman Urdu ONLY. Never write in English, Hindi, or formal Urdu script.
+   - Vary sentence openers turn to turn. Do not start every message with the same line.
+2. TOOL IDENTIFICATION PROTOCOL:
+   - If a specific catalog tool matched: discuss ONLY that tool. Do not pivot to other tools unless asked.
+   - If no match found: be honest. Do NOT claim to carry it, do NOT invent details, and NEVER denigrate it.
+3. PROGRESSIVE DISCLOSURE & ANTI-REPETITION:
+   - Check ALREADY STATED facts. NEVER repeat those same feature lines verbatim.
+   - To reinforce value, draw from FRESH FACTS or address the new question directly.
+4. NEGOTIATION LADDER & HARD PRICE FLOORS:
+   - Step 1 (Anchor): State regular price confidently with value framing.
+   - Step 2 (Hold & Reframe): On pushback, reframe value from a fresh angle (daily cost, time saved, multi-engine access).
+   - Step 3 (Ask, don't fold): Ask what budget or setup works for them before conceding.
+   - Step 4 (Consistency): ${agentRecentlyClaimedFixed ? "You recently stated the rate is fixed. MAINTAIN CONSISTENCY. Do not immediately fold or drop the price in this message." : "Pick one stance and stay consistent within the conversation."}
+   - Step 5 (Conditional Concession): You may only concede down to the minimum floor in exchange for something concrete (e.g. 'Agar aap aaj payment confirm karte hain to Rs. X mein kar deta hoon'). Never give a discount for free!
+   - Step 6 (Absolute Floor): NEVER quote below the tool's minimum floor.
 ` : `
 ==================================================
 11. STANDARD DIRECT MODE
 ==================================================
 Answer questions directly and helpfully based on the tool knowledge.
 `;
+  const unknownProductDirective = match.isUnknownProduct ? `
+==================================================
+CRITICAL DIRECTIVE: UNKNOWN / EXTERNAL PRODUCT INQUIRY
+==================================================
+The customer is inquiring about: "${match.queryProduct}".
+WE DO NOT SELL OR CARRY THIS PRODUCT!
+MANDATORY BEHAVIOR:
+1. HONEST BOUNDARY: State clearly and politely in casual Roman Urdu that we do not carry or sell ${match.queryProduct}.
+2. NO FALSE CLAIMS: Never say we have it, never invent fake prices or access.
+3. ZERO DENIGRATION: Do NOT criticize or insult ${match.queryProduct}. Never call it "bekar", "small", "fake", or "inferior".
+4. DIAGNOSTIC QUESTION: Ask one friendly diagnostic question about what workflow they are trying to accomplish (e.g. "Aap mainly kis kaam ke liye tool dekh rahe hain? Video editing, voiceover ya automation?").
+5. DO NOT FORCE-PIVOT: Only mention catalog tools if genuinely relevant to their workflow after understanding their goal.
+` : "";
   const prompt = `You are a real, natural Pakistani WhatsApp salesperson helping a customer on WhatsApp.
 You MUST behave like a genuine human Pakistani sales representative, NOT like an AI chatbot, corporate helpdesk, or product brochure.
 
@@ -2415,104 +2866,39 @@ You MUST behave like a genuine human Pakistani sales representative, NOT like an
 - After providing enough relevant information, STOP and wait for the customer to reply.
 
 ==================================================
-2. TOOL RECOMMENDATIONS (NATURAL HIGHLIGHTS)
+2. MESSAGE SPLITTING RULES
 ==================================================
-When a customer asks for a tool (e.g. "voice over tool chahiye", "video downloader hai?", "script generator chahiye"):
-- Do NOT give only a lazy 1-line vague answer (like "Han available hai").
-- Provide the 2 to 4 most useful highlights from that tool's knowledge in 2-3 short, natural messages:
-  Example:
-  Message 1: "Han bhai, VoiceDelta hai iske liye."
-  Message 2: "Isme 3,600+ AI voices hain \u2014 ElevenLabs, OpenAI, Gemini aur Microsoft ki."
-  Message 3: "Voice cloning bhi hai aur Pro me unlimited voice generation milti hai."
-- Then STOP.
-- Do NOT dump every single feature, all limitations, all technical specs, FAQs, or full pricing tiers immediately.
-
-==================================================
-3. INTENT-BASED REPLIES (PRECISE ANSWERS)
-==================================================
-Answer according to EXACTLY what the customer asks:
-- "price?" / "kitne ka hai?" \u2192 Give price only in 1 short message (e.g. "VoiceDelta Pro Rs. 1,500/month ka hai.").
-- "link?" / "kahan se buy karun?" \u2192 Send link only in 1 short message (e.g. "Ye lo bhai \u{1F447}
-https://...").
-- "voice cloning hai?" / "urdu voices hain?" \u2192 Answer that specific question directly in 1 short message.
-- "features?" \u2192 Give top 2-3 most standout features.
-- "details?" / "aur batao" \u2192 Give 2-3 moderate NEW details that have NOT been mentioned yet in this chat.
-- DO NOT restart the complete product pitch after every question!
-
-==================================================
-4. PROGRESSIVE DISCLOSURE & INFORMATION SELECTION
-==================================================
-Stored tool knowledge contains many details. Before replying, select ONLY the information relevant to the customer's current intent.
-Priority:
-1. Direct answer to their immediate question
-2. Most useful supporting point
-3. Optional next detail
-Ignore everything else unless the customer explicitly asks for it.
-
-==================================================
-5. STRICT ANTI-REPETITION (NO DUPLICATE FACTS)
-==================================================
-Check the RECENT CHAT HISTORY below.
-If the customer already knows a fact (e.g. voice count, voice cloning, or price):
-- DO NOT repeat those same facts again unless the customer specifically asks to confirm them.
-- Reveal fresh, relevant points progressively.
-
-==================================================
-6. NATURAL SALES BEHAVIOR (BUILD CONFIDENCE)
-==================================================
-- Goal: Understand \u2192 Recommend \u2192 Explain \u2192 Build confidence \u2192 Help decide.
-- NEVER pressure the customer or create fake urgency (NEVER say "only 2 slots left" or "offer ending today").
-- NEVER make fake claims or invent features, prices, limits, or links not found in Tool Knowledge.
-- DO NOT repeatedly ask pushy closing questions.
-- Only ask a question when it naturally helps the customer make a decision.
-
-==================================================
-7. MESSAGE SPLITTING RULES
-==================================================
-WhatsApp messages must be natural. Don't over-fragment every 2 words into a separate bubble, and don't dump everything into 1 huge block.
 Separate multi-message turns by placing "---MSG---" between them.
 
 ==================================================
-8. OFFICIAL PAYMENT DETAILS & SCREENSHOTS
+3. OFFICIAL PAYMENT DETAILS & SCREENSHOTS
 ==================================================
 If the customer asks how to pay or asks for payment accounts ("payment kahan karni hai", "account number do", "easypaisa/jazzcash hai?"):
 - Send the official payment details cleanly from OFFICIAL PAYMENT ACCOUNTS below.
 - Ask them to send the payment screenshot/receipt after transferring so access can be activated.
 
 ==================================================
-9. SCREENSHOT / IMAGE INTELLIGENCE
+4. SCREENSHOT / IMAGE INTELLIGENCE
 ==================================================
 - Only attach an image if the customer explicitly asks to see the interface/screenshot/dashboard, OR if an image is directly requested.
 - To send an image, append [SEND_IMAGE: <filepath>] to your response.
 
 ==================================================
-10. CUSTOMER STATUS AUTOMATION (MEMORY UPDATE)
+5. CUSTOMER STATUS AUTOMATION (MEMORY UPDATE)
 ==================================================
 Current Customer Status: "${customer.status || "New Customer"}"
-
-Analyze the conversation evidence and determine if the customer's status should change.
-Available statuses:
-- "New Customer": New contact or first-time inquiry asking about tools.
-- "Interested": Customer shows active or repeated product interest, asking about capabilities, features, or prices.
-- "Payment Pending": Customer clearly wants to buy, asks for payment account details, or says "buy karna hai", "account bhej do", "payment method", but has not confirmed paying yet.
-- "Payment Done": Customer states they have sent/transferred the payment, mentions transaction ID, sends receipt/screenshot, or says "payment kar di hai", "check kar lo payment".
-- "Follow Up": Customer explicitly asks to be contacted later ("kal baat karte hain", "busy hun abhi", "baad me batata hun").
-- "Order Complete": (CRITICAL: NEVER output this status. Only human admins can mark Order Complete upon payment verification).
-- "Important": Priority customer or VIP lead.
-
-RULES FOR STATUS CHANGE:
-- Do NOT change status on casual messages (e.g. "ok", "acha", "han", "theek").
-- Only change when there is clear conversation evidence.
-- If status should change, append [SET_STATUS: <StatusName>] to your response.
-- If current status should remain as is, do NOT include [SET_STATUS: ...].
+If status should change based on clear evidence, append [SET_STATUS: <StatusName>]. Available statuses: "New Customer", "Interested", "Payment Pending", "Payment Done", "Follow Up", "Important".
+(CRITICAL: NEVER output "Order Complete").
 
 ${salesSkillInstructions}
+
+${unknownProductDirective}
 
 ${settings.systemPrompt ? `Additional Custom Admin Persona/Instructions:
 ${settings.systemPrompt}
 ` : ""}
 
-STORED TOOL KNOWLEDGE (SOURCE OF TRUTH):
+STORED TOOL KNOWLEDGE:
 ${toolContext}
 
 OFFICIAL PAYMENT ACCOUNTS:
@@ -2525,28 +2911,23 @@ CUSTOMER'S NEW MESSAGE(S):
 "${latestCustomerText}"
 
 ==================================================
-MANDATORY FINAL LANGUAGE & BEHAVIOR DIRECTIVE:
+MANDATORY FINAL DIRECTIVES:
 ==================================================
-1. STRICT ROMAN URDU ONLY:
-   - Your reply MUST be 100% in natural Pakistani Roman Urdu (e.g. "Han bhai", "jee bilkul", "VoiceDelta Pro Rs. 1,199/month ka hai").
-   - NEVER write in English! Even if the customer writes in English or Hindi, YOU MUST REPLY IN ROMAN URDU!
-2. NO BROCHURE / NO BULLET LISTS:
-   - NEVER use markdown bold headers (e.g. **Elevate AI**), asterisks (* item), or numbered lists!
-   - Write like a real person sending 1 to 3 short WhatsApp bubbles.
-3. STRICT PRODUCT LOCK:
-   - Voiceover inquiry -> VoiceDelta ONLY (Rs. 1,199/mo).
-   - Video copyright inquiry -> ClipShield ONLY.
-   - NEVER mention any external tools.
+1. STRICT ROMAN URDU ONLY: Always reply in natural, casual Pakistani Roman Urdu.
+2. NO BULLET LISTS / NO BROCHURES: Write like a real person sending 1 to 3 short WhatsApp messages.
+3. ANTI-REPETITION: Do NOT repeat previously stated facts verbatim.
+4. HONESTY: Never claim to have tools not in the catalog.
+5. NEGOTIATION: Concessions must have a condition and never go below the minimum floor.
 
 Separate 1\u20133 short messages using "---MSG---". Provide your natural Roman Urdu reply below:`;
-  const systemInstruction = `You are a real Pakistani WhatsApp sales closer for VoiceDelta and ClipShield.
-CRITICAL LANGUAGE & STYLE MANDATE:
-- You MUST ALWAYS reply in 100% natural, casual Pakistani Roman Urdu using Latin alphabet (e.g. "han bhai", "jee bilkul", "VoiceDelta Pro Rs. 1,199/month ka hai", "scene ye hai", "batao kis type ke videos hain?").
-- NEVER reply in English!
-- NEVER reply in Hindi / Devanagari script!
-- NEVER output markdown bold headers, bullet lists, or corporate brochures!
-- Write strictly 1 to 3 short conversational sentences (15 to 40 words total).`;
-  console.log(`[Agent] Generating AI response for ${phoneNumber}...`);
+  let systemInstruction = "You are a real Pakistani WhatsApp sales closer. Reply in 1 to 3 short sentences in natural Roman Urdu.";
+  if (match.isUnknownProduct) {
+    systemInstruction = `You are a real Pakistani WhatsApp sales representative. The customer asked about "${match.queryProduct}", which we DO NOT sell. Reply honestly in Roman Urdu that you do not carry it, do not criticize it, and ask 1 diagnostic question about what they want to achieve.`;
+  } else if (match.matched.length > 0) {
+    const names = match.matched.map((t) => t.name).join(", ");
+    systemInstruction = `You are a real Pakistani WhatsApp sales closer for ${names}. Reply strictly in 1 to 3 short conversational sentences (15 to 40 words total) in natural Roman Urdu. Never repeat already stated features.`;
+  }
+  console.log(`[Agent] Generating AI response for ${phoneNumber} (Matched: ${match.matched.map((t) => t.name).join(", ") || (match.isUnknownProduct ? `Unknown:${match.queryProduct}` : "None")})...`);
   const rawReply = await askAI(prompt, systemInstruction, userId);
   console.log(`[Agent] AI raw response for ${phoneNumber}:
 ${rawReply}`);
@@ -2565,6 +2946,20 @@ ${rawReply}`);
   }
   await evaluateAndApplyCustomerStatus(phoneNumber, customer, latestCustomerText, extractedAiStatus);
   text = text.replace(/^(Agent|You|Assistant|Bot|Salesperson):\s*/gim, "").replace(/^["']|["']$/g, "").trim();
+  if (match.matched.length > 0) {
+    let factsUpdated = false;
+    for (const tool of match.matched) {
+      const newlyStated = extractMentionedFacts(text, tool);
+      if (newlyStated.length > 0) {
+        recordStatedFacts(customer, tool.id, newlyStated);
+        factsUpdated = true;
+      }
+    }
+    if (factsUpdated) {
+      await saveCustomer(phoneNumber, { factsStated: customer.factsStated });
+    }
+  }
+  text = clampPriceFloors(text, match.matched.length > 0 ? match.matched : tools);
   let messages = [];
   if (text.includes("---MSG---")) {
     messages = text.split("---MSG---").map((m) => m.trim()).filter((m) => m.length > 0);
@@ -2673,6 +3068,7 @@ var init_agent = __esm({
     init_settings();
     init_whatsapp();
     init_usage();
+    init_tool_matcher();
     customerQueues = /* @__PURE__ */ new Map();
     globalSequenceCounter = 100;
   }

@@ -71,7 +71,40 @@
     "id": "1788274681354",
     "images": [],
     "category": "AI Tools",
-    "status": "active"
+    "status": "active",
+    "aliases": [
+      "voicedelta",
+      "voice delta",
+      "voice-delta"
+    ],
+    "keywords": [
+      "voice",
+      "voices",
+      "voiceover",
+      "voice over",
+      "ai voice",
+      "voice cloning",
+      "clone",
+      "tts",
+      "text to speech",
+      "elevenlabs",
+      "realistic voice",
+      "audio generation"
+    ],
+    "pricing": {
+      "min_negotiable_pkr": 1000,
+      "min_negotiable_usd": 4,
+      "negotiation_notes": "Can offer min_negotiable_pkr only in exchange for immediate payment today or 2+ month plan."
+    },
+    "objection_responses": {
+      "too_expensive": "Explain Rs. 1,199/month comes down to just Rs. 40/day for 3,600+ AI voices & cloning vs $22+ on ElevenLabs.",
+      "need_time": "Offer to answer specific questions or share sample audio demos.",
+      "comparing_competitor": "Highlight all top models (ElevenLabs, OpenAI, Gemini) in one place with instant local PKR activation."
+    },
+    "related_tools": [
+      "ClipShield"
+    ],
+    "priority": 1
   },
   {
     "name": "ClipShield – YouTube Copyright Claim Remover",
@@ -113,6 +146,44 @@
     ],
     "faq": [],
     "id": "1788311665125",
-    "images": []
+    "images": [],
+    "aliases": [
+      "clipshield – youtube copyright claim remover",
+      "clipshield",
+      "clipshieldyoutubecopyrightclaimremover",
+      "clipshield youtube copyright claim remover",
+      "clip shield",
+      "clip-shield",
+      "copyright claim remover"
+    ],
+    "keywords": [
+      "copyright",
+      "claim",
+      "copyright claim",
+      "bypass",
+      "video downloader",
+      "repurpose",
+      "content id",
+      "viral hooks",
+      "reframing",
+      "youtube videos",
+      "claims remover"
+    ],
+    "pricing": {
+      "min_negotiable_pkr": 0,
+      "min_negotiable_usd": 5,
+      "negotiation_notes": "Can offer min_negotiable_pkr only in exchange for immediate payment today or 2+ month plan."
+    },
+    "objection_responses": {
+      "too_expensive": "Highlight avoiding 1 copyright strike or wasted editing hours saves far more than the license price.",
+      "need_time": "Remind them they can test with 1 trial video first to verify compatibility.",
+      "comparing_competitor": "Emphasize 9-layer anti-Content ID protection with local offline processing."
+    },
+    "related_tools": [
+      "VoiceDelta"
+    ],
+    "priority": 2,
+    "pricePkr": "1500",
+    "priceUsd": "6"
   }
 ]

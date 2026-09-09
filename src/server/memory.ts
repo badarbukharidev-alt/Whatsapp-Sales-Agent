@@ -41,6 +41,9 @@ export async function getCustomers(): Promise<Record<string, Customer>> {
         if (!parsed[key].statusManagedBy) {
           parsed[key].statusManagedBy = parsed[key].status === "Order Complete" ? "Manual" : "AI managed";
         }
+        if (!parsed[key].factsStated) {
+          parsed[key].factsStated = {};
+        }
       }
     }
     return parsed;
@@ -75,6 +78,7 @@ export async function saveCustomer(phoneNumber: string, data: Partial<Customer>)
     phoneNumber,
     messages: [],
     status: "New Customer",
+    factsStated: {},
     createdAt: new Date().toISOString()
   };
 

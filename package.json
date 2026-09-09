@@ -9,7 +9,8 @@
     "start": "node dist/server.cjs",
     "preview": "vite preview",
     "clean": "node -e \"fs.rmSync('dist', {recursive: true, force: true}); fs.rmSync('server.js', {force: true});\"",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test": "tsx tests/tool-matcher.test.ts && tsx tests/sales-agent-regression.test.ts"
   },
   "dependencies": {
     "@deepgram/sdk": "^5.9.0",

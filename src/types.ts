@@ -54,14 +54,34 @@ export interface ToolImage {
   createdAt?: string;
 }
 
+export interface ToolPricing {
+  min_negotiable_pkr?: number;
+  min_negotiable_usd?: number;
+  negotiation_notes?: string;
+  [key: string]: any;
+}
+
+export interface ToolObjectionResponses {
+  too_expensive?: string;
+  need_time?: string;
+  comparing_competitor?: string;
+  [key: string]: any;
+}
+
 export interface Tool {
   id: string;
   name: string;
+  aliases?: string[];
+  keywords?: string[];
   category?: string;
   status?: "active" | "inactive";
   description: string;
   pricePkr?: string;
   priceUsd?: string;
+  pricing?: ToolPricing;
+  objection_responses?: ToolObjectionResponses;
+  related_tools?: string[];
+  priority?: number;
   features?: string[];
   use_cases?: string[];
   requirements?: string[];
@@ -142,6 +162,7 @@ export interface Customer {
     updatedBy?: string;
   }>;
   messages?: ChatMessage[];
+  factsStated?: { [toolId: string]: string[] };
   isDeleted?: boolean;
   deletedAt?: string;
 }
