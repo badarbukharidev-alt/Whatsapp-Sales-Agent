@@ -76,6 +76,21 @@ async function runTests() {
     assert.strictEqual(res.isUnknownProduct, false);
   });
 
+  // 2.1 Typo & Fuzzy Match Test
+  test("Fuzzy match on customer typo: 'Ni clipshied ka batao'", () => {
+    const res = matchToolSync("Ni clipshied ka batao", mockTools);
+    assert.strictEqual(res.matched.length, 1);
+    assert.strictEqual(res.matched[0].id, "tool_clipshield");
+    assert.strictEqual(res.isUnknownProduct, false);
+  });
+
+  test("Fuzzy match on customer typo: 'voicedalta ka rate'", () => {
+    const res = matchToolSync("voicedalta ka rate kya hai?", mockTools);
+    assert.strictEqual(res.matched.length, 1);
+    assert.strictEqual(res.matched[0].id, "tool_voicedelta");
+    assert.strictEqual(res.isUnknownProduct, false);
+  });
+
   // 3. Keyword Match Test
   test("Keyword match when tool name is not explicitly mentioned", () => {
     const res = matchToolSync("Aapke pas voice cloning wala koi system hai?", mockTools);

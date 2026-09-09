@@ -222,20 +222,23 @@ function buildCompactPublicQuery(prompt: string, systemPrompt?: string): string 
   const hasClipShield = /clipshield/i.test(prompt);
   const hasVoiceDelta = /voicedelta/i.test(prompt);
 
-  if (hasClipShield && !hasVoiceDelta) {
+  const isClipShieldMatched = /=== MATCHED TOOL:[^\n]*ClipShield/i.test(prompt) || /MATCHED CATALOG TOOL:[^\n]*ClipShield/i.test(prompt);
+  const isVoiceDeltaMatched = /=== MATCHED TOOL:[^\n]*VoiceDelta/i.test(prompt) || /MATCHED CATALOG TOOL:[^\n]*VoiceDelta/i.test(prompt);
+
+  if (isClipShieldMatched && !isVoiceDeltaMatched) {
+    toolSummary = "Tool: ClipShield (YouTube copyright claim removal & video repurposing, Rs. 1,500/month).";
+  } else if (isVoiceDeltaMatched && !isClipShieldMatched) {
+    toolSummary = "Tool: VoiceDelta (Rs. 1,199/month, 3,600+ AI voices, voice cloning).";
+  } else if (hasClipShield && !hasVoiceDelta) {
     toolSummary = "Tool: ClipShield (YouTube copyright claim removal & video repurposing, Rs. 1,500/month).";
   } else if (hasVoiceDelta && !hasClipShield) {
     toolSummary = "Tool: VoiceDelta (Rs. 1,199/month, 3,600+ AI voices, voice cloning).";
-  } else if (hasClipShield && hasVoiceDelta) {
-    // Check which one is the active matched tool in the prompt
-    if (/MATCHED CATALOG TOOL:[^\n]*ClipShield/i.test(prompt)) {
-      toolSummary = "Tool: ClipShield (YouTube copyright claim removal & video repurposing, Rs. 1,500/month).";
-    } else {
-      toolSummary = "Tool: VoiceDelta (Rs. 1,199/month, 3,600+ AI voices, voice cloning).";
-    }
+  } else {
+    // Neither tool is actively matched (general greeting or broad store inquiry)
+    toolSummary = "Store: AI & Content Tools Store (VoiceDelta & ClipShield). No specific tool requested yet. Greet naturally as a human seller in Roman Urdu. Do NOT assume VoiceDelta. Do NOT pretend to be an automated helpline. Never mention tools outside our catalog.";
   }
 
-  const roleRule = "Pakistani WhatsApp sales representative. Casual Roman Urdu only. Short conversational reply.";
+  const roleRule = "Pakistani WhatsApp sales representative. Casual Roman Urdu only. Short, natural, human reply. NEVER say 'helpline me khushamdeed' or act like an IVR bot. NEVER offer Canva, ElevenLabs, or tools not in our store.";
   const parts = [
     roleRule,
     toolSummary,

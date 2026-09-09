@@ -1158,18 +1158,20 @@ function buildCompactPublicQuery(prompt, systemPrompt) {
   let toolSummary = "";
   const hasClipShield = /clipshield/i.test(prompt);
   const hasVoiceDelta = /voicedelta/i.test(prompt);
-  if (hasClipShield && !hasVoiceDelta) {
+  const isClipShieldMatched = /=== MATCHED TOOL:[^\n]*ClipShield/i.test(prompt) || /MATCHED CATALOG TOOL:[^\n]*ClipShield/i.test(prompt);
+  const isVoiceDeltaMatched = /=== MATCHED TOOL:[^\n]*VoiceDelta/i.test(prompt) || /MATCHED CATALOG TOOL:[^\n]*VoiceDelta/i.test(prompt);
+  if (isClipShieldMatched && !isVoiceDeltaMatched) {
+    toolSummary = "Tool: ClipShield (YouTube copyright claim removal & video repurposing, Rs. 1,500/month).";
+  } else if (isVoiceDeltaMatched && !isClipShieldMatched) {
+    toolSummary = "Tool: VoiceDelta (Rs. 1,199/month, 3,600+ AI voices, voice cloning).";
+  } else if (hasClipShield && !hasVoiceDelta) {
     toolSummary = "Tool: ClipShield (YouTube copyright claim removal & video repurposing, Rs. 1,500/month).";
   } else if (hasVoiceDelta && !hasClipShield) {
     toolSummary = "Tool: VoiceDelta (Rs. 1,199/month, 3,600+ AI voices, voice cloning).";
-  } else if (hasClipShield && hasVoiceDelta) {
-    if (/MATCHED CATALOG TOOL:[^\n]*ClipShield/i.test(prompt)) {
-      toolSummary = "Tool: ClipShield (YouTube copyright claim removal & video repurposing, Rs. 1,500/month).";
-    } else {
-      toolSummary = "Tool: VoiceDelta (Rs. 1,199/month, 3,600+ AI voices, voice cloning).";
-    }
+  } else {
+    toolSummary = "Store: AI & Content Tools Store (VoiceDelta & ClipShield). No specific tool requested yet. Greet naturally as a human seller in Roman Urdu. Do NOT assume VoiceDelta. Do NOT pretend to be an automated helpline. Never mention tools outside our catalog.";
   }
-  const roleRule = "Pakistani WhatsApp sales representative. Casual Roman Urdu only. Short conversational reply.";
+  const roleRule = "Pakistani WhatsApp sales representative. Casual Roman Urdu only. Short, natural, human reply. NEVER say 'helpline me khushamdeed' or act like an IVR bot. NEVER offer Canva, ElevenLabs, or tools not in our store.";
   const parts = [
     roleRule,
     toolSummary,
@@ -2068,6 +2070,11 @@ async function getTools(userId) {
 }
 async function saveTools(tools) {
   await import_promises6.default.writeFile(getToolsFile(), JSON.stringify(tools, null, 2));
+  try {
+    const defaultsFile = import_path6.default.join(process.cwd(), "data_defaults", "tools.json");
+    await import_promises6.default.writeFile(defaultsFile, JSON.stringify(tools, null, 2));
+  } catch (err) {
+  }
 }
 function setupToolsRoutes(app) {
   app.get("/api/tools", async (req, res) => {
@@ -2131,19 +2138,35 @@ function setupToolsRoutes(app) {
   app.post("/api/tools", async (req, res) => {
     try {
       const user = await getUserByToken(req.headers.authorization);
-      const { name, rawInfo, images } = req.body;
-      const prompt = `Convert the following raw tool information into a clean structured JSON format. 
+      const { name, rawInfo, category, images } = req.body;
+      const prompt = `Convert the following raw tool information into a clean structured JSON format for our software sales catalog. 
 DO NOT OUTPUT ANY TEXT EXCEPT THE RAW JSON.
 Format required:
 {
   "name": "${name}",
-  "description": "...",
-  "features": ["...", "..."],
-  "use_cases": ["...", "..."],
-  "requirements": ["...", "..."],
-  "limitations": ["...", "..."],
-  "how_to_use": "...",
-  "sales_points": ["...", "..."],
+  "category": "${category || "AI Tools"}",
+  "status": "active",
+  "description": "2-sentence summary of what the tool does and what problem it solves.",
+  "pricePkr": "1500",
+  "priceUsd": "6",
+  "aliases": ["${name.toLowerCase()}", "${name.toLowerCase().replace(/[^a-z0-9]/g, "")}"],
+  "keywords": ["search keyword 1", "problem solved", "feature keyword"],
+  "pricing": {
+    "min_negotiable_pkr": 1200,
+    "min_negotiable_usd": 5,
+    "negotiation_notes": "Can offer min_negotiable_pkr only for immediate same-day payment."
+  },
+  "objection_responses": {
+    "too_expensive": "Value reframe explaining daily cost or time saved.",
+    "need_time": "Offer a sample or trial test.",
+    "comparing_competitor": "Highlight local instant setup or distinct advantages."
+  },
+  "features": ["Feature 1", "Feature 2"],
+  "sales_points": ["Sales point 1", "Sales point 2"],
+  "use_cases": ["Use case 1", "Use case 2"],
+  "requirements": ["Requirement 1"],
+  "limitations": ["Limitation 1"],
+  "how_to_use": "Step by step usage instructions",
   "faq": []
 }
 
@@ -2154,25 +2177,64 @@ ${rawInfo}
       let parsedTool;
       try {
         const cleanedResponse = aiResponse.replace(/```json/g, "").replace(/```/g, "").trim();
-        parsedTool = JSON.parse(cleanedResponse);
+        const jsonMatch = cleanedResponse.match(/\{[\s\S]*?\}/);
+        parsedTool = jsonMatch ? JSON.parse(jsonMatch[0]) : JSON.parse(cleanedResponse);
       } catch (e) {
         console.error("Failed to parse LLM structured tool:", aiResponse);
         parsedTool = {
-          id: Date.now().toString(),
           name,
+          category: category || "AI Tools",
+          status: "active",
           description: rawInfo,
+          pricePkr: "1200",
+          priceUsd: "5",
+          aliases: [name.toLowerCase(), name.toLowerCase().replace(/[^a-z0-9]/g, "")],
+          keywords: [name.toLowerCase(), "software", "tool"],
+          pricing: {
+            min_negotiable_pkr: 1e3,
+            min_negotiable_usd: 4,
+            negotiation_notes: "Only discount for immediate same-day payment."
+          },
+          objection_responses: {
+            too_expensive: "Explain time saved and value vs expensive alternatives.",
+            need_time: "Offer a demo or sample test.",
+            comparing_competitor: "Highlight instant local setup and PKR payment."
+          },
           features: [],
+          sales_points: [],
           use_cases: [],
           requirements: [],
           limitations: [],
           how_to_use: "",
-          sales_points: [],
           faq: []
         };
       }
       parsedTool.id = Date.now().toString();
       parsedTool.userId = user ? user.id : "usr_admin_badar";
       parsedTool.images = Array.isArray(images) ? images : [];
+      parsedTool.category = parsedTool.category || category || "AI Tools";
+      parsedTool.status = parsedTool.status || "active";
+      if (!Array.isArray(parsedTool.aliases) || parsedTool.aliases.length === 0) {
+        parsedTool.aliases = [name.toLowerCase(), name.toLowerCase().replace(/[^a-z0-9]/g, "")];
+      }
+      if (!Array.isArray(parsedTool.keywords) || parsedTool.keywords.length === 0) {
+        parsedTool.keywords = [name.toLowerCase(), "software", "tool"];
+      }
+      if (!parsedTool.pricing) {
+        const pkr = parseInt(parsedTool.pricePkr || "1200", 10);
+        parsedTool.pricing = {
+          min_negotiable_pkr: Math.round(pkr * 0.8),
+          min_negotiable_usd: 4,
+          negotiation_notes: "Can offer min_negotiable_pkr only for same-day payment."
+        };
+      }
+      if (!parsedTool.objection_responses) {
+        parsedTool.objection_responses = {
+          too_expensive: "Highlight time saved and value vs expensive alternatives.",
+          need_time: "Offer a demo or sample test.",
+          comparing_competitor: "Highlight instant local setup and PKR payment."
+        };
+      }
       const tools = await getTools();
       tools.push(parsedTool);
       await saveTools(tools);
@@ -2338,6 +2400,84 @@ function matchToolExactOrAlias(text, tools) {
   }
   return null;
 }
+function levenshteinDistance(a, b) {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  const row = [];
+  for (let i = 0; i <= b.length; i++) {
+    row[i] = i;
+  }
+  for (let i = 1; i <= a.length; i++) {
+    let prev = i;
+    for (let j = 1; j <= b.length; j++) {
+      let val;
+      if (a[i - 1] === b[j - 1]) {
+        val = row[j - 1];
+      } else {
+        val = Math.min(row[j - 1] + 1, prev + 1, row[j] + 1);
+      }
+      row[j - 1] = prev;
+      prev = val;
+    }
+    row[b.length] = prev;
+  }
+  return row[b.length];
+}
+function matchToolFuzzy(text, tools) {
+  const normText = normalizeText(text);
+  const words = normText.split(/\s+/).filter((w) => w.length >= 5);
+  const matchedDetails = [];
+  const matchedToolsSet = /* @__PURE__ */ new Map();
+  for (const tool of tools) {
+    const targets = [
+      extractBaseName(tool.name),
+      ...(tool.aliases || []).map((a) => normalizeText(a))
+    ].filter((t) => t.length >= 5);
+    for (const target of targets) {
+      for (const word of words) {
+        if (Math.abs(word.length - target.length) > 2) continue;
+        const maxDist = target.length >= 8 ? 2 : 1;
+        const dist = levenshteinDistance(word, target);
+        if (dist <= maxDist) {
+          matchedToolsSet.set(tool.id, tool);
+          matchedDetails.push({
+            toolId: tool.id,
+            toolName: tool.name,
+            matchedOn: "alias",
+            matchedToken: `fuzzy:${word}->${target}`
+          });
+          break;
+        }
+      }
+      if (target.includes(" ")) {
+        const targetParts = target.split(" ");
+        const allPartsPresent = targetParts.every((p) => {
+          return words.some((w) => levenshteinDistance(w, p) <= (p.length >= 6 ? 1 : 0));
+        });
+        if (allPartsPresent) {
+          matchedToolsSet.set(tool.id, tool);
+          matchedDetails.push({
+            toolId: tool.id,
+            toolName: tool.name,
+            matchedOn: "alias",
+            matchedToken: `fuzzy-phrase:${target}`
+          });
+          break;
+        }
+      }
+    }
+  }
+  if (matchedToolsSet.size > 0) {
+    return {
+      matched: Array.from(matchedToolsSet.values()),
+      confidence: "alias",
+      isUnknownProduct: false,
+      matchedDetails
+    };
+  }
+  return null;
+}
 async function classifyToolIntentWithLLM(text, tools, conversationHistory, userId) {
   if (!text || text.trim().length < 3) return null;
   try {
@@ -2425,6 +2565,8 @@ function matchToolSync(text, tools, conversationHistory) {
   const historyText = conversationHistory && conversationHistory.length > 0 ? normalizeText(conversationHistory.slice(-3).join(" ")) : "";
   const fast = matchToolExactOrAlias(text, tools);
   if (fast) return fast;
+  const fuzzy = matchToolFuzzy(text, tools);
+  if (fuzzy) return fuzzy;
   for (const tool of tools) {
     const keywords = (tool.keywords || []).slice().sort((a, b) => b.length - a.length);
     for (const kw of keywords) {
@@ -2495,6 +2637,8 @@ function matchToolSync(text, tools, conversationHistory) {
 async function matchTool(text, tools, conversationHistory, userId) {
   const fast = matchToolExactOrAlias(text, tools);
   if (fast) return fast;
+  const fuzzy = matchToolFuzzy(text, tools);
+  if (fuzzy) return fuzzy;
   const norm = normalizeText(text);
   for (const ext of COMMON_EXTERNAL_TOOLS) {
     const extRegex = new RegExp(`\\b${ext.replace(/\s+/g, "\\s*")}\\b`, "i");
@@ -2934,7 +3078,12 @@ Available Screenshots / UI Images:
     toolContext = `Available Software Catalog in Store:
 - VoiceDelta: AI voice generator with 3,600+ AI voices, ElevenLabs/OpenAI models, and voice cloning (Rs. 1,199/mo).
 - ClipShield: YouTube video downloader, AI hook finder, and 9-layer anti-copyright claim protection (Rs. 1,500/mo).
-Do not dump feature lists. Greet naturally and ask 1 diagnostic question to understand what they are looking for.`;
+
+CRITICAL DIRECTIVES WHEN NO SPECIFIC TOOL IS MATCHED (e.g. "Hi", "Salam", "Aoa"):
+1. GREETING ONLY: Greet casually and warmly in natural Roman Urdu (e.g. "Walaikum Assalam bhai! Kese hain aap? Jee batayein, kis cheez me help chahiye?").
+2. DO NOT ACT LIKE A BOT/HELPLINE: NEVER say "VoiceDelta helpline pe khushamdeed" or "customer support me welcome". Be a real human seller.
+3. DO NOT PUSH OR ASSUME ANY PRODUCT: Do NOT mention VoiceDelta or ClipShield on a pure greeting turn until the customer specifies what they want.
+4. STRICT CATALOG FIDELITY: NEVER offer, mention, or ask about tools we do not carry (DO NOT mention Canva Pro, ElevenLabs, CapCut, etc.).`;
   }
   const activePayments = (settings.paymentMethods || []).filter((p) => p.isActive !== false);
   const paymentContext = activePayments.length > 0 ? activePayments.map(
@@ -3054,12 +3203,14 @@ MANDATORY FINAL DIRECTIVES:
 5. NEGOTIATION: Concessions must have a condition and never go below the minimum floor.
 
 Separate 1\u20133 short messages using "---MSG---". Provide your natural Roman Urdu reply below:`;
-  let systemInstruction = "You are a real Pakistani WhatsApp sales closer. Reply in 1 to 3 short sentences in natural Roman Urdu.";
+  let systemInstruction = "You are a real Pakistani WhatsApp sales closer. Greet warmly and naturally as a human seller in Roman Urdu. Do NOT assume any tool yet, do NOT say 'helpline pe khushamdeed', and do NOT offer tools outside our catalog.";
   if (match.isUnknownProduct) {
     systemInstruction = `You are a real Pakistani WhatsApp sales representative. The customer asked about "${match.queryProduct}", which we DO NOT sell. Reply honestly in Roman Urdu that you do not carry it, do not criticize it, and ask 1 diagnostic question about what they want to achieve.`;
   } else if (match.matched.length > 0) {
     const names = match.matched.map((t) => t.name).join(", ");
     systemInstruction = `You are a real Pakistani WhatsApp sales closer for ${names}. Reply strictly in 1 to 3 short conversational sentences (15 to 40 words total) in natural Roman Urdu. Never repeat already stated features.`;
+  } else {
+    systemInstruction = `You are a real Pakistani WhatsApp sales representative. No specific tool has been requested yet. Greet the customer warmly and naturally in Roman Urdu. Ask how you can help them today. DO NOT pretend to be an automated helpline or IVR bot (never say 'VoiceDelta helpline pe khushamdeed'). DO NOT assume a product. DO NOT offer Canva, ElevenLabs, or any tool not in our catalog.`;
   }
   console.log(`[Agent] Generating AI response for ${phoneNumber} (Matched: ${match.matched.map((t) => t.name).join(", ") || (match.isUnknownProduct ? `Unknown:${match.queryProduct}` : "None")})...`);
   const rawReply = await askAI(prompt, systemInstruction, userId);
@@ -5267,6 +5418,72 @@ async function initializeDataDirs() {
         }
       }
     } catch {
+    }
+    try {
+      const defaultToolsPath = import_path11.default.join(defaultsDir, "tools.json");
+      const activeToolsPath = import_path11.default.join(dataDir, "tools.json");
+      const defaultToolsRaw = await import_promises11.default.readFile(defaultToolsPath, "utf-8").catch(() => null);
+      if (defaultToolsRaw) {
+        const defaultTools = JSON.parse(defaultToolsRaw);
+        let activeTools = [];
+        try {
+          const activeToolsRaw = await import_promises11.default.readFile(activeToolsPath, "utf-8");
+          activeTools = JSON.parse(activeToolsRaw);
+        } catch {
+          activeTools = [];
+        }
+        if (!Array.isArray(activeTools) || activeTools.length === 0) {
+          await import_promises11.default.writeFile(activeToolsPath, JSON.stringify(defaultTools, null, 2), "utf-8");
+          console.log("[Init] Initialized active tools from defaults.");
+        } else {
+          let modified = false;
+          for (const defTool of defaultTools) {
+            const defName = (defTool.name || "").toLowerCase().trim();
+            const existingIdx = activeTools.findIndex(
+              (t) => t.id && t.id === defTool.id || t.name && t.name.toLowerCase().trim() === defName || t.name && defName.includes(t.name.toLowerCase().trim()) || defName.includes(t.name?.toLowerCase().trim() || "___")
+            );
+            if (existingIdx === -1) {
+              activeTools.push(defTool);
+              modified = true;
+              console.log(`[Init] Merged new default tool into active catalog: ${defTool.name}`);
+            } else {
+              const existing = activeTools[existingIdx];
+              if (Array.isArray(defTool.aliases) && defTool.aliases.length > 0) {
+                const existingAliases = new Set((existing.aliases || []).map((a) => a.toLowerCase().trim()));
+                for (const alias of defTool.aliases) {
+                  if (!existingAliases.has(alias.toLowerCase().trim())) {
+                    existing.aliases = [...existing.aliases || [], alias];
+                    modified = true;
+                  }
+                }
+              }
+              if (Array.isArray(defTool.keywords) && defTool.keywords.length > 0) {
+                const existingKw = new Set((existing.keywords || []).map((k) => k.toLowerCase().trim()));
+                for (const kw of defTool.keywords) {
+                  if (!existingKw.has(kw.toLowerCase().trim())) {
+                    existing.keywords = [...existing.keywords || [], kw];
+                    modified = true;
+                  }
+                }
+              }
+              if (defTool.pricing && (!existing.pricing || !existing.pricing.min_negotiable_pkr)) {
+                existing.pricing = { ...existing.pricing || {}, ...defTool.pricing };
+                modified = true;
+              }
+              if (defTool.objection_responses && !existing.objection_responses) {
+                existing.objection_responses = defTool.objection_responses;
+                modified = true;
+              }
+            }
+          }
+          if (modified) {
+            await import_promises11.default.writeFile(activeToolsPath, JSON.stringify(activeTools, null, 2), "utf-8");
+            console.log("[Init] Synced active tools catalog with latest default definitions.");
+          }
+        }
+      }
+    } catch (toolSyncErr) {
+      console.error("[Init] Error syncing tools catalog:", toolSyncErr);
     }
     await getUsers();
     await getLists();

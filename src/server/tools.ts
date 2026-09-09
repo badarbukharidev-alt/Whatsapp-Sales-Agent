@@ -41,6 +41,13 @@ export async function getTools(userId?: string): Promise<any[]> {
 
 export async function saveTools(tools: any[]) {
   await fs.writeFile(getToolsFile(), JSON.stringify(tools, null, 2));
+  // Keep data_defaults/tools.json updated so git commits and deployments stay in sync
+  try {
+    const defaultsFile = path.join(process.cwd(), "data_defaults", "tools.json");
+    await fs.writeFile(defaultsFile, JSON.stringify(tools, null, 2));
+  } catch (err) {
+    // ignore if defaults dir is not writable
+  }
 }
 
 export function setupToolsRoutes(app: Express) {
@@ -122,20 +129,36 @@ export function setupToolsRoutes(app: Express) {
   app.post("/api/tools", async (req, res) => {
     try {
       const user = await getUserByToken(req.headers.authorization);
-      const { name, rawInfo, images } = req.body;
+      const { name, rawInfo, category, images } = req.body;
       
-      const prompt = `Convert the following raw tool information into a clean structured JSON format. 
+      const prompt = `Convert the following raw tool information into a clean structured JSON format for our software sales catalog. 
 DO NOT OUTPUT ANY TEXT EXCEPT THE RAW JSON.
 Format required:
 {
   "name": "${name}",
-  "description": "...",
-  "features": ["...", "..."],
-  "use_cases": ["...", "..."],
-  "requirements": ["...", "..."],
-  "limitations": ["...", "..."],
-  "how_to_use": "...",
-  "sales_points": ["...", "..."],
+  "category": "${category || 'AI Tools'}",
+  "status": "active",
+  "description": "2-sentence summary of what the tool does and what problem it solves.",
+  "pricePkr": "1500",
+  "priceUsd": "6",
+  "aliases": ["${name.toLowerCase()}", "${name.toLowerCase().replace(/[^a-z0-9]/g, '')}"],
+  "keywords": ["search keyword 1", "problem solved", "feature keyword"],
+  "pricing": {
+    "min_negotiable_pkr": 1200,
+    "min_negotiable_usd": 5,
+    "negotiation_notes": "Can offer min_negotiable_pkr only for immediate same-day payment."
+  },
+  "objection_responses": {
+    "too_expensive": "Value reframe explaining daily cost or time saved.",
+    "need_time": "Offer a sample or trial test.",
+    "comparing_competitor": "Highlight local instant setup or distinct advantages."
+  },
+  "features": ["Feature 1", "Feature 2"],
+  "sales_points": ["Sales point 1", "Sales point 2"],
+  "use_cases": ["Use case 1", "Use case 2"],
+  "requirements": ["Requirement 1"],
+  "limitations": ["Limitation 1"],
+  "how_to_use": "Step by step usage instructions",
   "faq": []
 }
 
@@ -145,29 +168,69 @@ ${rawInfo}
       
       const aiResponse = await askAI(prompt);
       
-      let parsedTool;
+      let parsedTool: any;
       try {
         const cleanedResponse = aiResponse.replace(/```json/g, '').replace(/```/g, '').trim();
-        parsedTool = JSON.parse(cleanedResponse);
+        const jsonMatch = cleanedResponse.match(/\{[\s\S]*?\}/);
+        parsedTool = jsonMatch ? JSON.parse(jsonMatch[0]) : JSON.parse(cleanedResponse);
       } catch (e) {
         console.error("Failed to parse LLM structured tool:", aiResponse);
         parsedTool = {
-          id: Date.now().toString(),
           name,
+          category: category || "AI Tools",
+          status: "active",
           description: rawInfo,
+          pricePkr: "1200",
+          priceUsd: "5",
+          aliases: [name.toLowerCase(), name.toLowerCase().replace(/[^a-z0-9]/g, "")],
+          keywords: [name.toLowerCase(), "software", "tool"],
+          pricing: {
+            min_negotiable_pkr: 1000,
+            min_negotiable_usd: 4,
+            negotiation_notes: "Only discount for immediate same-day payment."
+          },
+          objection_responses: {
+            too_expensive: "Explain time saved and value vs expensive alternatives.",
+            need_time: "Offer a demo or sample test.",
+            comparing_competitor: "Highlight instant local setup and PKR payment."
+          },
           features: [],
+          sales_points: [],
           use_cases: [],
           requirements: [],
           limitations: [],
           how_to_use: "",
-          sales_points: [],
           faq: []
         };
       }
       
+      // Ensure all v2 schema fields are guaranteed present
       parsedTool.id = Date.now().toString();
       parsedTool.userId = user ? user.id : "usr_admin_badar";
       parsedTool.images = Array.isArray(images) ? images : [];
+      parsedTool.category = parsedTool.category || category || "AI Tools";
+      parsedTool.status = parsedTool.status || "active";
+      if (!Array.isArray(parsedTool.aliases) || parsedTool.aliases.length === 0) {
+        parsedTool.aliases = [name.toLowerCase(), name.toLowerCase().replace(/[^a-z0-9]/g, "")];
+      }
+      if (!Array.isArray(parsedTool.keywords) || parsedTool.keywords.length === 0) {
+        parsedTool.keywords = [name.toLowerCase(), "software", "tool"];
+      }
+      if (!parsedTool.pricing) {
+        const pkr = parseInt(parsedTool.pricePkr || "1200", 10);
+        parsedTool.pricing = {
+          min_negotiable_pkr: Math.round(pkr * 0.8),
+          min_negotiable_usd: 4,
+          negotiation_notes: "Can offer min_negotiable_pkr only for same-day payment."
+        };
+      }
+      if (!parsedTool.objection_responses) {
+        parsedTool.objection_responses = {
+          too_expensive: "Highlight time saved and value vs expensive alternatives.",
+          need_time: "Offer a demo or sample test.",
+          comparing_competitor: "Highlight instant local setup and PKR payment."
+        };
+      }
 
       const tools = await getTools();
       tools.push(parsedTool);

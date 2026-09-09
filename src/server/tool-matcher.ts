@@ -167,6 +167,102 @@ export function matchToolExactOrAlias(text: string, tools: Tool[]): ToolMatchRes
 }
 
 /**
+ * Computes Levenshtein edit distance between two strings.
+ */
+export function levenshteinDistance(a: string, b: string): number {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+
+  const row: number[] = [];
+  for (let i = 0; i <= b.length; i++) {
+    row[i] = i;
+  }
+
+  for (let i = 1; i <= a.length; i++) {
+    let prev = i;
+    for (let j = 1; j <= b.length; j++) {
+      let val: number;
+      if (a[i - 1] === b[j - 1]) {
+        val = row[j - 1];
+      } else {
+        val = Math.min(row[j - 1] + 1, prev + 1, row[j] + 1);
+      }
+      row[j - 1] = prev;
+      prev = val;
+    }
+    row[b.length] = prev;
+  }
+
+  return row[b.length];
+}
+
+/**
+ * Fuzzy / Typo Matcher: Catches typos such as "clipshied", "clipsheild", "voicedalta", "voicedelata".
+ */
+export function matchToolFuzzy(text: string, tools: Tool[]): ToolMatchResult | null {
+  const normText = normalizeText(text);
+  const words = normText.split(/\s+/).filter(w => w.length >= 5);
+  const matchedDetails: ToolMatchDetail[] = [];
+  const matchedToolsSet = new Map<string, Tool>();
+
+  for (const tool of tools) {
+    const targets = [
+      extractBaseName(tool.name),
+      ...(tool.aliases || []).map(a => normalizeText(a))
+    ].filter(t => t.length >= 5);
+
+    for (const target of targets) {
+      // 1. Single-word token match with Levenshtein distance
+      for (const word of words) {
+        if (Math.abs(word.length - target.length) > 2) continue;
+        const maxDist = target.length >= 8 ? 2 : 1;
+        const dist = levenshteinDistance(word, target);
+        if (dist <= maxDist) {
+          matchedToolsSet.set(tool.id, tool);
+          matchedDetails.push({
+            toolId: tool.id,
+            toolName: tool.name,
+            matchedOn: "alias",
+            matchedToken: `fuzzy:${word}->${target}`,
+          });
+          break;
+        }
+      }
+
+      // 2. Multi-word phrase fuzzy check
+      if (target.includes(" ")) {
+        const targetParts = target.split(" ");
+        const allPartsPresent = targetParts.every(p => {
+          return words.some(w => levenshteinDistance(w, p) <= (p.length >= 6 ? 1 : 0));
+        });
+        if (allPartsPresent) {
+          matchedToolsSet.set(tool.id, tool);
+          matchedDetails.push({
+            toolId: tool.id,
+            toolName: tool.name,
+            matchedOn: "alias",
+            matchedToken: `fuzzy-phrase:${target}`,
+          });
+          break;
+        }
+      }
+    }
+  }
+
+  if (matchedToolsSet.size > 0) {
+    return {
+      matched: Array.from(matchedToolsSet.values()),
+      confidence: "alias",
+      isUnknownProduct: false,
+      matchedDetails,
+    };
+  }
+
+  return null;
+}
+
+/**
  * AI LLM Semantic Intent Classifier:
  * When exact/alias matching is ambiguous, uses LLM to understand natural phrasing,
  * Roman Urdu slang, indirect problem descriptions, and uncataloged external tools.
@@ -292,7 +388,11 @@ export function matchToolSync(
   const fast = matchToolExactOrAlias(text, tools);
   if (fast) return fast;
 
-  // 2. Keyword Match
+  // 2. Fuzzy / Typo Match (e.g. "clipshied" -> ClipShield)
+  const fuzzy = matchToolFuzzy(text, tools);
+  if (fuzzy) return fuzzy;
+
+  // 3. Keyword Match
   for (const tool of tools) {
     const keywords = (tool.keywords || []).slice().sort((a, b) => b.length - a.length);
     for (const kw of keywords) {
@@ -385,7 +485,11 @@ export async function matchTool(
   const fast = matchToolExactOrAlias(text, tools);
   if (fast) return fast;
 
-  // 2. Fast-Path: Known external tools
+  // 2. Fast-Path: Fuzzy / Typo Match (e.g. "clipshied" -> ClipShield, "voicedalta" -> VoiceDelta)
+  const fuzzy = matchToolFuzzy(text, tools);
+  if (fuzzy) return fuzzy;
+
+  // 3. Fast-Path: Known external tools
   const norm = normalizeText(text);
   for (const ext of COMMON_EXTERNAL_TOOLS) {
     const extRegex = new RegExp(`\\b${ext.replace(/\s+/g, "\\s*")}\\b`, "i");

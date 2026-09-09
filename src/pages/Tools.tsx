@@ -54,6 +54,14 @@ export default function Tools() {
   const [editHowToUse, setEditHowToUse] = useState("");
   const [editLimitations, setEditLimitations] = useState("");
   const [editImages, setEditImages] = useState<ToolImage[]>([]);
+  const [editAliases, setEditAliases] = useState("");
+  const [editKeywords, setEditKeywords] = useState("");
+  const [editMinPkr, setEditMinPkr] = useState("");
+  const [editMinUsd, setEditMinUsd] = useState("");
+  const [editNegotiationNotes, setEditNegotiationNotes] = useState("");
+  const [editObjectionTooExpensive, setEditObjectionTooExpensive] = useState("");
+  const [editObjectionNeedTime, setEditObjectionNeedTime] = useState("");
+  const [editObjectionCompetitor, setEditObjectionCompetitor] = useState("");
   const [isSavingEdit, setIsSavingEdit] = useState(false);
 
   // Image Upload in Modal
@@ -170,6 +178,14 @@ export default function Tools() {
     setEditDescription(tool.description || "");
     setEditPricePkr(tool.pricePkr || "");
     setEditPriceUsd(tool.priceUsd || "");
+    setEditAliases((tool.aliases || []).join(", "));
+    setEditKeywords((tool.keywords || []).join(", "));
+    setEditMinPkr(tool.pricing?.min_negotiable_pkr ? String(tool.pricing.min_negotiable_pkr) : "");
+    setEditMinUsd(tool.pricing?.min_negotiable_usd ? String(tool.pricing.min_negotiable_usd) : "");
+    setEditNegotiationNotes(tool.pricing?.negotiation_notes || "");
+    setEditObjectionTooExpensive(tool.objection_responses?.too_expensive || "");
+    setEditObjectionNeedTime(tool.objection_responses?.need_time || "");
+    setEditObjectionCompetitor(tool.objection_responses?.comparing_competitor || "");
     setEditFeatures((tool.features || []).join("\n"));
     setEditSalesPoints((tool.sales_points || []).join("\n"));
     setEditHowToUse(tool.how_to_use || "");
@@ -256,12 +272,27 @@ export default function Tools() {
     setIsSavingEdit(true);
     try {
       const updatedTool: Partial<Tool> = {
+        ...editingTool,
         name: editName.trim(),
         category: editCategory.trim(),
         status: editStatus,
         description: editDescription.trim(),
         pricePkr: editPricePkr.trim() || undefined,
         priceUsd: editPriceUsd.trim() || undefined,
+        aliases: editAliases.split(/[\n,]/).map(a => a.trim().toLowerCase()).filter(Boolean),
+        keywords: editKeywords.split(/[\n,]/).map(k => k.trim().toLowerCase()).filter(Boolean),
+        pricing: {
+          ...(editingTool.pricing || {}),
+          min_negotiable_pkr: editMinPkr.trim() ? parseInt(editMinPkr.trim(), 10) : undefined,
+          min_negotiable_usd: editMinUsd.trim() ? parseInt(editMinUsd.trim(), 10) : undefined,
+          negotiation_notes: editNegotiationNotes.trim() || undefined,
+        },
+        objection_responses: {
+          ...(editingTool.objection_responses || {}),
+          too_expensive: editObjectionTooExpensive.trim() || undefined,
+          need_time: editObjectionNeedTime.trim() || undefined,
+          comparing_competitor: editObjectionCompetitor.trim() || undefined,
+        },
         features: editFeatures.split("\n").map(f => f.trim()).filter(Boolean),
         sales_points: editSalesPoints.split("\n").map(s => s.trim()).filter(Boolean),
         how_to_use: editHowToUse.trim(),
@@ -737,33 +768,107 @@ export default function Tools() {
                   </div>
 
                   {/* Pricing Configuration */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-3 bg-slate-50 rounded-xl border border-slate-200">
-                    <div>
-                      <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
-                        Price in PKR (Optional)
-                      </label>
-                      <input
-                        type="text"
-                        value={editPricePkr}
-                        onChange={(e) => setEditPricePkr(e.target.value)}
-                        placeholder="e.g. 1199 or 2500"
-                        className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 outline-none focus:border-emerald-500 font-mono"
-                      />
-                      <span className="text-[10px] text-slate-400 mt-0.5 block">AI will quote this in Rs. when asked.</span>
+                  <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
+                          Standard Price (PKR)
+                        </label>
+                        <input
+                          type="text"
+                          value={editPricePkr}
+                          onChange={(e) => setEditPricePkr(e.target.value)}
+                          placeholder="e.g. 1199 or 2500"
+                          className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 outline-none focus:border-emerald-500 font-mono"
+                        />
+                        <span className="text-[10px] text-slate-400 mt-0.5 block">Initial price AI quotes.</span>
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
+                          Min Floor Price (PKR)
+                        </label>
+                        <input
+                          type="text"
+                          value={editMinPkr}
+                          onChange={(e) => setEditMinPkr(e.target.value)}
+                          placeholder="e.g. 999 (hard floor)"
+                          className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 outline-none focus:border-emerald-500 font-mono"
+                        />
+                        <span className="text-[10px] text-slate-400 mt-0.5 block">AI will NEVER drop below this floor.</span>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
+                          Price in USD (Optional)
+                        </label>
+                        <input
+                          type="text"
+                          value={editPriceUsd}
+                          onChange={(e) => setEditPriceUsd(e.target.value)}
+                          placeholder="e.g. 5 or 15"
+                          className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 outline-none focus:border-emerald-500 font-mono"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
+                          Min Floor USD (Optional)
+                        </label>
+                        <input
+                          type="text"
+                          value={editMinUsd}
+                          onChange={(e) => setEditMinUsd(e.target.value)}
+                          placeholder="e.g. 4"
+                          className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 outline-none focus:border-emerald-500 font-mono"
+                        />
+                      </div>
                     </div>
 
                     <div>
                       <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
-                        Price in USD (Optional)
+                        Negotiation Rules / Notes
                       </label>
                       <input
                         type="text"
-                        value={editPriceUsd}
-                        onChange={(e) => setEditPriceUsd(e.target.value)}
-                        placeholder="e.g. 5 or 15"
-                        className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 outline-none focus:border-emerald-500 font-mono"
+                        value={editNegotiationNotes}
+                        onChange={(e) => setEditNegotiationNotes(e.target.value)}
+                        placeholder="e.g. Rate is fixed. Only drop to min floor if customer is leaving."
+                        className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 outline-none focus:border-emerald-500"
                       />
-                      <span className="text-[10px] text-slate-400 mt-0.5 block">For overseas or dollar payments.</span>
+                    </div>
+                  </div>
+
+                  {/* Recognition Aliases & Keywords */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                        Aliases & Common Typos (comma-separated)
+                      </label>
+                      <input
+                        type="text"
+                        value={editAliases}
+                        onChange={(e) => setEditAliases(e.target.value)}
+                        placeholder="e.g. clipshied, clipsheild, clip shield"
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-800 outline-none focus:border-emerald-500 focus:bg-white"
+                      />
+                      <span className="text-[10px] text-slate-400 mt-0.5 block">AI immediately recognizes customer typos as this tool.</span>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                        Detection Keywords (comma-separated)
+                      </label>
+                      <input
+                        type="text"
+                        value={editKeywords}
+                        onChange={(e) => setEditKeywords(e.target.value)}
+                        placeholder="e.g. copyright, strike, reuse, video protection"
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-800 outline-none focus:border-emerald-500 focus:bg-white"
+                      />
+                      <span className="text-[10px] text-slate-400 mt-0.5 block">Trigger words that connect user questions to this tool.</span>
                     </div>
                   </div>
 
@@ -808,6 +913,48 @@ export default function Tools() {
                       placeholder="Best for faceless YouTube documentary creators&#10;10x cheaper than ElevenLabs subscription&#10;JazzCash / EasyPaisa supported"
                       className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-800 outline-none focus:border-emerald-500 focus:bg-white"
                     />
+                  </div>
+
+                  <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
+                    <span className="text-xs font-bold text-slate-800 uppercase tracking-wider block">
+                      Objection Handling Scripts
+                    </span>
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
+                        When Customer Says "Mehnga Hai / Too Expensive"
+                      </label>
+                      <input
+                        type="text"
+                        value={editObjectionTooExpensive}
+                        onChange={(e) => setEditObjectionTooExpensive(e.target.value)}
+                        placeholder="e.g. Bhai feature aur lifetime ROI dekhein, market se bohot sasta hai."
+                        className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 outline-none focus:border-emerald-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
+                        When Customer Says "Soch Ke Batata Hun / Need Time"
+                      </label>
+                      <input
+                        type="text"
+                        value={editObjectionNeedTime}
+                        onChange={(e) => setEditObjectionNeedTime(e.target.value)}
+                        placeholder="e.g. Theek hai bhai! Koi jaldi nahi, jab bhi zaroorat ho rabta karein."
+                        className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 outline-none focus:border-emerald-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
+                        When Customer Compares with Competitor
+                      </label>
+                      <input
+                        type="text"
+                        value={editObjectionCompetitor}
+                        onChange={(e) => setEditObjectionCompetitor(e.target.value)}
+                        placeholder="e.g. Humara tool local payments aur fast support deta hai jo unke paas nahi."
+                        className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 outline-none focus:border-emerald-500"
+                      />
+                    </div>
                   </div>
 
                   <div>

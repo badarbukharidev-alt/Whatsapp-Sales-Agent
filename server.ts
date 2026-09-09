@@ -47,6 +47,85 @@ async function initializeDataDirs() {
       // defaults directory may be absent
     }
 
+    // Smart sync for tools.json: ensure new tools and updated aliases/keywords are merged
+    try {
+      const defaultToolsPath = path.join(defaultsDir, "tools.json");
+      const activeToolsPath = path.join(dataDir, "tools.json");
+      
+      const defaultToolsRaw = await fs.readFile(defaultToolsPath, "utf-8").catch(() => null);
+      if (defaultToolsRaw) {
+        const defaultTools = JSON.parse(defaultToolsRaw);
+        let activeTools: any[] = [];
+        try {
+          const activeToolsRaw = await fs.readFile(activeToolsPath, "utf-8");
+          activeTools = JSON.parse(activeToolsRaw);
+        } catch {
+          activeTools = [];
+        }
+
+        if (!Array.isArray(activeTools) || activeTools.length === 0) {
+          await fs.writeFile(activeToolsPath, JSON.stringify(defaultTools, null, 2), "utf-8");
+          console.log("[Init] Initialized active tools from defaults.");
+        } else {
+          let modified = false;
+          for (const defTool of defaultTools) {
+            const defName = (defTool.name || "").toLowerCase().trim();
+            const existingIdx = activeTools.findIndex((t: any) => 
+              (t.id && t.id === defTool.id) || 
+              (t.name && t.name.toLowerCase().trim() === defName) ||
+              (t.name && defName.includes(t.name.toLowerCase().trim())) ||
+              (defName.includes(t.name?.toLowerCase().trim() || "___"))
+            );
+
+            if (existingIdx === -1) {
+              activeTools.push(defTool);
+              modified = true;
+              console.log(`[Init] Merged new default tool into active catalog: ${defTool.name}`);
+            } else {
+              const existing = activeTools[existingIdx];
+              // Merge aliases
+              if (Array.isArray(defTool.aliases) && defTool.aliases.length > 0) {
+                const existingAliases = new Set((existing.aliases || []).map((a: string) => a.toLowerCase().trim()));
+                for (const alias of defTool.aliases) {
+                  if (!existingAliases.has(alias.toLowerCase().trim())) {
+                    existing.aliases = [...(existing.aliases || []), alias];
+                    modified = true;
+                  }
+                }
+              }
+              // Merge keywords
+              if (Array.isArray(defTool.keywords) && defTool.keywords.length > 0) {
+                const existingKw = new Set((existing.keywords || []).map((k: string) => k.toLowerCase().trim()));
+                for (const kw of defTool.keywords) {
+                  if (!existingKw.has(kw.toLowerCase().trim())) {
+                    existing.keywords = [...(existing.keywords || []), kw];
+                    modified = true;
+                  }
+                }
+              }
+              // Merge pricing floors if missing
+              if (defTool.pricing && (!existing.pricing || !existing.pricing.min_negotiable_pkr)) {
+                existing.pricing = { ...(existing.pricing || {}), ...defTool.pricing };
+                modified = true;
+              }
+              // Merge objection responses if missing
+              if (defTool.objection_responses && !existing.objection_responses) {
+                existing.objection_responses = defTool.objection_responses;
+                modified = true;
+              }
+            }
+          }
+
+          if (modified) {
+            await fs.writeFile(activeToolsPath, JSON.stringify(activeTools, null, 2), "utf-8");
+            console.log("[Init] Synced active tools catalog with latest default definitions.");
+          }
+        }
+      }
+    } catch (toolSyncErr) {
+      console.error("[Init] Error syncing tools catalog:", toolSyncErr);
+    }
+
     // Initialize users & default lists
     await getUsers();
     await getLists();

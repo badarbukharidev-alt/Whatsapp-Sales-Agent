@@ -241,7 +241,12 @@ async function generateResponse(
     toolContext = `Available Software Catalog in Store:
 - VoiceDelta: AI voice generator with 3,600+ AI voices, ElevenLabs/OpenAI models, and voice cloning (Rs. 1,199/mo).
 - ClipShield: YouTube video downloader, AI hook finder, and 9-layer anti-copyright claim protection (Rs. 1,500/mo).
-Do not dump feature lists. Greet naturally and ask 1 diagnostic question to understand what they are looking for.`;
+
+CRITICAL DIRECTIVES WHEN NO SPECIFIC TOOL IS MATCHED (e.g. "Hi", "Salam", "Aoa"):
+1. GREETING ONLY: Greet casually and warmly in natural Roman Urdu (e.g. "Walaikum Assalam bhai! Kese hain aap? Jee batayein, kis cheez me help chahiye?").
+2. DO NOT ACT LIKE A BOT/HELPLINE: NEVER say "VoiceDelta helpline pe khushamdeed" or "customer support me welcome". Be a real human seller.
+3. DO NOT PUSH OR ASSUME ANY PRODUCT: Do NOT mention VoiceDelta or ClipShield on a pure greeting turn until the customer specifies what they want.
+4. STRICT CATALOG FIDELITY: NEVER offer, mention, or ask about tools we do not carry (DO NOT mention Canva Pro, ElevenLabs, CapCut, etc.).`;
   }
 
   // Format active payment methods
@@ -378,12 +383,14 @@ MANDATORY FINAL DIRECTIVES:
 
 Separate 1–3 short messages using "---MSG---". Provide your natural Roman Urdu reply below:`;
 
-  let systemInstruction = "You are a real Pakistani WhatsApp sales closer. Reply in 1 to 3 short sentences in natural Roman Urdu.";
+  let systemInstruction = "You are a real Pakistani WhatsApp sales closer. Greet warmly and naturally as a human seller in Roman Urdu. Do NOT assume any tool yet, do NOT say 'helpline pe khushamdeed', and do NOT offer tools outside our catalog.";
   if (match.isUnknownProduct) {
     systemInstruction = `You are a real Pakistani WhatsApp sales representative. The customer asked about "${match.queryProduct}", which we DO NOT sell. Reply honestly in Roman Urdu that you do not carry it, do not criticize it, and ask 1 diagnostic question about what they want to achieve.`;
   } else if (match.matched.length > 0) {
     const names = match.matched.map(t => t.name).join(", ");
     systemInstruction = `You are a real Pakistani WhatsApp sales closer for ${names}. Reply strictly in 1 to 3 short conversational sentences (15 to 40 words total) in natural Roman Urdu. Never repeat already stated features.`;
+  } else {
+    systemInstruction = `You are a real Pakistani WhatsApp sales representative. No specific tool has been requested yet. Greet the customer warmly and naturally in Roman Urdu. Ask how you can help them today. DO NOT pretend to be an automated helpline or IVR bot (never say 'VoiceDelta helpline pe khushamdeed'). DO NOT assume a product. DO NOT offer Canva, ElevenLabs, or any tool not in our catalog.`;
   }
 
   console.log(`[Agent] Generating AI response for ${phoneNumber} (Matched: ${match.matched.map(t => t.name).join(", ") || (match.isUnknownProduct ? `Unknown:${match.queryProduct}` : 'None')})...`);
