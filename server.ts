@@ -18,6 +18,7 @@ import { setupListRoutes, getLists } from "./src/server/lists.js";
 import { setupUsageRoutes } from "./src/server/usage.js";
 import { setupDeploymentRoutes } from "./src/server/deployment.js";
 import { startAgent } from "./src/server/agent.js";
+import { customerService } from "./src/server/services/customer-service.js";
 
 async function initializeDataDirs() {
   const dataDir = path.join(process.cwd(), "data");
@@ -129,6 +130,13 @@ async function initializeDataDirs() {
     // Initialize users & default lists
     await getUsers();
     await getLists();
+
+    // Migrate legacy customers with multi-tenant and memory summaries
+    try {
+      await customerService.migrateLegacyCustomers();
+    } catch (migErr) {
+      console.warn("[Init] Legacy customer migration note:", migErr);
+    }
 
     // Create initial JSON files if they don't exist
     const files = ["customers.json", "tools.json", "settings.json"];

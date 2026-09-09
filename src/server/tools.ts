@@ -3,6 +3,8 @@ import fs from "fs/promises";
 import path from "path";
 import { askAI } from "./ai.js";
 import { getUserByToken } from "./auth.js";
+import { toolService } from "./services/tool-service.js";
+import { Tool } from "../types.js";
 
 export const getToolsFile = () => path.join(process.cwd(), "data", "tools.json");
 export const getToolImagesDir = () => path.join(process.cwd(), "data", "tool-images");
@@ -19,34 +21,13 @@ export interface ToolImage {
   createdAt: string;
 }
 
-export async function getTools(userId?: string): Promise<any[]> {
-  try {
-    const data = await fs.readFile(getToolsFile(), "utf-8");
-    const tools: any[] = JSON.parse(data);
-    if (!userId) {
-      return tools;
-    }
-    // Return tools belonging to this specific user (or global catalog tools if no userId)
-    return tools.filter((t: any) => {
-      if (t.userId) {
-        return t.userId === userId;
-      }
-      // If tool has no userId (global catalog), allow for all sessions
-      return true;
-    });
-  } catch (error) {
-    return [];
-  }
+export async function getTools(userId?: string): Promise<Tool[]> {
+  return toolService.getAccountTools(userId);
 }
 
-export async function saveTools(tools: any[]) {
-  await fs.writeFile(getToolsFile(), JSON.stringify(tools, null, 2));
-  // Keep data_defaults/tools.json updated so git commits and deployments stay in sync
-  try {
-    const defaultsFile = path.join(process.cwd(), "data_defaults", "tools.json");
-    await fs.writeFile(defaultsFile, JSON.stringify(tools, null, 2));
-  } catch (err) {
-    // ignore if defaults dir is not writable
+export async function saveTools(tools: Tool[]) {
+  for (const t of tools) {
+    await toolService.saveTool(t, t.userId || "usr_admin_badar");
   }
 }
 
@@ -54,14 +35,14 @@ export function setupToolsRoutes(app: Express) {
   app.get("/api/tools", async (req, res) => {
     try {
       const user = await getUserByToken(req.headers.authorization);
-      const allTools = await getTools();
+      const allTools = await toolService.getAccountTools(user ? user.id : undefined);
       
       // Admin sees all tools; regular user only sees their own tools
       if (!user || user.role === "admin") {
         return res.json(allTools);
       }
       
-      const userTools = allTools.filter((t: any) => t.userId === user.id);
+      const userTools = allTools.filter((t: any) => t.userId === user.id || !t.userId);
       res.json(userTools);
     } catch (error) {
       res.status(500).json({ error: "Failed to load tools" });
@@ -106,16 +87,14 @@ export function setupToolsRoutes(app: Express) {
 
       // If toolId provided, associate image directly to the tool
       if (toolId) {
-        let tools = await getTools();
-        const toolIdx = tools.findIndex((t: any) => t.id === toolId);
-        if (toolIdx !== -1) {
-          // Verify user permission if not admin
-          if (user && user.role !== "admin" && tools[toolIdx].userId && tools[toolIdx].userId !== user.id) {
+        const tool = await toolService.getToolDetails(toolId, user?.id);
+        if (tool) {
+          if (user && user.role !== "admin" && tool.userId && tool.userId !== user.id) {
             return res.status(403).json({ error: "Not authorized to modify this tool" });
           }
-          tools[toolIdx].images = tools[toolIdx].images || [];
-          tools[toolIdx].images.push(imageObject);
-          await saveTools(tools);
+          tool.images = tool.images || [];
+          tool.images.push(imageObject);
+          await toolService.saveTool(tool, tool.userId || user?.id);
         }
       }
 
@@ -166,7 +145,7 @@ Raw Information:
 ${rawInfo}
 `;
       
-      const aiResponse = await askAI(prompt);
+      const aiResponse = await askAI(prompt, undefined, user?.id);
       
       let parsedTool: any;
       try {
@@ -204,7 +183,6 @@ ${rawInfo}
         };
       }
       
-      // Ensure all v2 schema fields are guaranteed present
       parsedTool.id = Date.now().toString();
       parsedTool.userId = user ? user.id : "usr_admin_badar";
       parsedTool.images = Array.isArray(images) ? images : [];
@@ -232,11 +210,8 @@ ${rawInfo}
         };
       }
 
-      const tools = await getTools();
-      tools.push(parsedTool);
-      await saveTools(tools);
-      
-      res.json(parsedTool);
+      const saved = await toolService.saveTool(parsedTool, parsedTool.userId);
+      res.json(saved);
     } catch (error) {
       console.error(error);
       res.status(500).json({ error: "Failed to add tool" });
@@ -248,26 +223,24 @@ ${rawInfo}
       const user = await getUserByToken(req.headers.authorization);
       const { id } = req.params;
       const updatedData = req.body;
-      let tools = await getTools();
-      const index = tools.findIndex((t: any) => t.id === id);
-      if (index === -1) {
+      const existing = await toolService.getToolDetails(id, user?.id);
+      if (!existing) {
         return res.status(404).json({ error: "Tool not found" });
       }
 
       // Check ownership
-      if (user && user.role !== "admin" && tools[index].userId && tools[index].userId !== user.id) {
+      if (user && user.role !== "admin" && existing.userId && existing.userId !== user.id) {
         return res.status(403).json({ error: "You can only edit your own tools." });
       }
 
-      tools[index] = {
-        ...tools[index],
+      const saved = await toolService.saveTool({
+        ...existing,
         ...updatedData,
-        id, // preserve ID
-        userId: tools[index].userId || (user ? user.id : "usr_admin_badar"),
-      };
+        id,
+        userId: existing.userId || (user ? user.id : "usr_admin_badar"),
+      }, existing.userId || user?.id);
 
-      await saveTools(tools);
-      res.json({ success: true, tool: tools[index] });
+      res.json({ success: true, tool: saved });
     } catch (error) {
       console.error("Failed to update tool:", error);
       res.status(500).json({ error: "Failed to update tool" });
@@ -277,8 +250,7 @@ ${rawInfo}
   app.delete("/api/tools/:id", async (req, res) => {
     try {
       const user = await getUserByToken(req.headers.authorization);
-      let tools = await getTools();
-      const existing = tools.find((t: any) => t.id === req.params.id);
+      const existing = await toolService.getToolDetails(req.params.id, user?.id);
       if (!existing) {
         return res.status(404).json({ error: "Tool not found" });
       }
@@ -288,8 +260,7 @@ ${rawInfo}
         return res.status(403).json({ error: "You can only delete your own tools." });
       }
 
-      tools = tools.filter((t: any) => t.id !== req.params.id);
-      await saveTools(tools);
+      await toolService.deleteTool(req.params.id, user?.id);
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete tool" });

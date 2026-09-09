@@ -1156,22 +1156,24 @@ function buildCompactPublicQuery(prompt, systemPrompt) {
     customerMsg = matchMsg[1].trim();
   }
   let toolSummary = "";
-  const hasClipShield = /clipshield/i.test(prompt);
-  const hasVoiceDelta = /voicedelta/i.test(prompt);
-  const isClipShieldMatched = /=== MATCHED TOOL:[^\n]*ClipShield/i.test(prompt) || /MATCHED CATALOG TOOL:[^\n]*ClipShield/i.test(prompt);
-  const isVoiceDeltaMatched = /=== MATCHED TOOL:[^\n]*VoiceDelta/i.test(prompt) || /MATCHED CATALOG TOOL:[^\n]*VoiceDelta/i.test(prompt);
-  if (isClipShieldMatched && !isVoiceDeltaMatched) {
-    toolSummary = "Tool: ClipShield (YouTube copyright claim removal & video repurposing, Rs. 1,500/month).";
-  } else if (isVoiceDeltaMatched && !isClipShieldMatched) {
-    toolSummary = "Tool: VoiceDelta (Rs. 1,199/month, 3,600+ AI voices, voice cloning).";
-  } else if (hasClipShield && !hasVoiceDelta) {
-    toolSummary = "Tool: ClipShield (YouTube copyright claim removal & video repurposing, Rs. 1,500/month).";
-  } else if (hasVoiceDelta && !hasClipShield) {
-    toolSummary = "Tool: VoiceDelta (Rs. 1,199/month, 3,600+ AI voices, voice cloning).";
+  const matchedToolMatch = prompt.match(/===\s*MATCHED TOOL:\s*([^\n=]+)\s*===/i);
+  if (matchedToolMatch && matchedToolMatch[1]) {
+    const matchedName = matchedToolMatch[1].trim();
+    const descMatch = prompt.match(/Description:\s*([^\n]+)/i);
+    const priceMatch = prompt.match(/(?:Regular Price|List Price):\s*([^\n]+)/i);
+    toolSummary = `Tool: ${matchedName} (${descMatch ? descMatch[1].slice(0, 100) : ""} ${priceMatch ? priceMatch[1] : ""}).`;
+  } else if (prompt.includes("[EXTERNAL PRODUCT INQUIRY")) {
+    const unkMatch = prompt.match(/\[EXTERNAL PRODUCT INQUIRY:\s*["']?([^\]"']+)["']?\]/i);
+    const unkName = unkMatch ? unkMatch[1] : "requested item";
+    toolSummary = `Inquiry: Customer asked for external product "${unkName}" which we do NOT carry. Honestly state we don't carry it and ask what they want to achieve.`;
+  } else if (prompt.includes("[STORE CATALOG OVERVIEW]")) {
+    const catalogMatch = prompt.match(/\[STORE CATALOG OVERVIEW\]\s*\n([\s\S]*?)(?=\n\[|INSTRUCTION:|$)/i);
+    toolSummary = catalogMatch && catalogMatch[1].trim() ? `Store Catalog:
+${catalogMatch[1].trim().slice(0, 250)}` : "Store Catalog: Digital tools. Greet naturally in Roman Urdu and ask how you can help.";
   } else {
-    toolSummary = "Store: AI & Content Tools Store (VoiceDelta & ClipShield). No specific tool requested yet. Greet naturally as a human seller in Roman Urdu. Do NOT assume VoiceDelta. Do NOT pretend to be an automated helpline. Never mention tools outside our catalog.";
+    toolSummary = "Store Catalog: Digital tools. Greet naturally in Roman Urdu and ask how you can help.";
   }
-  const roleRule = "Pakistani WhatsApp sales representative. Casual Roman Urdu only. Short, natural, human reply. NEVER say 'helpline me khushamdeed' or act like an IVR bot. NEVER offer Canva, ElevenLabs, or tools not in our store.";
+  const roleRule = "Pakistani WhatsApp sales representative. Casual Roman Urdu only. Short, natural, human reply. NEVER say 'helpline me khushamdeed' or act like an IVR bot. NEVER offer tools outside our stored catalog.";
   const parts = [
     roleRule,
     toolSummary,
@@ -1269,6 +1271,192 @@ var init_ai = __esm({
   }
 });
 
+// src/server/storage/json-store.ts
+var import_promises3, import_path3, JsonStore;
+var init_json_store = __esm({
+  "src/server/storage/json-store.ts"() {
+    import_promises3 = __toESM(require("fs/promises"), 1);
+    import_path3 = __toESM(require("path"), 1);
+    JsonStore = class {
+      constructor(filePath, defaultValue) {
+        this.cachedData = null;
+        this.writeQueue = Promise.resolve();
+        this.isLoaded = false;
+        this.filePath = filePath;
+        this.defaultValue = defaultValue;
+      }
+      /**
+       * Reads data from in-memory cache, or loads from disk on first call.
+       */
+      async get() {
+        if (this.isLoaded && this.cachedData !== null) {
+          return this.cachedData;
+        }
+        return this.reload();
+      }
+      /**
+       * Forces a reload from disk.
+       */
+      async reload() {
+        try {
+          await import_promises3.default.mkdir(import_path3.default.dirname(this.filePath), { recursive: true });
+          const raw = await import_promises3.default.readFile(this.filePath, "utf-8");
+          this.cachedData = JSON.parse(raw);
+          this.isLoaded = true;
+          return this.cachedData;
+        } catch (err) {
+          if (err.code === "ENOENT") {
+            this.cachedData = JSON.parse(JSON.stringify(this.defaultValue));
+            this.isLoaded = true;
+            await this.writeDirect(this.cachedData);
+            return this.cachedData;
+          }
+          console.warn(`[JsonStore] Failed to read ${this.filePath}, falling back to defaults:`, err.message);
+          this.cachedData = JSON.parse(JSON.stringify(this.defaultValue));
+          this.isLoaded = true;
+          return this.cachedData;
+        }
+      }
+      /**
+       * Queues an atomic write to disk and updates in-memory cache immediately.
+       */
+      async set(data) {
+        this.cachedData = data;
+        this.isLoaded = true;
+        this.writeQueue = this.writeQueue.then(() => this.writeDirect(data)).catch((err) => {
+          console.error(`[JsonStore] Error writing to ${this.filePath}:`, err);
+        });
+        return this.writeQueue;
+      }
+      /**
+       * Atomically mutates current state using an updater function.
+       */
+      async update(updater) {
+        const current = await this.get();
+        const updated = await updater(current);
+        await this.set(updated);
+        return updated;
+      }
+      /**
+       * Performs an atomic write using a temporary file and fs.rename.
+       */
+      async writeDirect(data) {
+        const dir = import_path3.default.dirname(this.filePath);
+        await import_promises3.default.mkdir(dir, { recursive: true });
+        const serialized = JSON.stringify(data, null, 2);
+        const tempPath = `${this.filePath}.tmp.${Date.now()}.${Math.random().toString(36).slice(2, 6)}`;
+        try {
+          await import_promises3.default.writeFile(tempPath, serialized, "utf-8");
+          await import_promises3.default.rename(tempPath, this.filePath);
+        } catch (writeErr) {
+          try {
+            await import_promises3.default.unlink(tempPath);
+          } catch {
+          }
+          throw writeErr;
+        }
+      }
+    };
+  }
+});
+
+// src/server/services/memory-summarizer.ts
+function extractStructuredMemory(existingSummary, messages, customerNameHint) {
+  const summary = {
+    customerName: existingSummary?.customerName || customerNameHint || void 0,
+    preferredLanguage: existingSummary?.preferredLanguage || "Roman Urdu",
+    interestedTools: [...existingSummary?.interestedTools || []],
+    quotedPrices: { ...existingSummary?.quotedPrices || {} },
+    objectionsRaised: [...existingSummary?.objectionsRaised || []],
+    objectionsResolved: [...existingSummary?.objectionsResolved || []],
+    keyFacts: [...existingSummary?.keyFacts || []],
+    stage: existingSummary?.stage || "greeting",
+    lastToolDiscussed: existingSummary?.lastToolDiscussed || void 0,
+    totalTurnsCount: messages.length,
+    lastSummarizedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+  if (summary.customerName && /^(customer|user|unknown|client)$/i.test(summary.customerName)) {
+    summary.customerName = void 0;
+  }
+  for (const msg of messages) {
+    if (msg.role === "user") {
+      if (!summary.customerName) {
+        for (const pat of NAME_PATTERNS) {
+          const match = msg.content.match(pat);
+          if (match && match[1]) {
+            summary.customerName = match[1].charAt(0).toUpperCase() + match[1].slice(1).toLowerCase();
+            break;
+          }
+        }
+      }
+      for (const obj of OBJECTION_PATTERNS) {
+        if (obj.pattern.test(msg.content) && !summary.objectionsRaised.includes(obj.tag)) {
+          summary.objectionsRaised.push(obj.tag);
+        }
+      }
+      const lower = msg.content.toLowerCase();
+      if (lower.includes("clipshield") || lower.includes("clip shield") || lower.includes("copyright")) {
+        if (!summary.interestedTools.includes("ClipShield")) summary.interestedTools.push("ClipShield");
+        summary.lastToolDiscussed = "ClipShield";
+      }
+      if (lower.includes("voicedelta") || lower.includes("voice delta") || lower.includes("cloning") || lower.includes("voices")) {
+        if (!summary.interestedTools.includes("VoiceDelta")) summary.interestedTools.push("VoiceDelta");
+        summary.lastToolDiscussed = "VoiceDelta";
+      }
+    } else if (msg.role === "agent") {
+      for (const pat of PRICE_QUOTED_PATTERNS) {
+        const priceMatch = msg.content.match(pat);
+        if (priceMatch && priceMatch[1] && summary.lastToolDiscussed) {
+          const quotedNum = parseInt(priceMatch[1], 10);
+          if (quotedNum >= 500 && quotedNum <= 1e4) {
+            summary.quotedPrices[summary.lastToolDiscussed] = `Rs. ${quotedNum}`;
+            break;
+          }
+        }
+      }
+    }
+  }
+  const allText = messages.map((m) => m.content).join(" ").toLowerCase();
+  if (allText.includes("order complete") || allText.includes("license key") || allText.includes("activated")) {
+    summary.stage = "paid";
+  } else if (allText.includes("jazzcash") || allText.includes("easypaisa") || allText.includes("bank transfer") || allText.includes("account number") || allText.includes("send payment")) {
+    summary.stage = "payment_pending";
+  } else if (Object.keys(summary.quotedPrices).length > 0 || allText.includes("discount") || allText.includes("final") || allText.includes("rate")) {
+    summary.stage = "negotiation";
+  } else if (summary.interestedTools.length > 0) {
+    summary.stage = "discovery";
+  } else {
+    summary.stage = "greeting";
+  }
+  const toolStr = summary.interestedTools.length > 0 ? summary.interestedTools.join(" & ") : "store catalog";
+  const priceEntries = Object.entries(summary.quotedPrices);
+  const priceStr = priceEntries.length > 0 ? `Quoted: ${priceEntries.map(([t, p]) => `${t} @ ${p}`).join(", ")}.` : "";
+  const nameStr = summary.customerName ? `Customer ${summary.customerName}` : "Customer";
+  const objectionStr = summary.objectionsRaised.length > 0 ? `Raised: ${summary.objectionsRaised.join(", ")}.` : "";
+  let narrative = `${nameStr} inquired about ${toolStr}. ${priceStr} ${objectionStr} Current stage: ${summary.stage}.`.replace(/\s+/g, " ").trim();
+  summary.summaryText = narrative;
+  return summary;
+}
+var NAME_PATTERNS, PRICE_QUOTED_PATTERNS, OBJECTION_PATTERNS;
+var init_memory_summarizer = __esm({
+  "src/server/services/memory-summarizer.ts"() {
+    NAME_PATTERNS = [
+      /(?:mera\s+naam|my\s+name\s+is|i\s+am|main\s+hoon|naam\s+hai)\s+([A-Za-z]{3,20})/i,
+      /^([A-Za-z]{3,15})\s+(?:here|bol\s*raha|speaking)/i
+    ];
+    PRICE_QUOTED_PATTERNS = [
+      /(?:rs\.?|pkr|rate|price)\s*[:=]?\s*(\d{3,5})/i,
+      /(\d{3,5})\s*(?:rs|pkr|mein|me)/i
+    ];
+    OBJECTION_PATTERNS = [
+      { pattern: /(?:mehnga|expensive|bohot\s+zyada|kam\s+karo|discount)/i, tag: "price_sensitivity" },
+      { pattern: /(?:soch|baad\s+me|kal|thoda\s+time|soch\s+ke)/i, tag: "needs_time" },
+      { pattern: /(?:trust|scam|fraud|proof|pehle\s+account)/i, tag: "trust_hesitation" },
+      { pattern: /(?:free|trial|demo|check\s+karne)/i, tag: "trial_request" }
+    ];
+  }
+});
+
 // src/server/usage.ts
 function getTodayKey() {
   const d = /* @__PURE__ */ new Date();
@@ -1285,7 +1473,7 @@ function getMonthKey() {
 }
 async function getUsage() {
   try {
-    const raw = await import_promises3.default.readFile(USAGE_FILE, "utf-8");
+    const raw = await import_promises4.default.readFile(USAGE_FILE, "utf-8");
     const parsed = JSON.parse(raw);
     if (!parsed.userMonthlyAiReplies) parsed.userMonthlyAiReplies = {};
     if (!parsed.dailyAiReplies) parsed.dailyAiReplies = {};
@@ -1340,8 +1528,8 @@ async function getUsage() {
 async function saveUsage(usage) {
   usageCache = usage;
   usage.lastUpdated = (/* @__PURE__ */ new Date()).toISOString();
-  await import_promises3.default.mkdir(import_path3.default.dirname(USAGE_FILE), { recursive: true });
-  await import_promises3.default.writeFile(USAGE_FILE, JSON.stringify(usage, null, 2), "utf-8");
+  await import_promises4.default.mkdir(import_path4.default.dirname(USAGE_FILE), { recursive: true });
+  await import_promises4.default.writeFile(USAGE_FILE, JSON.stringify(usage, null, 2), "utf-8");
 }
 async function recordAiReply(userId) {
   const usage = await getUsage();
@@ -1440,15 +1628,179 @@ function setupUsageRoutes(app) {
     }
   });
 }
-var import_promises3, import_path3, USAGE_FILE, usageCache;
+var import_promises4, import_path4, USAGE_FILE, usageCache;
 var init_usage = __esm({
   "src/server/usage.ts"() {
-    import_promises3 = __toESM(require("fs/promises"), 1);
-    import_path3 = __toESM(require("path"), 1);
+    import_promises4 = __toESM(require("fs/promises"), 1);
+    import_path4 = __toESM(require("path"), 1);
     init_memory();
     init_auth();
-    USAGE_FILE = import_path3.default.join(process.cwd(), "data", "usage.json");
+    USAGE_FILE = import_path4.default.join(process.cwd(), "data", "usage.json");
     usageCache = null;
+  }
+});
+
+// src/server/memory.ts
+var memory_exports = {};
+__export(memory_exports, {
+  VALID_CUSTOMER_STATUSES: () => VALID_CUSTOMER_STATUSES,
+  getCustomerList: () => getCustomerList,
+  getCustomers: () => getCustomers,
+  getCustomersFile: () => getCustomersFile,
+  normalizeCustomerStatus: () => normalizeCustomerStatus,
+  normalizeJid: () => normalizeJid,
+  saveCustomer: () => saveCustomer,
+  saveCustomers: () => saveCustomers,
+  setupMemoryRoutes: () => setupMemoryRoutes,
+  updateCustomerMemory: () => updateCustomerMemory,
+  updateCustomerStatus: () => updateCustomerStatus
+});
+async function getCustomers(userId) {
+  return customerService.getCustomers(userId);
+}
+async function getCustomerList(userId) {
+  return customerService.getCustomerList(userId);
+}
+async function saveCustomers(data, userId) {
+  return customerService.saveCustomers(data, userId);
+}
+async function saveCustomer(phoneNumber, data, userId) {
+  const cleanJid = normalizeJid(phoneNumber);
+  const existing = await customerService.getCustomerByJid(cleanJid, userId);
+  const updatedStatus = normalizeCustomerStatus(data.status || existing.status);
+  const updated = {
+    ...existing,
+    ...data,
+    phoneNumber: cleanJid,
+    status: updatedStatus,
+    userId: userId || existing.userId || "usr_admin_badar"
+  };
+  const customers = await customerService.getCustomers(userId);
+  customers[cleanJid] = updated;
+  await customerService.saveCustomers(customers, userId);
+  return updated;
+}
+async function updateCustomerStatus(phoneNumber, newStatus, reason, changedBy = "system", paymentEvidence, userId) {
+  return customerService.updateCustomerSalesState(phoneNumber, newStatus, reason, changedBy, userId, paymentEvidence);
+}
+async function updateCustomerMemory(phoneNumber, newMessage, role, userId = "usr_admin_badar") {
+  const customer = await customerService.saveMessage(phoneNumber, role, String(newMessage), userId);
+  if (role === "agent") {
+    recordAiReply().catch((err) => console.error("[Memory] Error recording AI reply usage:", err));
+  } else if (role === "user") {
+    recordUserMessage().catch((err) => console.error("[Memory] Error recording user message usage:", err));
+  }
+  return customer;
+}
+function setupMemoryRoutes(app) {
+  app.get("/api/customers", async (req, res) => {
+    try {
+      const user = await getUserByToken(req.headers.authorization);
+      const customers = await customerService.getCustomerList(user ? user.id : void 0);
+      res.json(customers);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to load customers" });
+    }
+  });
+  app.put("/api/customers/:phoneNumber", async (req, res) => {
+    try {
+      const user = await getUserByToken(req.headers.authorization);
+      const { phoneNumber } = req.params;
+      const cleanJid = normalizeJid(phoneNumber);
+      const existing = await customerService.getCustomerByJid(cleanJid, user?.id);
+      const prevStatus = existing.status || "New Customer";
+      const newStatus = req.body.status ? normalizeCustomerStatus(req.body.status) : prevStatus;
+      const isStatusChanged = newStatus !== prevStatus;
+      const timestamp = (/* @__PURE__ */ new Date()).toISOString();
+      const updatedCustomer = {
+        ...existing,
+        ...req.body,
+        status: newStatus,
+        phoneNumber: cleanJid,
+        lastActivity: timestamp
+      };
+      if (isStatusChanged) {
+        updatedCustomer.previousStatus = prevStatus;
+        updatedCustomer.statusUpdatedAt = timestamp;
+        updatedCustomer.statusReason = req.body.reason || "Manual update by admin";
+        updatedCustomer.statusManagedBy = "Manual";
+        if (!updatedCustomer.statusHistory) updatedCustomer.statusHistory = [];
+        updatedCustomer.statusHistory.push({
+          status: newStatus,
+          fromStatus: prevStatus,
+          toStatus: newStatus,
+          timestamp,
+          reason: req.body.reason || "Manual update by admin",
+          changedBy: "Manual",
+          updatedBy: user?.name || "Admin"
+        });
+        if (newStatus === "Order Complete" && updatedCustomer.paymentClaimEvidence) {
+          updatedCustomer.paymentClaimEvidence.verified = true;
+          updatedCustomer.paymentClaimEvidence.verifiedAt = timestamp;
+          updatedCustomer.paymentClaimEvidence.verifiedBy = "admin";
+        }
+      }
+      const customers = await customerService.getCustomers(user?.id);
+      customers[cleanJid] = updatedCustomer;
+      await customerService.saveCustomers(customers, user?.id);
+      res.json({ success: true, customer: updatedCustomer });
+    } catch (error) {
+      console.error("Failed to update customer:", error);
+      res.status(500).json({ error: "Failed to update customer" });
+    }
+  });
+  app.post("/api/customers/:phoneNumber/verify-order", async (req, res) => {
+    try {
+      const { phoneNumber } = req.params;
+      const result = await customerService.updateCustomerSalesState(
+        phoneNumber,
+        "Order Complete",
+        req.body?.note || "Payment manually verified by admin. Order Complete.",
+        "Manual"
+      );
+      res.json({ success: true, ...result });
+    } catch (error) {
+      console.error("Failed to verify order:", error);
+      res.status(500).json({ error: "Failed to verify order" });
+    }
+  });
+  app.delete("/api/customers/:phoneNumber/messages", async (req, res) => {
+    try {
+      const user = await getUserByToken(req.headers.authorization);
+      const { phoneNumber } = req.params;
+      const success = await customerService.deleteCustomerMessages(phoneNumber, user?.id);
+      if (success) {
+        return res.json({ success: true, message: "Chat history deleted successfully." });
+      }
+      res.status(404).json({ error: "Customer not found" });
+    } catch (error) {
+      console.error("Failed to delete chat history:", error);
+      res.status(500).json({ error: "Failed to delete chat history" });
+    }
+  });
+  app.delete("/api/customers/:phoneNumber", async (req, res) => {
+    try {
+      const user = await getUserByToken(req.headers.authorization);
+      const { phoneNumber } = req.params;
+      const success = await customerService.deleteCustomer(phoneNumber, user?.id);
+      if (success) {
+        return res.json({ success: true, message: "Customer deleted successfully." });
+      }
+      res.status(404).json({ error: "Customer not found" });
+    } catch (error) {
+      console.error("Failed to delete customer:", error);
+      res.status(500).json({ error: "Failed to delete customer" });
+    }
+  });
+}
+var import_path5, getCustomersFile;
+var init_memory = __esm({
+  "src/server/memory.ts"() {
+    import_path5 = __toESM(require("path"), 1);
+    init_customer_service();
+    init_auth();
+    init_usage();
+    getCustomersFile = () => import_path5.default.join(process.cwd(), "data", "customers.json");
   }
 });
 
@@ -1467,8 +1819,8 @@ __export(lists_exports, {
 });
 async function getLists() {
   try {
-    await import_promises4.default.mkdir(import_path4.default.dirname(LISTS_FILE), { recursive: true });
-    const data = await import_promises4.default.readFile(LISTS_FILE, "utf-8");
+    await import_promises5.default.mkdir(import_path6.default.dirname(LISTS_FILE), { recursive: true });
+    const data = await import_promises5.default.readFile(LISTS_FILE, "utf-8");
     const parsed = JSON.parse(data);
     let updated = false;
     const existingIds = new Set(parsed.map((l) => l.id));
@@ -1479,17 +1831,17 @@ async function getLists() {
       }
     }
     if (updated) {
-      await import_promises4.default.writeFile(LISTS_FILE, JSON.stringify(parsed, null, 2), "utf-8");
+      await import_promises5.default.writeFile(LISTS_FILE, JSON.stringify(parsed, null, 2), "utf-8");
     }
     return parsed;
   } catch {
-    await import_promises4.default.writeFile(LISTS_FILE, JSON.stringify(DEFAULT_LISTS, null, 2), "utf-8");
+    await import_promises5.default.writeFile(LISTS_FILE, JSON.stringify(DEFAULT_LISTS, null, 2), "utf-8");
     return DEFAULT_LISTS;
   }
 }
 async function saveLists(lists) {
-  await import_promises4.default.mkdir(import_path4.default.dirname(LISTS_FILE), { recursive: true });
-  await import_promises4.default.writeFile(LISTS_FILE, JSON.stringify(lists, null, 2), "utf-8");
+  await import_promises5.default.mkdir(import_path6.default.dirname(LISTS_FILE), { recursive: true });
+  await import_promises5.default.writeFile(LISTS_FILE, JSON.stringify(lists, null, 2), "utf-8");
 }
 async function createCustomList(name, color, description) {
   const lists = await getLists();
@@ -1674,14 +2026,14 @@ function setupListRoutes(app) {
     }
   });
 }
-var import_promises4, import_path4, LISTS_FILE, DEFAULT_LISTS;
+var import_promises5, import_path6, LISTS_FILE, DEFAULT_LISTS;
 var init_lists = __esm({
   "src/server/lists.ts"() {
-    import_promises4 = __toESM(require("fs/promises"), 1);
-    import_path4 = __toESM(require("path"), 1);
+    import_promises5 = __toESM(require("fs/promises"), 1);
+    import_path6 = __toESM(require("path"), 1);
     init_whatsapp();
     init_memory();
-    LISTS_FILE = import_path4.default.join(process.cwd(), "data", "lists.json");
+    LISTS_FILE = import_path6.default.join(process.cwd(), "data", "lists.json");
     DEFAULT_LISTS = [
       {
         id: "new-customer",
@@ -1743,20 +2095,7 @@ var init_lists = __esm({
   }
 });
 
-// src/server/memory.ts
-var memory_exports = {};
-__export(memory_exports, {
-  VALID_CUSTOMER_STATUSES: () => VALID_CUSTOMER_STATUSES,
-  getCustomerList: () => getCustomerList,
-  getCustomers: () => getCustomers,
-  getCustomersFile: () => getCustomersFile,
-  normalizeCustomerStatus: () => normalizeCustomerStatus,
-  saveCustomer: () => saveCustomer,
-  saveCustomers: () => saveCustomers,
-  setupMemoryRoutes: () => setupMemoryRoutes,
-  updateCustomerMemory: () => updateCustomerMemory,
-  updateCustomerStatus: () => updateCustomerStatus
-});
+// src/server/services/customer-service.ts
 function normalizeCustomerStatus(rawStatus) {
   if (!rawStatus) return "New Customer";
   const s = rawStatus.trim().toLowerCase();
@@ -1769,274 +2108,16 @@ function normalizeCustomerStatus(rawStatus) {
   if (s === "important" || s === "vip") return "Important";
   return "New Customer";
 }
-async function getCustomers() {
-  try {
-    const data = await import_promises5.default.readFile(getCustomersFile(), "utf-8");
-    const parsed = JSON.parse(data);
-    for (const key of Object.keys(parsed)) {
-      if (parsed[key]) {
-        parsed[key].status = normalizeCustomerStatus(parsed[key].status);
-        if (!parsed[key].phoneNumber) parsed[key].phoneNumber = key;
-        if (!parsed[key].statusManagedBy) {
-          parsed[key].statusManagedBy = parsed[key].status === "Order Complete" ? "Manual" : "AI managed";
-        }
-        if (!parsed[key].factsStated) {
-          parsed[key].factsStated = {};
-        }
-      }
-    }
-    return parsed;
-  } catch (error) {
-    return {};
-  }
+function normalizeJid(jid) {
+  if (!jid) return "";
+  return jid.replace(/:\d+@/, "@").trim();
 }
-async function getCustomerList() {
-  const map = await getCustomers();
-  return Object.values(map);
-}
-async function saveCustomers(data) {
-  let record = {};
-  if (Array.isArray(data)) {
-    data.forEach((c) => {
-      if (c && c.phoneNumber) {
-        record[c.phoneNumber] = c;
-      }
-    });
-  } else {
-    record = data;
-  }
-  await import_promises5.default.mkdir(import_path5.default.dirname(getCustomersFile()), { recursive: true });
-  await import_promises5.default.writeFile(getCustomersFile(), JSON.stringify(record, null, 2), "utf-8");
-}
-async function saveCustomer(phoneNumber, data) {
-  const customers = await getCustomers();
-  const existing = customers[phoneNumber] || {
-    phoneNumber,
-    messages: [],
-    status: "New Customer",
-    factsStated: {},
-    createdAt: (/* @__PURE__ */ new Date()).toISOString()
-  };
-  const status = normalizeCustomerStatus(data.status || existing.status);
-  customers[phoneNumber] = {
-    ...existing,
-    ...data,
-    status,
-    phoneNumber
-  };
-  await saveCustomers(customers);
-  return customers[phoneNumber];
-}
-async function updateCustomerStatus(phoneNumber, newStatus, reason, changedBy = "system", paymentEvidence) {
-  const normalized = normalizeCustomerStatus(newStatus);
-  const customers = await getCustomers();
-  const customer = customers[phoneNumber] || {
-    phoneNumber,
-    messages: [],
-    status: "New Customer",
-    statusManagedBy: "AI managed",
-    createdAt: (/* @__PURE__ */ new Date()).toISOString()
-  };
-  const previousStatus = normalizeCustomerStatus(customer.status);
-  const isAi = changedBy === "ai" || changedBy === "AI managed";
-  const managedByLabel = isAi ? "AI managed" : "Manual";
-  if (isAi && normalized === "Order Complete") {
-    console.log(`[Memory] Rejected AI status transition to 'Order Complete' for ${phoneNumber}. Admin verification required.`);
-    return { success: false, status: previousStatus, previousStatus, customer };
-  }
-  if (isAi && previousStatus === "Order Complete") {
-    console.log(`[Memory] Preserved 'Order Complete' status for ${phoneNumber}. AI cannot downgrade verified order.`);
-    return { success: false, status: previousStatus, previousStatus, customer };
-  }
-  if (isAi && previousStatus === "Important" && (normalized === "New Customer" || normalized === "Interested")) {
-    return { success: false, status: previousStatus, previousStatus, customer };
-  }
-  const timestamp = (/* @__PURE__ */ new Date()).toISOString();
-  if (normalized === "Payment Done") {
-    customer.paymentClaimEvidence = {
-      claimedAt: paymentEvidence?.claimedAt || timestamp,
-      messageSnippet: paymentEvidence?.messageSnippet || reason || "Customer stated payment was sent",
-      verified: false
-    };
-  }
-  if (normalized === "Order Complete" && customer.paymentClaimEvidence) {
-    customer.paymentClaimEvidence.verified = true;
-    customer.paymentClaimEvidence.verifiedAt = timestamp;
-    customer.paymentClaimEvidence.verifiedBy = "admin";
-    customer.paymentClaimEvidence.note = reason || "Payment manually verified by admin";
-  }
-  if (previousStatus !== normalized || !customer.statusUpdatedAt) {
-    customer.previousStatus = previousStatus;
-    customer.status = normalized;
-    customer.statusUpdatedAt = timestamp;
-    customer.statusReason = reason || `Moved from ${previousStatus} to ${normalized}`;
-    customer.statusManagedBy = managedByLabel;
-    if (!customer.statusHistory) customer.statusHistory = [];
-    customer.statusHistory.push({
-      status: normalized,
-      fromStatus: previousStatus,
-      toStatus: normalized,
-      timestamp,
-      reason: reason || `Status moved to ${normalized}`,
-      changedBy: managedByLabel,
-      updatedBy: managedByLabel === "AI managed" ? "AI Agent" : "Admin"
-    });
-    if (customer.statusHistory.length > 30) {
-      customer.statusHistory = customer.statusHistory.slice(-30);
-    }
-    customers[phoneNumber] = customer;
-    await saveCustomers(customers);
-    console.log(`[Memory] Customer ${phoneNumber} status updated: [${previousStatus}] -> [${normalized}] (${managedByLabel})`);
-    Promise.resolve().then(() => (init_lists(), lists_exports)).then(({ syncCustomerToWhatsAppNativeLabel: syncCustomerToWhatsAppNativeLabel2 }) => {
-      syncCustomerToWhatsAppNativeLabel2(phoneNumber, normalized).catch(() => {
-      });
-    }).catch(() => {
-    });
-    return { success: true, status: normalized, previousStatus, customer };
-  }
-  return { success: true, status: previousStatus, previousStatus, customer };
-}
-async function updateCustomerMemory(phoneNumber, newMessage, role) {
-  const customers = await getCustomers();
-  const customer = customers[phoneNumber] || {
-    phoneNumber,
-    messages: [],
-    summary: "",
-    status: "New Customer",
-    statusManagedBy: "AI managed",
-    createdAt: (/* @__PURE__ */ new Date()).toISOString()
-  };
-  if (!customer.messages) customer.messages = [];
-  customer.messages.push({ role, content: newMessage, timestamp: (/* @__PURE__ */ new Date()).toISOString() });
-  if (customer.messages.length > 30) {
-    customer.messages = customer.messages.slice(-30);
-  }
-  customer.lastActivity = (/* @__PURE__ */ new Date()).toISOString();
-  if (!customer.status) {
-    customer.status = "New Customer";
-    customer.statusManagedBy = "AI managed";
-  }
-  customers[phoneNumber] = customer;
-  await saveCustomers(customers);
-  if (role === "agent") {
-    recordAiReply().catch((err) => console.error("[Memory] Error recording AI reply usage:", err));
-  } else if (role === "user") {
-    recordUserMessage().catch((err) => console.error("[Memory] Error recording user message usage:", err));
-  }
-}
-function setupMemoryRoutes(app) {
-  app.get("/api/customers", async (req, res) => {
-    try {
-      const customers = await getCustomerList();
-      res.json(customers);
-    } catch (error) {
-      res.status(500).json({ error: "Failed to load customers" });
-    }
-  });
-  app.put("/api/customers/:phoneNumber", async (req, res) => {
-    try {
-      const { phoneNumber } = req.params;
-      const customers = await getCustomers();
-      const existing = customers[phoneNumber] || {
-        phoneNumber,
-        messages: [],
-        status: "New Customer",
-        statusManagedBy: "Manual",
-        createdAt: (/* @__PURE__ */ new Date()).toISOString()
-      };
-      const prevStatus = existing.status || "New Customer";
-      const newStatus = req.body.status ? normalizeCustomerStatus(req.body.status) : prevStatus;
-      const isStatusChanged = newStatus !== prevStatus;
-      const timestamp = (/* @__PURE__ */ new Date()).toISOString();
-      const updatedCustomer = {
-        ...existing,
-        ...req.body,
-        status: newStatus,
-        phoneNumber,
-        lastActivity: timestamp
-      };
-      if (isStatusChanged) {
-        updatedCustomer.previousStatus = prevStatus;
-        updatedCustomer.statusUpdatedAt = timestamp;
-        updatedCustomer.statusReason = req.body.reason || "Manual update by admin";
-        updatedCustomer.statusManagedBy = "Manual";
-        if (!updatedCustomer.statusHistory) updatedCustomer.statusHistory = [];
-        updatedCustomer.statusHistory.push({
-          status: newStatus,
-          fromStatus: prevStatus,
-          toStatus: newStatus,
-          timestamp,
-          reason: req.body.reason || "Manual update by admin",
-          changedBy: "Manual",
-          updatedBy: "Admin"
-        });
-        if (newStatus === "Order Complete" && updatedCustomer.paymentClaimEvidence) {
-          updatedCustomer.paymentClaimEvidence.verified = true;
-          updatedCustomer.paymentClaimEvidence.verifiedAt = timestamp;
-          updatedCustomer.paymentClaimEvidence.verifiedBy = "admin";
-        }
-      }
-      customers[phoneNumber] = updatedCustomer;
-      await saveCustomers(customers);
-      res.json({ success: true, customer: updatedCustomer });
-    } catch (error) {
-      console.error("Failed to update customer:", error);
-      res.status(500).json({ error: "Failed to update customer" });
-    }
-  });
-  app.post("/api/customers/:phoneNumber/verify-order", async (req, res) => {
-    try {
-      const { phoneNumber } = req.params;
-      const result = await updateCustomerStatus(
-        phoneNumber,
-        "Order Complete",
-        req.body?.note || "Payment manually verified by admin. Order Complete.",
-        "Manual"
-      );
-      res.json({ success: true, ...result });
-    } catch (error) {
-      console.error("Failed to verify order:", error);
-      res.status(500).json({ error: "Failed to verify order" });
-    }
-  });
-  app.delete("/api/customers/:phoneNumber/messages", async (req, res) => {
-    try {
-      const { phoneNumber } = req.params;
-      const customers = await getCustomers();
-      if (customers[phoneNumber]) {
-        customers[phoneNumber].messages = [];
-        customers[phoneNumber].lastActivity = (/* @__PURE__ */ new Date()).toISOString();
-        await saveCustomers(customers);
-        return res.json({ success: true, message: "Chat history deleted successfully." });
-      }
-      res.status(404).json({ error: "Customer not found" });
-    } catch (error) {
-      console.error("Failed to delete chat history:", error);
-      res.status(500).json({ error: "Failed to delete chat history" });
-    }
-  });
-  app.delete("/api/customers/:phoneNumber", async (req, res) => {
-    try {
-      const { phoneNumber } = req.params;
-      const customers = await getCustomers();
-      if (customers[phoneNumber]) {
-        delete customers[phoneNumber];
-        await saveCustomers(customers);
-        return res.json({ success: true, message: "Customer deleted successfully." });
-      }
-      res.status(404).json({ error: "Customer not found" });
-    } catch (error) {
-      console.error("Failed to delete customer:", error);
-      res.status(500).json({ error: "Failed to delete customer" });
-    }
-  });
-}
-var import_promises5, import_path5, VALID_CUSTOMER_STATUSES, getCustomersFile;
-var init_memory = __esm({
-  "src/server/memory.ts"() {
-    import_promises5 = __toESM(require("fs/promises"), 1);
-    import_path5 = __toESM(require("path"), 1);
-    init_usage();
+var import_path7, VALID_CUSTOMER_STATUSES, customersFilePath, customerStore, CustomerService, customerService;
+var init_customer_service = __esm({
+  "src/server/services/customer-service.ts"() {
+    import_path7 = __toESM(require("path"), 1);
+    init_json_store();
+    init_memory_summarizer();
     VALID_CUSTOMER_STATUSES = [
       "New Customer",
       "Interested",
@@ -2046,259 +2127,295 @@ var init_memory = __esm({
       "Follow Up",
       "Important"
     ];
-    getCustomersFile = () => import_path5.default.join(process.cwd(), "data", "customers.json");
-  }
-});
-
-// src/server/tools.ts
-async function getTools(userId) {
-  try {
-    const data = await import_promises6.default.readFile(getToolsFile(), "utf-8");
-    const tools = JSON.parse(data);
-    if (!userId) {
-      return tools;
-    }
-    return tools.filter((t) => {
-      if (t.userId) {
-        return t.userId === userId;
+    customersFilePath = import_path7.default.join(process.cwd(), "data", "customers.json");
+    customerStore = new JsonStore(customersFilePath, {});
+    CustomerService = class {
+      constructor(store) {
+        this.store = store;
       }
-      return true;
-    });
-  } catch (error) {
-    return [];
-  }
-}
-async function saveTools(tools) {
-  await import_promises6.default.writeFile(getToolsFile(), JSON.stringify(tools, null, 2));
-  try {
-    const defaultsFile = import_path6.default.join(process.cwd(), "data_defaults", "tools.json");
-    await import_promises6.default.writeFile(defaultsFile, JSON.stringify(tools, null, 2));
-  } catch (err) {
-  }
-}
-function setupToolsRoutes(app) {
-  app.get("/api/tools", async (req, res) => {
-    try {
-      const user = await getUserByToken(req.headers.authorization);
-      const allTools = await getTools();
-      if (!user || user.role === "admin") {
-        return res.json(allTools);
-      }
-      const userTools = allTools.filter((t) => t.userId === user.id);
-      res.json(userTools);
-    } catch (error) {
-      res.status(500).json({ error: "Failed to load tools" });
-    }
-  });
-  app.post("/api/tools/upload-image", async (req, res) => {
-    try {
-      const user = await getUserByToken(req.headers.authorization);
-      const { filename, data, title, description, toolId } = req.body;
-      if (!filename || !data || !description) {
-        return res.status(400).json({ error: "Filename, image data, and description are required." });
-      }
-      const imagesDir = getToolImagesDir();
-      await import_promises6.default.mkdir(imagesDir, { recursive: true });
-      const ext = import_path6.default.extname(filename) || ".png";
-      const baseName = import_path6.default.basename(filename, ext).replace(/[^a-zA-Z0-9_-]/g, "_").toLowerCase();
-      const uniqueFilename = `${Date.now()}_${baseName}${ext}`;
-      const targetPath = import_path6.default.join(imagesDir, uniqueFilename);
-      const base64Data = data.includes("base64,") ? data.split("base64,")[1] : data;
-      const buffer = Buffer.from(base64Data, "base64");
-      await import_promises6.default.writeFile(targetPath, buffer);
-      const imageObject = {
-        id: `img_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-        filename: uniqueFilename,
-        filepath: import_path6.default.join("data", "tool-images", uniqueFilename),
-        url: `/tool-images/${uniqueFilename}`,
-        title: title?.trim() || "",
-        description: description.trim(),
-        toolId: toolId || void 0,
-        userId: user ? user.id : void 0,
-        createdAt: (/* @__PURE__ */ new Date()).toISOString()
-      };
-      if (toolId) {
-        let tools = await getTools();
-        const toolIdx = tools.findIndex((t) => t.id === toolId);
-        if (toolIdx !== -1) {
-          if (user && user.role !== "admin" && tools[toolIdx].userId && tools[toolIdx].userId !== user.id) {
-            return res.status(403).json({ error: "Not authorized to modify this tool" });
+      /**
+       * Loads existing customer record BEFORE generating a reply.
+       * Keyed permanently by normalized phone number/JID.
+       */
+      async getCustomerByJid(jid, userId = "usr_admin_badar", nameHint) {
+        const cleanJid = normalizeJid(jid);
+        const customers = await this.store.get();
+        let customer = customers[cleanJid];
+        if (!customer) {
+          customer = {
+            phoneNumber: cleanJid,
+            userId,
+            name: nameHint && !/^(customer|user|client)$/i.test(nameHint) ? nameHint : void 0,
+            status: "New Customer",
+            statusManagedBy: "AI managed",
+            createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+            lastActivity: (/* @__PURE__ */ new Date()).toISOString(),
+            messages: [],
+            factsStated: {},
+            memorySummary: {
+              customerName: nameHint && !/^(customer|user|client)$/i.test(nameHint) ? nameHint : void 0,
+              stage: "greeting",
+              interestedTools: [],
+              quotedPrices: {},
+              objectionsRaised: [],
+              keyFacts: [],
+              totalTurnsCount: 0,
+              summaryText: "New lead. No prior conversation."
+            }
+          };
+          customers[cleanJid] = customer;
+          await this.store.set(customers);
+        } else {
+          if (!customer.memorySummary) {
+            customer.memorySummary = extractStructuredMemory(void 0, customer.messages || [], customer.name || nameHint);
+            customer.summary = customer.memorySummary.summaryText;
+            customers[cleanJid] = customer;
+            await this.store.set(customers);
           }
-          tools[toolIdx].images = tools[toolIdx].images || [];
-          tools[toolIdx].images.push(imageObject);
-          await saveTools(tools);
+          if (nameHint && !customer.name && !/^(customer|user|client)$/i.test(nameHint)) {
+            customer.name = nameHint;
+            if (customer.memorySummary) customer.memorySummary.customerName = nameHint;
+            customers[cleanJid] = customer;
+            await this.store.set(customers);
+          }
         }
+        return customer;
       }
-      res.json({ success: true, image: imageObject });
-    } catch (error) {
-      console.error("Failed to upload tool image:", error);
-      res.status(500).json({ error: "Failed to upload image" });
-    }
-  });
-  app.post("/api/tools", async (req, res) => {
-    try {
-      const user = await getUserByToken(req.headers.authorization);
-      const { name, rawInfo, category, images } = req.body;
-      const prompt = `Convert the following raw tool information into a clean structured JSON format for our software sales catalog. 
-DO NOT OUTPUT ANY TEXT EXCEPT THE RAW JSON.
-Format required:
-{
-  "name": "${name}",
-  "category": "${category || "AI Tools"}",
-  "status": "active",
-  "description": "2-sentence summary of what the tool does and what problem it solves.",
-  "pricePkr": "1500",
-  "priceUsd": "6",
-  "aliases": ["${name.toLowerCase()}", "${name.toLowerCase().replace(/[^a-z0-9]/g, "")}"],
-  "keywords": ["search keyword 1", "problem solved", "feature keyword"],
-  "pricing": {
-    "min_negotiable_pkr": 1200,
-    "min_negotiable_usd": 5,
-    "negotiation_notes": "Can offer min_negotiable_pkr only for immediate same-day payment."
-  },
-  "objection_responses": {
-    "too_expensive": "Value reframe explaining daily cost or time saved.",
-    "need_time": "Offer a sample or trial test.",
-    "comparing_competitor": "Highlight local instant setup or distinct advantages."
-  },
-  "features": ["Feature 1", "Feature 2"],
-  "sales_points": ["Sales point 1", "Sales point 2"],
-  "use_cases": ["Use case 1", "Use case 2"],
-  "requirements": ["Requirement 1"],
-  "limitations": ["Limitation 1"],
-  "how_to_use": "Step by step usage instructions",
-  "faq": []
-}
-
-Raw Information:
-${rawInfo}
-`;
-      const aiResponse = await askAI(prompt);
-      let parsedTool;
-      try {
-        const cleanedResponse = aiResponse.replace(/```json/g, "").replace(/```/g, "").trim();
-        const jsonMatch = cleanedResponse.match(/\{[\s\S]*?\}/);
-        parsedTool = jsonMatch ? JSON.parse(jsonMatch[0]) : JSON.parse(cleanedResponse);
-      } catch (e) {
-        console.error("Failed to parse LLM structured tool:", aiResponse);
-        parsedTool = {
-          name,
-          category: category || "AI Tools",
-          status: "active",
-          description: rawInfo,
-          pricePkr: "1200",
-          priceUsd: "5",
-          aliases: [name.toLowerCase(), name.toLowerCase().replace(/[^a-z0-9]/g, "")],
-          keywords: [name.toLowerCase(), "software", "tool"],
-          pricing: {
-            min_negotiable_pkr: 1e3,
-            min_negotiable_usd: 4,
-            negotiation_notes: "Only discount for immediate same-day payment."
-          },
-          objection_responses: {
-            too_expensive: "Explain time saved and value vs expensive alternatives.",
-            need_time: "Offer a demo or sample test.",
-            comparing_competitor: "Highlight instant local setup and PKR payment."
-          },
-          features: [],
-          sales_points: [],
-          use_cases: [],
-          requirements: [],
-          limitations: [],
-          how_to_use: "",
-          faq: []
+      /**
+       * Retrieves conversation history with optional limit.
+       * Default: returns last N messages to eliminate prompt bloat.
+       */
+      async getConversationHistory(jid, userId = "usr_admin_badar", limit) {
+        const customer = await this.getCustomerByJid(jid, userId);
+        const messages = customer.messages || [];
+        if (typeof limit === "number" && limit > 0) {
+          return messages.slice(-limit);
+        }
+        return messages;
+      }
+      /**
+       * Retrieves compact long-term customer summary.
+       */
+      async getCustomerSummary(jid, userId = "usr_admin_badar") {
+        const customer = await this.getCustomerByJid(jid, userId);
+        if (!customer.memorySummary) {
+          customer.memorySummary = extractStructuredMemory(void 0, customer.messages || [], customer.name);
+        }
+        return customer.memorySummary;
+      }
+      /**
+       * Saves incoming customer message or outgoing agent message immediately after processing.
+       */
+      async saveMessage(jid, role, content, userId = "usr_admin_badar", metadata) {
+        const cleanJid = normalizeJid(jid);
+        const customers = await this.store.get();
+        let customer = customers[cleanJid];
+        if (!customer) {
+          customer = await this.getCustomerByJid(cleanJid, userId, metadata?.nameHint);
+          customers[cleanJid] = customer;
+        }
+        if (!customer.messages) customer.messages = [];
+        const timestamp = (/* @__PURE__ */ new Date()).toISOString();
+        customer.messages.push({
+          role,
+          content,
+          timestamp,
+          imageUrl: metadata?.imageUrl
+        });
+        customer.lastActivity = timestamp;
+        if (metadata?.nameHint && !customer.name && !/^(customer|user|client)$/i.test(metadata.nameHint)) {
+          customer.name = metadata.nameHint;
+        }
+        if (customer.messages.length > 40) {
+          customer.messages = customer.messages.slice(-40);
+        }
+        customer.memorySummary = extractStructuredMemory(customer.memorySummary, customer.messages, customer.name || metadata?.nameHint);
+        customer.summary = customer.memorySummary.summaryText;
+        customers[cleanJid] = customer;
+        await this.store.set(customers);
+        return customer;
+      }
+      /**
+       * Updates customer structured memory fields.
+       */
+      async updateCustomerMemory(jid, memoryData, userId = "usr_admin_badar") {
+        const cleanJid = normalizeJid(jid);
+        const customers = await this.store.get();
+        const customer = customers[cleanJid] || await this.getCustomerByJid(cleanJid, userId);
+        customer.memorySummary = {
+          ...customer.memorySummary || extractStructuredMemory(void 0, customer.messages || [], customer.name),
+          ...memoryData,
+          lastSummarizedAt: (/* @__PURE__ */ new Date()).toISOString()
         };
+        customer.summary = customer.memorySummary.summaryText;
+        customers[cleanJid] = customer;
+        await this.store.set(customers);
+        return customer;
       }
-      parsedTool.id = Date.now().toString();
-      parsedTool.userId = user ? user.id : "usr_admin_badar";
-      parsedTool.images = Array.isArray(images) ? images : [];
-      parsedTool.category = parsedTool.category || category || "AI Tools";
-      parsedTool.status = parsedTool.status || "active";
-      if (!Array.isArray(parsedTool.aliases) || parsedTool.aliases.length === 0) {
-        parsedTool.aliases = [name.toLowerCase(), name.toLowerCase().replace(/[^a-z0-9]/g, "")];
+      /**
+       * Updates customer sales state adhering to business logic:
+       * - AI can NEVER mark Order Complete without manual verification.
+       * - Preserves manual status overrides.
+       * - Tracks audit history.
+       */
+      async updateCustomerSalesState(jid, newStatus, reason, changedBy = "system", userId = "usr_admin_badar", paymentEvidence) {
+        const cleanJid = normalizeJid(jid);
+        const normalized = normalizeCustomerStatus(newStatus);
+        const customers = await this.store.get();
+        const customer = customers[cleanJid] || await this.getCustomerByJid(cleanJid, userId);
+        const previousStatus = normalizeCustomerStatus(customer.status);
+        const isAi = changedBy === "ai" || changedBy === "AI managed";
+        const managedByLabel = isAi ? "AI managed" : "Manual";
+        if (isAi && normalized === "Order Complete") {
+          return { success: false, status: previousStatus, previousStatus, customer };
+        }
+        if (isAi && previousStatus === "Order Complete") {
+          return { success: false, status: previousStatus, previousStatus, customer };
+        }
+        if (isAi && previousStatus === "Important" && (normalized === "New Customer" || normalized === "Interested")) {
+          return { success: false, status: previousStatus, previousStatus, customer };
+        }
+        const timestamp = (/* @__PURE__ */ new Date()).toISOString();
+        if (normalized === "Payment Done") {
+          customer.paymentClaimEvidence = {
+            claimedAt: paymentEvidence?.claimedAt || timestamp,
+            messageSnippet: paymentEvidence?.messageSnippet || reason || "Customer stated payment was sent",
+            verified: false
+          };
+        }
+        if (normalized === "Order Complete" && customer.paymentClaimEvidence) {
+          customer.paymentClaimEvidence.verified = true;
+          customer.paymentClaimEvidence.verifiedAt = timestamp;
+          customer.paymentClaimEvidence.verifiedBy = "admin";
+          customer.paymentClaimEvidence.note = reason || "Payment manually verified by admin";
+        }
+        if (previousStatus !== normalized || !customer.statusUpdatedAt) {
+          customer.previousStatus = previousStatus;
+          customer.status = normalized;
+          customer.statusUpdatedAt = timestamp;
+          customer.statusReason = reason || `Moved from ${previousStatus} to ${normalized}`;
+          customer.statusManagedBy = managedByLabel;
+          if (!customer.statusHistory) customer.statusHistory = [];
+          customer.statusHistory.push({
+            status: normalized,
+            fromStatus: previousStatus,
+            toStatus: normalized,
+            timestamp,
+            reason: reason || `Status moved to ${normalized}`,
+            changedBy: managedByLabel,
+            updatedBy: managedByLabel === "AI managed" ? "AI Agent" : "Admin"
+          });
+          if (customer.statusHistory.length > 30) {
+            customer.statusHistory = customer.statusHistory.slice(-30);
+          }
+          customers[cleanJid] = customer;
+          await this.store.set(customers);
+          Promise.resolve().then(() => (init_lists(), lists_exports)).then(({ syncCustomerToWhatsAppNativeLabel: syncCustomerToWhatsAppNativeLabel2 }) => {
+            syncCustomerToWhatsAppNativeLabel2(cleanJid, normalized).catch(() => {
+            });
+          }).catch(() => {
+          });
+          return { success: true, status: normalized, previousStatus, customer };
+        }
+        return { success: true, status: previousStatus, previousStatus, customer };
       }
-      if (!Array.isArray(parsedTool.keywords) || parsedTool.keywords.length === 0) {
-        parsedTool.keywords = [name.toLowerCase(), "software", "tool"];
+      /**
+       * Multi-tenant customer query.
+       */
+      async getCustomers(userId) {
+        const all = await this.store.get();
+        if (!userId || userId === "usr_admin_badar" || userId === "admin") {
+          return all;
+        }
+        const filtered = {};
+        for (const [key, cust] of Object.entries(all)) {
+          if (cust.userId === userId || !cust.userId) {
+            filtered[key] = cust;
+          }
+        }
+        return filtered;
       }
-      if (!parsedTool.pricing) {
-        const pkr = parseInt(parsedTool.pricePkr || "1200", 10);
-        parsedTool.pricing = {
-          min_negotiable_pkr: Math.round(pkr * 0.8),
-          min_negotiable_usd: 4,
-          negotiation_notes: "Can offer min_negotiable_pkr only for same-day payment."
-        };
+      async getCustomerList(userId) {
+        const map = await this.getCustomers(userId);
+        return Object.values(map);
       }
-      if (!parsedTool.objection_responses) {
-        parsedTool.objection_responses = {
-          too_expensive: "Highlight time saved and value vs expensive alternatives.",
-          need_time: "Offer a demo or sample test.",
-          comparing_competitor: "Highlight instant local setup and PKR payment."
-        };
+      async saveCustomers(data, userId) {
+        const record = {};
+        if (Array.isArray(data)) {
+          data.forEach((c) => {
+            if (c && c.phoneNumber) {
+              record[normalizeJid(c.phoneNumber)] = { ...c, phoneNumber: normalizeJid(c.phoneNumber) };
+            }
+          });
+        } else {
+          for (const [k, v] of Object.entries(data)) {
+            record[normalizeJid(k)] = { ...v, phoneNumber: normalizeJid(k) };
+          }
+        }
+        await this.store.set(record);
       }
-      const tools = await getTools();
-      tools.push(parsedTool);
-      await saveTools(tools);
-      res.json(parsedTool);
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ error: "Failed to add tool" });
-    }
-  });
-  app.put("/api/tools/:id", async (req, res) => {
-    try {
-      const user = await getUserByToken(req.headers.authorization);
-      const { id } = req.params;
-      const updatedData = req.body;
-      let tools = await getTools();
-      const index = tools.findIndex((t) => t.id === id);
-      if (index === -1) {
-        return res.status(404).json({ error: "Tool not found" });
+      async deleteCustomer(jid, userId) {
+        const cleanJid = normalizeJid(jid);
+        const customers = await this.store.get();
+        if (customers[cleanJid]) {
+          delete customers[cleanJid];
+          await this.store.set(customers);
+          return true;
+        }
+        return false;
       }
-      if (user && user.role !== "admin" && tools[index].userId && tools[index].userId !== user.id) {
-        return res.status(403).json({ error: "You can only edit your own tools." });
+      async deleteCustomerMessages(jid, userId) {
+        const cleanJid = normalizeJid(jid);
+        const customers = await this.store.get();
+        if (customers[cleanJid]) {
+          customers[cleanJid].messages = [];
+          if (customers[cleanJid].memorySummary) {
+            customers[cleanJid].memorySummary.totalTurnsCount = 0;
+          }
+          customers[cleanJid].lastActivity = (/* @__PURE__ */ new Date()).toISOString();
+          await this.store.set(customers);
+          return true;
+        }
+        return false;
       }
-      tools[index] = {
-        ...tools[index],
-        ...updatedData,
-        id,
-        // preserve ID
-        userId: tools[index].userId || (user ? user.id : "usr_admin_badar")
-      };
-      await saveTools(tools);
-      res.json({ success: true, tool: tools[index] });
-    } catch (error) {
-      console.error("Failed to update tool:", error);
-      res.status(500).json({ error: "Failed to update tool" });
-    }
-  });
-  app.delete("/api/tools/:id", async (req, res) => {
-    try {
-      const user = await getUserByToken(req.headers.authorization);
-      let tools = await getTools();
-      const existing = tools.find((t) => t.id === req.params.id);
-      if (!existing) {
-        return res.status(404).json({ error: "Tool not found" });
+      /**
+       * Automatic migration for existing customer data.
+       */
+      async migrateLegacyCustomers() {
+        const customers = await this.store.get();
+        let migratedCount = 0;
+        for (const [key, cust] of Object.entries(customers)) {
+          let changed = false;
+          if (!cust.userId) {
+            cust.userId = "usr_admin_badar";
+            changed = true;
+          }
+          if (!cust.status) {
+            cust.status = "New Customer";
+            changed = true;
+          }
+          if (!cust.memorySummary) {
+            cust.memorySummary = extractStructuredMemory(void 0, cust.messages || [], cust.name);
+            cust.summary = cust.memorySummary.summaryText;
+            changed = true;
+          }
+          if (!cust.factsStated) {
+            cust.factsStated = {};
+            changed = true;
+          }
+          if (changed) {
+            customers[key] = cust;
+            migratedCount++;
+          }
+        }
+        if (migratedCount > 0) {
+          await this.store.set(customers);
+          console.log(`[CustomerService] Migrated ${migratedCount} legacy customer records with structured memory.`);
+        }
+        return migratedCount;
       }
-      if (user && user.role !== "admin" && existing.userId && existing.userId !== user.id) {
-        return res.status(403).json({ error: "You can only delete your own tools." });
-      }
-      tools = tools.filter((t) => t.id !== req.params.id);
-      await saveTools(tools);
-      res.json({ success: true });
-    } catch (error) {
-      res.status(500).json({ error: "Failed to delete tool" });
-    }
-  });
-}
-var import_promises6, import_path6, getToolsFile, getToolImagesDir;
-var init_tools = __esm({
-  "src/server/tools.ts"() {
-    import_promises6 = __toESM(require("fs/promises"), 1);
-    import_path6 = __toESM(require("path"), 1);
-    init_ai();
-    init_auth();
-    getToolsFile = () => import_path6.default.join(process.cwd(), "data", "tools.json");
-    getToolImagesDir = () => import_path6.default.join(process.cwd(), "data", "tool-images");
+    };
+    customerService = new CustomerService(customerStore);
   }
 });
 
@@ -2912,22 +3029,263 @@ var init_tool_matcher = __esm({
   }
 });
 
+// src/server/services/tool-service.ts
+var import_path8, toolsFilePath, toolStore, ToolService, toolService;
+var init_tool_service = __esm({
+  "src/server/services/tool-service.ts"() {
+    import_path8 = __toESM(require("path"), 1);
+    init_json_store();
+    init_tool_matcher();
+    toolsFilePath = import_path8.default.join(process.cwd(), "data", "tools.json");
+    toolStore = new JsonStore(toolsFilePath, []);
+    ToolService = class {
+      constructor(store) {
+        this.store = store;
+      }
+      /**
+       * Retrieves tools belonging to the specified account.
+       * Admin or unspecified gets all catalog tools.
+       */
+      async getAccountTools(userId) {
+        const allTools = await this.store.get();
+        if (!Array.isArray(allTools)) return [];
+        if (!userId || userId === "usr_admin_badar" || userId === "admin") {
+          return allTools;
+        }
+        const userTools = allTools.filter((t) => t.userId === userId);
+        if (userTools.length > 0) {
+          return userTools;
+        }
+        return allTools.filter((t) => !t.userId || t.userId === "usr_admin_badar");
+      }
+      /**
+       * Fetches specific tool details for the account.
+       */
+      async getToolDetails(toolId, userId) {
+        const tools = await this.getAccountTools(userId);
+        return tools.find((t) => t.id === toolId) || null;
+      }
+      /**
+       * ZERO HARDCODING: Dynamically builds a compact, 1-line-per-tool overview from stored catalog.
+       */
+      async getAccountToolSummary(userId) {
+        const tools = await this.getAccountTools(userId);
+        const active = tools.filter((t) => t.status !== "inactive");
+        if (active.length === 0) {
+          return "No tools currently active in catalog.";
+        }
+        return active.map((t) => {
+          const price = t.pricePkr ? `Rs. ${t.pricePkr}/mo` : t.priceUsd ? `$${t.priceUsd}/mo` : "Available";
+          const briefDesc = (t.description || "").split(".")[0].trim();
+          return `- ${t.name}: ${briefDesc} (${price})`;
+        }).join("\n");
+      }
+      /**
+       * Searches and retrieves relevant tool(s) based on customer query.
+       * Searches ONLY within the account's active tools.
+       */
+      async searchRelevantTools(query, userId, history) {
+        const accountTools = await this.getAccountTools(userId);
+        const activeTools = accountTools.filter((t) => t.status !== "inactive");
+        return matchTool(query, activeTools, history, userId);
+      }
+      /**
+       * Saves or updates a tool in the catalog.
+       */
+      async saveTool(toolData, userId = "usr_admin_badar") {
+        const tools = await this.store.get();
+        const existingIndex = toolData.id ? tools.findIndex((t) => t.id === toolData.id) : -1;
+        let savedTool;
+        if (existingIndex >= 0) {
+          savedTool = {
+            ...tools[existingIndex],
+            ...toolData,
+            id: tools[existingIndex].id
+          };
+          tools[existingIndex] = savedTool;
+        } else {
+          savedTool = {
+            id: toolData.id || String(Date.now()),
+            name: toolData.name || "Untitled Tool",
+            userId,
+            status: "active",
+            category: toolData.category || "AI Tools",
+            description: toolData.description || "",
+            aliases: toolData.aliases || [],
+            keywords: toolData.keywords || [],
+            pricing: toolData.pricing || {},
+            pricePkr: toolData.pricePkr,
+            priceUsd: toolData.priceUsd,
+            objection_responses: toolData.objection_responses || {},
+            features: toolData.features || [],
+            sales_points: toolData.sales_points || [],
+            images: toolData.images || [],
+            ...toolData
+          };
+          tools.push(savedTool);
+        }
+        await this.store.set(tools);
+        try {
+          const defaultsStore = new JsonStore(import_path8.default.join(process.cwd(), "data_defaults", "tools.json"), []);
+          await defaultsStore.set(tools);
+        } catch {
+        }
+        return savedTool;
+      }
+      /**
+       * Deletes a tool from the catalog.
+       */
+      async deleteTool(toolId, userId) {
+        const tools = await this.store.get();
+        const filtered = tools.filter((t) => t.id !== toolId);
+        if (filtered.length !== tools.length) {
+          await this.store.set(filtered);
+          try {
+            const defaultsStore = new JsonStore(import_path8.default.join(process.cwd(), "data_defaults", "tools.json"), []);
+            await defaultsStore.set(filtered);
+          } catch {
+          }
+          return true;
+        }
+        return false;
+      }
+    };
+    toolService = new ToolService(toolStore);
+  }
+});
+
+// src/server/services/prompt-service.ts
+function synthesizeSalesPrompt(params) {
+  const {
+    customer,
+    matchedTools,
+    allAccountToolsSummary,
+    recentMessages,
+    latestCustomerText,
+    settings,
+    isUnknownProduct,
+    queryProduct,
+    agentRecentlyClaimedFixed
+  } = params;
+  const memory = customer.memorySummary;
+  const isReturningCustomer = Boolean(
+    customer.messages && customer.messages.length > 2 || memory && memory.totalTurnsCount && memory.totalTurnsCount > 1 || customer.status !== "New Customer"
+  );
+  const systemPrompt = `You are a real Pakistani WhatsApp sales representative for our software store.
+TONE: Casual Roman Urdu, warm, helpful, completely human. 1-3 short sentences.
+RULES:
+1. NEVER act like an automated bot or helpline (NEVER say "helpline me khushamdeed" or "customer support me welcome").
+2. CONTINUOUS CONVERSATION: If customer is returning or conversation is ongoing, DO NOT greet again or re-introduce yourself. Pick up the conversation naturally.
+3. STRICT SOURCE OF TRUTH: Only discuss products, features, and rates stored in our catalog. NEVER invent external tools (e.g. Canva, ElevenLabs, CapCut) or fabricate capabilities.
+4. ANTI-REPETITION: Do not repeat already stated points or identical pricing lines across consecutive replies.`;
+  const memoryLines = [];
+  memoryLines.push(`[CUSTOMER PROFILE & MEMORY]`);
+  if (customer.name || memory?.customerName) {
+    memoryLines.push(`Name: ${customer.name || memory?.customerName}`);
+  }
+  memoryLines.push(`Relationship: ${isReturningCustomer ? "Returning Customer (CONVERSATION IS ONGOING)" : "New Lead"}`);
+  if (memory?.stage) {
+    memoryLines.push(`Current Stage: ${memory.stage}`);
+  }
+  if (memory?.summaryText) {
+    memoryLines.push(`Previous Memory: ${memory.summaryText}`);
+  }
+  if (memory?.quotedPrices && Object.keys(memory.quotedPrices).length > 0) {
+    const quotes = Object.entries(memory.quotedPrices).map(([t, p]) => `${t}: ${p}`).join(", ");
+    memoryLines.push(`Previously Quoted Rates: ${quotes}`);
+  }
+  if (isReturningCustomer) {
+    memoryLines.push(`DIRECTIVE: Do NOT greet with "AOA" or "kya haal hain". Answer their message directly.`);
+  }
+  const toolLines = [];
+  let matchedToolName = void 0;
+  if (isUnknownProduct && queryProduct) {
+    toolLines.push(`[EXTERNAL PRODUCT INQUIRY: "${queryProduct}"]`);
+    toolLines.push(`We DO NOT sell or carry "${queryProduct}".`);
+    toolLines.push(`INSTRUCTION: Honestly state we don't have "${queryProduct}". Politely ask what workflow or problem they are looking to solve, without bashing the product.`);
+  } else if (matchedTools.length > 0) {
+    matchedToolName = matchedTools[0].name;
+    for (const t of matchedTools) {
+      toolLines.push(`=== MATCHED TOOL: ${t.name} ===`);
+      toolLines.push(`Description: ${t.description}`);
+      const minFloor = t.pricing?.min_negotiable_pkr || t.pricePkr || "N/A";
+      toolLines.push(`Regular Price: Rs. ${t.pricePkr || "N/A"}/mo | Min Negotiable Floor: Rs. ${minFloor}`);
+      if (t.pricing?.negotiation_notes) {
+        toolLines.push(`Negotiation Policy: ${t.pricing.negotiation_notes}`);
+      }
+      const candidateFacts = [...t.features || [], ...t.sales_points || []];
+      const statedFacts = customer.factsStated && customer.factsStated[t.id] || [];
+      const unstatedFacts = getUnstatedFacts(candidateFacts, statedFacts);
+      if (unstatedFacts.length > 0) {
+        toolLines.push(`Fresh Features to mention (pick 1 if needed):`);
+        unstatedFacts.slice(0, 3).forEach((f) => toolLines.push(`  - ${f}`));
+      }
+      if (t.objection_responses) {
+        if (latestCustomerText.match(/(?:mehnga|expensive|discount|kam)/i) && t.objection_responses.too_expensive) {
+          toolLines.push(`Objection Guide (Price): ${t.objection_responses.too_expensive}`);
+        } else if (latestCustomerText.match(/(?:soch|time|baad)/i) && t.objection_responses.need_time) {
+          toolLines.push(`Objection Guide (Needs Time): ${t.objection_responses.need_time}`);
+        }
+      }
+    }
+  } else {
+    toolLines.push(`[STORE CATALOG OVERVIEW]`);
+    toolLines.push(allAccountToolsSummary);
+    toolLines.push(`INSTRUCTION: Do NOT pitch or force any specific tool until the customer asks or explains what they need. Ask how you can help.`);
+  }
+  const isPaymentRelevant = latestCustomerText.match(/(?:pay|payment|jazzcash|easypaisa|bank|raast|account|bhejo|transfer|kese\s+loon)/i) || memory?.stage === "payment_pending";
+  const paymentLines = [];
+  if (isPaymentRelevant) {
+    const activePayments = (settings.paymentMethods || []).filter((p) => p.isActive !== false);
+    if (activePayments.length > 0) {
+      paymentLines.push(`[PAYMENT ACCOUNTS]`);
+      activePayments.forEach((p) => {
+        paymentLines.push(`- ${p.provider}: ${p.accountTitle} | Number: ${p.accountNumber}${p.bankName ? ` (${p.bankName})` : ""}`);
+      });
+    }
+  }
+  const turns = recentMessages.slice(-6).map((m) => {
+    const speaker = m.role === "user" ? customer.name || "Customer" : "You (Agent)";
+    return `${speaker}: ${m.content}`;
+  });
+  const negotiationGuard = agentRecentlyClaimedFixed ? `CONSISTENCY RULE: You recently stated rate is fixed. Do not immediately drop the price in this turn.` : "";
+  const promptParts = [
+    memoryLines.join("\n"),
+    toolLines.join("\n"),
+    paymentLines.length > 0 ? paymentLines.join("\n") : "",
+    negotiationGuard,
+    turns.length > 0 ? `[RECENT CONVERSATION TURNS]:
+${turns.join("\n")}` : "",
+    `CUSTOMER'S NEW MESSAGE(S): "${latestCustomerText}"`,
+    `Reply in natural Roman Urdu (1-3 sentences):`
+  ].filter(Boolean);
+  return {
+    prompt: promptParts.join("\n\n"),
+    systemPrompt,
+    matchedToolName
+  };
+}
+var init_prompt_service = __esm({
+  "src/server/services/prompt-service.ts"() {
+    init_tool_matcher();
+  }
+});
+
 // src/server/agent.ts
 function startAgent() {
-  console.log("[Agent] Ultra-Natural WhatsApp Conversation Engine initialized.");
+  console.log("[Agent] Persistent Multi-Tenant WhatsApp Sales Closer Engine initialized.");
 }
 async function queueMessage(phoneNumber, message, name, userId) {
   if (phoneNumber.includes("@newsletter") || phoneNumber.includes("@broadcast") || phoneNumber.includes("status@broadcast")) {
-    console.log(`[Agent:${userId || "default"}] Ignored message from channel/broadcast: ${phoneNumber}`);
     return;
   }
+  const cleanJid = normalizeJid(phoneNumber);
   const seq = ++globalSequenceCounter;
-  const queueKey = `${userId || "default"}:${phoneNumber}`;
-  console.log(`[Agent:${userId || "default"}] [Seq #${seq}] Queued message from ${phoneNumber} (${name || "Customer"}): "${message}"`);
+  const queueKey = `${userId || "default"}:${cleanJid}`;
   let state = customerQueues.get(queueKey);
   if (!state) {
     state = {
-      phoneNumber,
+      phoneNumber: cleanJid,
       userId,
       name,
       pendingMessages: [],
@@ -2973,249 +3331,57 @@ async function triggerCustomerProcessing(queueKey) {
     }
   }
 }
-async function handleCustomerMessageBatch(phoneNumber, batch, name, userId) {
+async function handleCustomerMessageBatch(phoneNumber, batch, name, userId = "usr_admin_badar") {
+  const cleanJid = normalizeJid(phoneNumber);
   const settings = await getSettings(userId);
   if (!settings.aiAgentEnabled) {
-    console.log(`[Agent:${userId || "default"}] AI Agent is disabled in settings. Skipping reply to ${phoneNumber}.`);
+    console.log(`[Agent:${userId}] AI Agent is disabled in settings. Skipping reply to ${cleanJid}.`);
     return;
   }
   const combinedUserText = batch.map((m) => m.text).filter(Boolean).join("\n");
   if (!combinedUserText) return;
-  console.log(`[Agent:${userId || "default"}] Processing incoming batch (${batch.length} msg(s)) for ${phoneNumber}:
+  console.log(`[Agent:${userId}] Processing incoming batch (${batch.length} msg(s)) for ${cleanJid}:
 "${combinedUserText}"`);
-  await updateCustomerMemory(phoneNumber, combinedUserText, "user");
+  await customerService.saveMessage(cleanJid, "user", combinedUserText, userId, { nameHint: name });
   await recordUserMessage();
   const quota = await checkAiReplyQuota();
   if (!quota.allowed) {
-    console.log(
-      `[Agent:${userId || "default"}] Monthly AI reply limit reached (${quota.usedThisMonth}/${quota.limit} replies used on ${quota.plan} plan). Skipping AI reply to ${phoneNumber}. Deleting customers does NOT reset this quota.`
-    );
+    console.log(`[Agent:${userId}] Monthly AI reply quota reached (${quota.usedThisMonth}/${quota.limit}). Skipping reply to ${cleanJid}.`);
     return;
   }
-  const response = await generateResponse(phoneNumber, combinedUserText, name, batch, userId);
+  const response = await generateResponse(cleanJid, combinedUserText, name, batch, userId);
   if (!response || response.textMessages.length === 0 && !response.imageToSend) {
     return;
   }
   const delaySec = settings.responseDelaySeconds || 1.4;
-  await sendResponse(phoneNumber, response.textMessages, response.imageToSend, delaySec, userId);
+  await sendResponse(cleanJid, response.textMessages, response.imageToSend, delaySec, userId);
+  const replyMemoryText = response.textMessages.join("\n\n") + (response.imageToSend ? `
+[Sent Image: ${response.imageToSend}]` : "");
+  await customerService.saveMessage(cleanJid, "agent", replyMemoryText, userId);
   await recordAiReply();
 }
-async function generateResponse(phoneNumber, latestCustomerText, name, batch, userId) {
+async function generateResponse(cleanJid, latestCustomerText, name, batch, userId = "usr_admin_badar") {
   const settings = await getSettings(userId);
-  const customers = await getCustomers();
-  const customer = customers[phoneNumber] || { phoneNumber, status: "New Customer", messages: [], factsStated: {} };
-  if (!customer.factsStated) customer.factsStated = {};
-  const tools = await getTools(userId);
-  const customerMessages = customer.messages || [];
-  const recentUserHistory = customerMessages.filter((m) => m.role === "user").slice(-3).map((m) => m.content);
-  const match = await matchTool(latestCustomerText, tools, recentUserHistory, userId);
-  let toolContext = "";
-  if (match.confidence === "none" && match.isUnknownProduct) {
-    toolContext = `Customer asked about external uncataloged product: "${match.queryProduct}". No catalog tool matched.`;
-  } else if (match.matched.length > 0) {
-    toolContext = match.matched.map((t) => {
-      const minFloor = t.pricing?.min_negotiable_pkr || t.pricePkr || "N/A";
-      let block = `=== MATCHED TOOL: ${t.name} ===
-Category: ${t.category || "AI Tools"}
-Status: ${t.status || "active"}
-Description: ${t.description || ""}`;
-      block += `
-Pricing & Negotiation Floor:`;
-      block += `
-  - List Price: Rs. ${t.pricePkr || "N/A"}/month ${t.priceUsd ? `($${t.priceUsd}/mo)` : ""}`;
-      block += `
-  - Minimum Negotiable Floor (DO NOT QUOTE BELOW THIS): Rs. ${minFloor}`;
-      if (t.pricing?.negotiation_notes) {
-        block += `
-  - Negotiation Rules: ${t.pricing.negotiation_notes}`;
-      }
-      const candidateFacts = [
-        ...t.features || [],
-        ...t.sales_points || [],
-        ...t.use_cases || []
-      ];
-      const statedFacts = customer.factsStated && customer.factsStated[t.id] || [];
-      const unstatedFacts = getUnstatedFacts(candidateFacts, statedFacts);
-      block += `
-
-[ANTI-REPETITION STATUS FOR THIS CUSTOMER]:`;
-      if (statedFacts.length > 0) {
-        block += `
-ALREADY STATED TO THIS CUSTOMER (DO NOT REPEAT VERBATIM):
-` + statedFacts.map((f) => `  - [ALREADY SAID]: ${f}`).join("\n");
-      } else {
-        block += `
-ALREADY STATED: None yet.`;
-      }
-      if (unstatedFacts.length > 0) {
-        block += `
-FRESH FACTS TO REVEAL (DRAW FROM THESE):` + unstatedFacts.map((f) => `
-  - [FRESH FACT]: ${f}`).join("");
-      } else {
-        block += `
-FRESH FACTS: All primary facts have been shared. Focus on answering their specific question or making the next step easy.`;
-      }
-      if (t.objection_responses && Object.keys(t.objection_responses).length > 0) {
-        block += `
-
-Objection Handling Playbook for ${t.name}:`;
-        if (t.objection_responses.too_expensive) block += `
-  - If customer says too expensive: ${t.objection_responses.too_expensive}`;
-        if (t.objection_responses.need_time) block += `
-  - If customer needs time: ${t.objection_responses.need_time}`;
-        if (t.objection_responses.comparing_competitor) block += `
-  - If customer compares with competitors: ${t.objection_responses.comparing_competitor}`;
-      }
-      if (t.images && Array.isArray(t.images) && t.images.length > 0) {
-        block += `
-
-Available Screenshots / UI Images:
-` + t.images.map((img) => `  - Image File: "${img.filepath || img.filename}" | Title: "${img.title || "Screenshot"}" | Description: "${img.description}"`).join("\n");
-      }
-      return block;
-    }).join("\n\n");
-  } else {
-    toolContext = `Available Software Catalog in Store:
-- VoiceDelta: AI voice generator with 3,600+ AI voices, ElevenLabs/OpenAI models, and voice cloning (Rs. 1,199/mo).
-- ClipShield: YouTube video downloader, AI hook finder, and 9-layer anti-copyright claim protection (Rs. 1,500/mo).
-
-CRITICAL DIRECTIVES WHEN NO SPECIFIC TOOL IS MATCHED (e.g. "Hi", "Salam", "Aoa"):
-1. GREETING ONLY: Greet casually and warmly in natural Roman Urdu (e.g. "Walaikum Assalam bhai! Kese hain aap? Jee batayein, kis cheez me help chahiye?").
-2. DO NOT ACT LIKE A BOT/HELPLINE: NEVER say "VoiceDelta helpline pe khushamdeed" or "customer support me welcome". Be a real human seller.
-3. DO NOT PUSH OR ASSUME ANY PRODUCT: Do NOT mention VoiceDelta or ClipShield on a pure greeting turn until the customer specifies what they want.
-4. STRICT CATALOG FIDELITY: NEVER offer, mention, or ask about tools we do not carry (DO NOT mention Canva Pro, ElevenLabs, CapCut, etc.).`;
-  }
-  const activePayments = (settings.paymentMethods || []).filter((p) => p.isActive !== false);
-  const paymentContext = activePayments.length > 0 ? activePayments.map(
-    (p) => `\u2022 ${p.provider}: ${p.accountTitle} | Number: ${p.accountNumber}${p.bankName ? ` (${p.bankName})` : ""}${p.iban ? ` | IBAN: ${p.iban}` : ""}${p.instructions ? ` - Note: ${p.instructions}` : ""}`
-  ).join("\n") + (settings.paymentInstructions ? `
-Payment Policy: ${settings.paymentInstructions}` : "") : "No manual bank accounts configured. Ask customer to contact admin.";
-  const messageHistory = customerMessages.slice(-20).map((m) => `${m.role === "user" ? name || "Customer" : "You (Agent)"}: ${m.content}`).join("\n");
-  const agentRecentlyClaimedFixed = customerMessages.filter((m) => m.role === "agent").slice(-2).some((m) => /(?:fixed|kam nahi|rate final|final price|discount nahi)/i.test(m.content));
-  const salesSkillInstructions = settings.salesSkillEnabled !== false ? `
-==================================================
-11. SALES CLOSER SKILL ENGINE \u2014 V2 PROTOCOL
-==================================================
-1. PERSONA:
-   - Casual Pakistani WhatsApp sales rep. Warm, direct, human, never robotic.
-   - 100% Roman Urdu ONLY. Never write in English, Hindi, or formal Urdu script.
-   - Vary sentence openers turn to turn. Do not start every message with the same line.
-2. TOOL IDENTIFICATION PROTOCOL:
-   - If a specific catalog tool matched: discuss ONLY that tool. Do not pivot to other tools unless asked.
-   - If no match found: be honest. Do NOT claim to carry it, do NOT invent details, and NEVER denigrate it.
-3. PROGRESSIVE DISCLOSURE & ANTI-REPETITION:
-   - Check ALREADY STATED facts. NEVER repeat those same feature lines verbatim.
-   - To reinforce value, draw from FRESH FACTS or address the new question directly.
-4. NEGOTIATION LADDER & HARD PRICE FLOORS:
-   - Step 1 (Anchor): State regular price confidently with value framing.
-   - Step 2 (Hold & Reframe): On pushback, reframe value from a fresh angle (daily cost, time saved, multi-engine access).
-   - Step 3 (Ask, don't fold): Ask what budget or setup works for them before conceding.
-   - Step 4 (Consistency): ${agentRecentlyClaimedFixed ? "You recently stated the rate is fixed. MAINTAIN CONSISTENCY. Do not immediately fold or drop the price in this message." : "Pick one stance and stay consistent within the conversation."}
-   - Step 5 (Conditional Concession): You may only concede down to the minimum floor in exchange for something concrete (e.g. 'Agar aap aaj payment confirm karte hain to Rs. X mein kar deta hoon'). Never give a discount for free!
-   - Step 6 (Absolute Floor): NEVER quote below the tool's minimum floor.
-` : `
-==================================================
-11. STANDARD DIRECT MODE
-==================================================
-Answer questions directly and helpfully based on the tool knowledge.
-`;
-  const unknownProductDirective = match.isUnknownProduct ? `
-==================================================
-CRITICAL DIRECTIVE: UNKNOWN / EXTERNAL PRODUCT INQUIRY
-==================================================
-The customer is inquiring about: "${match.queryProduct}".
-WE DO NOT SELL OR CARRY THIS PRODUCT!
-MANDATORY BEHAVIOR:
-1. HONEST BOUNDARY: State clearly and politely in casual Roman Urdu that we do not carry or sell ${match.queryProduct}.
-2. NO FALSE CLAIMS: Never say we have it, never invent fake prices or access.
-3. ZERO DENIGRATION: Do NOT criticize or insult ${match.queryProduct}. Never call it "bekar", "small", "fake", or "inferior".
-4. DIAGNOSTIC QUESTION: Ask one friendly diagnostic question about what workflow they are trying to accomplish (e.g. "Aap mainly kis kaam ke liye tool dekh rahe hain? Video editing, voiceover ya automation?").
-5. DO NOT FORCE-PIVOT: Only mention catalog tools if genuinely relevant to their workflow after understanding their goal.
-` : "";
-  const prompt = `You are a real, natural Pakistani WhatsApp salesperson helping a customer on WhatsApp.
-You MUST behave like a genuine human Pakistani sales representative, NOT like an AI chatbot, corporate helpdesk, or product brochure.
-
-==================================================
-1. LANGUAGE & RESPONSE STYLE (CRITICAL)
-==================================================
-- Language: Casual, friendly Roman Urdu mixed naturally with everyday English words (e.g. "han bhai", "acha", "jee", "theek", "bilkul", "scene ye hai", "koi issue nahi", "try krlo", "check kar lo", "bhej deta hun", "apko", "chahiye").
-- Natural English words: "plan", "tool", "link", "account", "payment", "voice", "voices", "video", "generation", "quality", "clone", "free", "pro", "unlimited", "setup", "screenshot", "interface", "features", "details".
-- Avoid formal Urdu (STRICTLY BAN phrases like "\u06C1\u0645 \u0622\u067E \u06A9\u06D2 \u0645\u0634\u06A9\u0648\u0631 \u06C1\u06CC\u06BA", "\u0622\u067E \u06A9\u0627 \u062E\u06CC\u0631 \u0645\u0642\u062F\u0645 \u06A9\u0631\u062A\u06D2 \u06C1\u06CC\u06BA", "\u0645\u0639\u0632\u0632 \u0635\u0627\u0631\u0641", "\u062A\u0634\u0631\u06CC\u0641 \u0644\u0627\u0626\u06CC\u06BA").
-- Avoid robotic AI phrases (STRICTLY BAN "As an AI model", "I am here to assist you with", "Here is a breakdown of our offerings:", "Feel free to ask further questions!").
-- Avoid marketing fluff & hype (STRICTLY BAN "revolutionary", "supercharge", "game-changer", "powerhouse", "all-in-one suite", "unbeatable deal").
-- Avoid emoji spam: Use at most 0\u20131 subtle emoji per message (e.g. \u{1F44D} or \u{1F447}). Never put 4-5 emojis in one line.
-- NEVER send huge monolithic paragraphs. Keep each message short, crisp, and conversational.
-- Message Count: Normally send 1\u20133 short messages. For genuine detail requests ("details?", "aur batao"), send maximum 3\u20134 short messages.
-- After providing enough relevant information, STOP and wait for the customer to reply.
-
-==================================================
-2. MESSAGE SPLITTING RULES
-==================================================
-Separate multi-message turns by placing "---MSG---" between them.
-
-==================================================
-3. OFFICIAL PAYMENT DETAILS & SCREENSHOTS
-==================================================
-If the customer asks how to pay or asks for payment accounts ("payment kahan karni hai", "account number do", "easypaisa/jazzcash hai?"):
-- Send the official payment details cleanly from OFFICIAL PAYMENT ACCOUNTS below.
-- Ask them to send the payment screenshot/receipt after transferring so access can be activated.
-
-==================================================
-4. SCREENSHOT / IMAGE INTELLIGENCE
-==================================================
-- Only attach an image if the customer explicitly asks to see the interface/screenshot/dashboard, OR if an image is directly requested.
-- To send an image, append [SEND_IMAGE: <filepath>] to your response.
-
-==================================================
-5. CUSTOMER STATUS AUTOMATION (MEMORY UPDATE)
-==================================================
-Current Customer Status: "${customer.status || "New Customer"}"
-If status should change based on clear evidence, append [SET_STATUS: <StatusName>]. Available statuses: "New Customer", "Interested", "Payment Pending", "Payment Done", "Follow Up", "Important".
-(CRITICAL: NEVER output "Order Complete").
-
-${salesSkillInstructions}
-
-${unknownProductDirective}
-
-${settings.systemPrompt ? `Additional Custom Admin Persona/Instructions:
-${settings.systemPrompt}
-` : ""}
-
-STORED TOOL KNOWLEDGE:
-${toolContext}
-
-OFFICIAL PAYMENT ACCOUNTS:
-${paymentContext}
-
-RECENT CHAT HISTORY:
-${messageHistory || "No previous messages with this customer."}
-
-CUSTOMER'S NEW MESSAGE(S):
-"${latestCustomerText}"
-
-==================================================
-MANDATORY FINAL DIRECTIVES:
-==================================================
-1. STRICT ROMAN URDU ONLY: Always reply in natural, casual Pakistani Roman Urdu.
-2. NO BULLET LISTS / NO BROCHURES: Write like a real person sending 1 to 3 short WhatsApp messages.
-3. ANTI-REPETITION: Do NOT repeat previously stated facts verbatim.
-4. HONESTY: Never claim to have tools not in the catalog.
-5. NEGOTIATION: Concessions must have a condition and never go below the minimum floor.
-
-Separate 1\u20133 short messages using "---MSG---". Provide your natural Roman Urdu reply below:`;
-  let systemInstruction = "You are a real Pakistani WhatsApp sales closer. Greet warmly and naturally as a human seller in Roman Urdu. Do NOT assume any tool yet, do NOT say 'helpline pe khushamdeed', and do NOT offer tools outside our catalog.";
-  if (match.isUnknownProduct) {
-    systemInstruction = `You are a real Pakistani WhatsApp sales representative. The customer asked about "${match.queryProduct}", which we DO NOT sell. Reply honestly in Roman Urdu that you do not carry it, do not criticize it, and ask 1 diagnostic question about what they want to achieve.`;
-  } else if (match.matched.length > 0) {
-    const names = match.matched.map((t) => t.name).join(", ");
-    systemInstruction = `You are a real Pakistani WhatsApp sales closer for ${names}. Reply strictly in 1 to 3 short conversational sentences (15 to 40 words total) in natural Roman Urdu. Never repeat already stated features.`;
-  } else {
-    systemInstruction = `You are a real Pakistani WhatsApp sales representative. No specific tool has been requested yet. Greet the customer warmly and naturally in Roman Urdu. Ask how you can help them today. DO NOT pretend to be an automated helpline or IVR bot (never say 'VoiceDelta helpline pe khushamdeed'). DO NOT assume a product. DO NOT offer Canva, ElevenLabs, or any tool not in our catalog.`;
-  }
-  console.log(`[Agent] Generating AI response for ${phoneNumber} (Matched: ${match.matched.map((t) => t.name).join(", ") || (match.isUnknownProduct ? `Unknown:${match.queryProduct}` : "None")})...`);
-  const rawReply = await askAI(prompt, systemInstruction, userId);
-  console.log(`[Agent] AI raw response for ${phoneNumber}:
-${rawReply}`);
+  const customer = await customerService.getCustomerByJid(cleanJid, userId, name);
+  const recentMessages = await customerService.getConversationHistory(cleanJid, userId, 8);
+  const accountTools = await toolService.getAccountTools(userId);
+  const catalogSummary = await toolService.getAccountToolSummary(userId);
+  const recentUserHistory = recentMessages.filter((m) => m.role === "user").slice(-3).map((m) => m.content);
+  const match = await toolService.searchRelevantTools(latestCustomerText, userId, recentUserHistory);
+  const agentRecentlyClaimedFixed = recentMessages.filter((m) => m.role === "agent").slice(-2).some((m) => /(?:fixed|kam nahi|rate final|final price|discount nahi)/i.test(m.content));
+  const { prompt, systemPrompt } = synthesizeSalesPrompt({
+    customer,
+    matchedTools: match.matched,
+    allAccountToolsSummary: catalogSummary,
+    recentMessages,
+    latestCustomerText,
+    settings,
+    isUnknownProduct: match.isUnknownProduct,
+    queryProduct: match.queryProduct,
+    agentRecentlyClaimedFixed
+  });
+  console.log(`[Agent:${userId}] Querying AI for ${cleanJid} (Matched: ${match.matched.map((t) => t.name).join(", ") || (match.isUnknownProduct ? `Unknown:${match.queryProduct}` : "CatalogOverview")})...`);
+  const rawReply = await askAI(prompt, systemPrompt, userId);
   let extractedAiStatus = null;
   let text = rawReply;
   const statusTagMatch = text.match(/\[(?:SET_STATUS|STATUS):\s*([^\]]+)\]/i);
@@ -3229,22 +3395,17 @@ ${rawReply}`);
     imageToSend = imageTagMatch[1].trim().replace(/^["']|["']$/g, "");
     text = text.replace(imageTagMatch[0], "").trim();
   }
-  await evaluateAndApplyCustomerStatus(phoneNumber, customer, latestCustomerText, extractedAiStatus);
+  await evaluateAndApplyCustomerStatus(cleanJid, customer, latestCustomerText, extractedAiStatus, userId);
   text = text.replace(/^(Agent|You|Assistant|Bot|Salesperson):\s*/gim, "").replace(/^["']|["']$/g, "").trim();
   if (match.matched.length > 0) {
-    let factsUpdated = false;
     for (const tool of match.matched) {
       const newlyStated = extractMentionedFacts(text, tool);
       if (newlyStated.length > 0) {
         recordStatedFacts(customer, tool.id, newlyStated);
-        factsUpdated = true;
       }
     }
-    if (factsUpdated) {
-      await saveCustomer(phoneNumber, { factsStated: customer.factsStated });
-    }
   }
-  text = clampPriceFloors(text, match.matched.length > 0 ? match.matched : tools);
+  text = clampPriceFloors(text, match.matched.length > 0 ? match.matched : accountTools);
   let messages = [];
   if (text.includes("---MSG---")) {
     messages = text.split("---MSG---").map((m) => m.trim()).filter((m) => m.length > 0);
@@ -3268,26 +3429,23 @@ ${rawReply}`);
     imageToSend
   };
 }
-async function sendResponse(phoneNumber, textMessages, imageToSend, delaySec, userId) {
-  const memoryText = textMessages.join("\n\n") + (imageToSend ? `
-[Sent Image: ${imageToSend}]` : "");
-  await updateCustomerMemory(phoneNumber, memoryText, "agent");
+async function sendResponse(cleanJid, textMessages, imageToSend, delaySec, userId) {
   for (let i = 0; i < textMessages.length; i++) {
     const msg = textMessages[i];
-    console.log(`[Agent:${userId || "default"}] Sending split message [${i + 1}/${textMessages.length}] to ${phoneNumber}: "${msg}"`);
-    await sendMessage(phoneNumber, msg, userId);
+    console.log(`[Agent:${userId || "default"}] Sending message [${i + 1}/${textMessages.length}] to ${cleanJid}: "${msg}"`);
+    await sendMessage(cleanJid, msg, userId);
     if (i < textMessages.length - 1) {
       const waitMs = Math.max(900, Math.min(2500, delaySec * 1e3));
       await new Promise((resolve) => setTimeout(resolve, waitMs));
     }
   }
   if (imageToSend) {
-    console.log(`[Agent:${userId || "default"}] Delivering tool screenshot to ${phoneNumber}: ${imageToSend}`);
+    console.log(`[Agent:${userId || "default"}] Delivering tool screenshot to ${cleanJid}: ${imageToSend}`);
     await new Promise((resolve) => setTimeout(resolve, 1e3));
-    await sendToolImage(phoneNumber, imageToSend, void 0, userId);
+    await sendToolImage(cleanJid, imageToSend, void 0, userId);
   }
 }
-async function evaluateAndApplyCustomerStatus(phoneNumber, customer, latestCustomerText, aiStatusTag) {
+async function evaluateAndApplyCustomerStatus(cleanJid, customer, latestCustomerText, aiStatusTag, userId = "usr_admin_badar") {
   try {
     const currentStatus = normalizeCustomerStatus(customer?.status);
     const textLower = latestCustomerText.toLowerCase();
@@ -3299,7 +3457,7 @@ async function evaluateAndApplyCustomerStatus(phoneNumber, customer, latestCusto
     const followUpRegex = /\b(kal message|baad me|busy hun|busy hoon|shaam ko|aglay hafte|kal baat|soch k|later|call back|contact later|phir batata|phir bataunga|abhi nahi)\b/i;
     if (paymentDoneRegex.test(textLower) || directPaidRegex.test(textLower)) {
       targetStatus = "Payment Done";
-      reason = "Customer stated payment was transferred / sent screenshot.";
+      reason = "Customer stated payment was transferred / sent receipt.";
     } else if (paymentPendingRegex.test(textLower)) {
       targetStatus = "Payment Pending";
       reason = "Customer requested payment accounts / expressed clear purchase intent.";
@@ -3313,32 +3471,18 @@ async function evaluateAndApplyCustomerStatus(phoneNumber, customer, latestCusto
       const toolInterestRegex = /\b(tool|price|cost|features|voice|voices|video|audio|clone|cloning|demo|rate|package|plan|kitne|chahiye|available|kese)\b/i;
       if (toolInterestRegex.test(textLower)) {
         targetStatus = "Interested";
-        reason = "New customer inquired about tool features, capabilities, or pricing.";
+        reason = "New customer inquired about tool features or pricing.";
       }
     }
-    if (targetStatus) {
-      if (targetStatus === "Order Complete") {
-        console.log(`[Agent] Rejected automated status transition to 'Order Complete' for ${phoneNumber}. Requires manual admin verification.`);
-        return;
-      }
-      if (currentStatus === "Order Complete") {
-        return;
-      }
-      if (currentStatus === "Important" && (targetStatus === "New Customer" || targetStatus === "Interested")) {
-        return;
-      }
-      if (currentStatus === "Payment Done" && targetStatus === "Interested") {
-        return;
-      }
-      if (targetStatus !== currentStatus) {
-        await updateCustomerStatus(
-          phoneNumber,
-          targetStatus,
-          reason,
-          "AI managed",
-          targetStatus === "Payment Done" ? { messageSnippet: latestCustomerText, claimedAt: (/* @__PURE__ */ new Date()).toISOString() } : void 0
-        );
-      }
+    if (targetStatus && targetStatus !== currentStatus) {
+      await customerService.updateCustomerSalesState(
+        cleanJid,
+        targetStatus,
+        reason,
+        "AI managed",
+        userId,
+        targetStatus === "Payment Done" ? { messageSnippet: latestCustomerText, claimedAt: (/* @__PURE__ */ new Date()).toISOString() } : void 0
+      );
     }
   } catch (err) {
     console.error("[Agent] Error evaluating customer status:", err);
@@ -3348,14 +3492,237 @@ var customerQueues, globalSequenceCounter;
 var init_agent = __esm({
   "src/server/agent.ts"() {
     init_ai();
-    init_memory();
-    init_tools();
+    init_customer_service();
+    init_tool_service();
+    init_prompt_service();
     init_settings();
     init_whatsapp();
     init_usage();
     init_tool_matcher();
     customerQueues = /* @__PURE__ */ new Map();
     globalSequenceCounter = 100;
+  }
+});
+
+// src/server/tools.ts
+async function getTools(userId) {
+  return toolService.getAccountTools(userId);
+}
+function setupToolsRoutes(app) {
+  app.get("/api/tools", async (req, res) => {
+    try {
+      const user = await getUserByToken(req.headers.authorization);
+      const allTools = await toolService.getAccountTools(user ? user.id : void 0);
+      if (!user || user.role === "admin") {
+        return res.json(allTools);
+      }
+      const userTools = allTools.filter((t) => t.userId === user.id || !t.userId);
+      res.json(userTools);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to load tools" });
+    }
+  });
+  app.post("/api/tools/upload-image", async (req, res) => {
+    try {
+      const user = await getUserByToken(req.headers.authorization);
+      const { filename, data, title, description, toolId } = req.body;
+      if (!filename || !data || !description) {
+        return res.status(400).json({ error: "Filename, image data, and description are required." });
+      }
+      const imagesDir = getToolImagesDir();
+      await import_promises6.default.mkdir(imagesDir, { recursive: true });
+      const ext = import_path9.default.extname(filename) || ".png";
+      const baseName = import_path9.default.basename(filename, ext).replace(/[^a-zA-Z0-9_-]/g, "_").toLowerCase();
+      const uniqueFilename = `${Date.now()}_${baseName}${ext}`;
+      const targetPath = import_path9.default.join(imagesDir, uniqueFilename);
+      const base64Data = data.includes("base64,") ? data.split("base64,")[1] : data;
+      const buffer = Buffer.from(base64Data, "base64");
+      await import_promises6.default.writeFile(targetPath, buffer);
+      const imageObject = {
+        id: `img_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        filename: uniqueFilename,
+        filepath: import_path9.default.join("data", "tool-images", uniqueFilename),
+        url: `/tool-images/${uniqueFilename}`,
+        title: title?.trim() || "",
+        description: description.trim(),
+        toolId: toolId || void 0,
+        userId: user ? user.id : void 0,
+        createdAt: (/* @__PURE__ */ new Date()).toISOString()
+      };
+      if (toolId) {
+        const tool = await toolService.getToolDetails(toolId, user?.id);
+        if (tool) {
+          if (user && user.role !== "admin" && tool.userId && tool.userId !== user.id) {
+            return res.status(403).json({ error: "Not authorized to modify this tool" });
+          }
+          tool.images = tool.images || [];
+          tool.images.push(imageObject);
+          await toolService.saveTool(tool, tool.userId || user?.id);
+        }
+      }
+      res.json({ success: true, image: imageObject });
+    } catch (error) {
+      console.error("Failed to upload tool image:", error);
+      res.status(500).json({ error: "Failed to upload image" });
+    }
+  });
+  app.post("/api/tools", async (req, res) => {
+    try {
+      const user = await getUserByToken(req.headers.authorization);
+      const { name, rawInfo, category, images } = req.body;
+      const prompt = `Convert the following raw tool information into a clean structured JSON format for our software sales catalog. 
+DO NOT OUTPUT ANY TEXT EXCEPT THE RAW JSON.
+Format required:
+{
+  "name": "${name}",
+  "category": "${category || "AI Tools"}",
+  "status": "active",
+  "description": "2-sentence summary of what the tool does and what problem it solves.",
+  "pricePkr": "1500",
+  "priceUsd": "6",
+  "aliases": ["${name.toLowerCase()}", "${name.toLowerCase().replace(/[^a-z0-9]/g, "")}"],
+  "keywords": ["search keyword 1", "problem solved", "feature keyword"],
+  "pricing": {
+    "min_negotiable_pkr": 1200,
+    "min_negotiable_usd": 5,
+    "negotiation_notes": "Can offer min_negotiable_pkr only for immediate same-day payment."
+  },
+  "objection_responses": {
+    "too_expensive": "Value reframe explaining daily cost or time saved.",
+    "need_time": "Offer a sample or trial test.",
+    "comparing_competitor": "Highlight local instant setup or distinct advantages."
+  },
+  "features": ["Feature 1", "Feature 2"],
+  "sales_points": ["Sales point 1", "Sales point 2"],
+  "use_cases": ["Use case 1", "Use case 2"],
+  "requirements": ["Requirement 1"],
+  "limitations": ["Limitation 1"],
+  "how_to_use": "Step by step usage instructions",
+  "faq": []
+}
+
+Raw Information:
+${rawInfo}
+`;
+      const aiResponse = await askAI(prompt, void 0, user?.id);
+      let parsedTool;
+      try {
+        const cleanedResponse = aiResponse.replace(/```json/g, "").replace(/```/g, "").trim();
+        const jsonMatch = cleanedResponse.match(/\{[\s\S]*?\}/);
+        parsedTool = jsonMatch ? JSON.parse(jsonMatch[0]) : JSON.parse(cleanedResponse);
+      } catch (e) {
+        console.error("Failed to parse LLM structured tool:", aiResponse);
+        parsedTool = {
+          name,
+          category: category || "AI Tools",
+          status: "active",
+          description: rawInfo,
+          pricePkr: "1200",
+          priceUsd: "5",
+          aliases: [name.toLowerCase(), name.toLowerCase().replace(/[^a-z0-9]/g, "")],
+          keywords: [name.toLowerCase(), "software", "tool"],
+          pricing: {
+            min_negotiable_pkr: 1e3,
+            min_negotiable_usd: 4,
+            negotiation_notes: "Only discount for immediate same-day payment."
+          },
+          objection_responses: {
+            too_expensive: "Explain time saved and value vs expensive alternatives.",
+            need_time: "Offer a demo or sample test.",
+            comparing_competitor: "Highlight instant local setup and PKR payment."
+          },
+          features: [],
+          sales_points: [],
+          use_cases: [],
+          requirements: [],
+          limitations: [],
+          how_to_use: "",
+          faq: []
+        };
+      }
+      parsedTool.id = Date.now().toString();
+      parsedTool.userId = user ? user.id : "usr_admin_badar";
+      parsedTool.images = Array.isArray(images) ? images : [];
+      parsedTool.category = parsedTool.category || category || "AI Tools";
+      parsedTool.status = parsedTool.status || "active";
+      if (!Array.isArray(parsedTool.aliases) || parsedTool.aliases.length === 0) {
+        parsedTool.aliases = [name.toLowerCase(), name.toLowerCase().replace(/[^a-z0-9]/g, "")];
+      }
+      if (!Array.isArray(parsedTool.keywords) || parsedTool.keywords.length === 0) {
+        parsedTool.keywords = [name.toLowerCase(), "software", "tool"];
+      }
+      if (!parsedTool.pricing) {
+        const pkr = parseInt(parsedTool.pricePkr || "1200", 10);
+        parsedTool.pricing = {
+          min_negotiable_pkr: Math.round(pkr * 0.8),
+          min_negotiable_usd: 4,
+          negotiation_notes: "Can offer min_negotiable_pkr only for same-day payment."
+        };
+      }
+      if (!parsedTool.objection_responses) {
+        parsedTool.objection_responses = {
+          too_expensive: "Highlight time saved and value vs expensive alternatives.",
+          need_time: "Offer a demo or sample test.",
+          comparing_competitor: "Highlight instant local setup and PKR payment."
+        };
+      }
+      const saved = await toolService.saveTool(parsedTool, parsedTool.userId);
+      res.json(saved);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: "Failed to add tool" });
+    }
+  });
+  app.put("/api/tools/:id", async (req, res) => {
+    try {
+      const user = await getUserByToken(req.headers.authorization);
+      const { id } = req.params;
+      const updatedData = req.body;
+      const existing = await toolService.getToolDetails(id, user?.id);
+      if (!existing) {
+        return res.status(404).json({ error: "Tool not found" });
+      }
+      if (user && user.role !== "admin" && existing.userId && existing.userId !== user.id) {
+        return res.status(403).json({ error: "You can only edit your own tools." });
+      }
+      const saved = await toolService.saveTool({
+        ...existing,
+        ...updatedData,
+        id,
+        userId: existing.userId || (user ? user.id : "usr_admin_badar")
+      }, existing.userId || user?.id);
+      res.json({ success: true, tool: saved });
+    } catch (error) {
+      console.error("Failed to update tool:", error);
+      res.status(500).json({ error: "Failed to update tool" });
+    }
+  });
+  app.delete("/api/tools/:id", async (req, res) => {
+    try {
+      const user = await getUserByToken(req.headers.authorization);
+      const existing = await toolService.getToolDetails(req.params.id, user?.id);
+      if (!existing) {
+        return res.status(404).json({ error: "Tool not found" });
+      }
+      if (user && user.role !== "admin" && existing.userId && existing.userId !== user.id) {
+        return res.status(403).json({ error: "You can only delete your own tools." });
+      }
+      await toolService.deleteTool(req.params.id, user?.id);
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete tool" });
+    }
+  });
+}
+var import_promises6, import_path9, getToolImagesDir;
+var init_tools = __esm({
+  "src/server/tools.ts"() {
+    import_promises6 = __toESM(require("fs/promises"), 1);
+    import_path9 = __toESM(require("path"), 1);
+    init_ai();
+    init_auth();
+    init_tool_service();
+    getToolImagesDir = () => import_path9.default.join(process.cwd(), "data", "tool-images");
   }
 });
 
@@ -4123,17 +4490,17 @@ function setupDeepgramRoutes(app) {
     }
   });
 }
-var import_promises7, import_path7, import_axios2, DATA_DIR, ACCOUNTS_FILE, CONFIG_FILE, LOGS_FILE, accountsCache, configCache, logsCache, roundRobinIndex, balanceRefreshTimer, DEFAULT_CONFIG;
+var import_promises7, import_path10, import_axios2, DATA_DIR, ACCOUNTS_FILE, CONFIG_FILE, LOGS_FILE, accountsCache, configCache, logsCache, roundRobinIndex, balanceRefreshTimer, DEFAULT_CONFIG;
 var init_deepgram = __esm({
   "src/server/deepgram.ts"() {
     import_promises7 = __toESM(require("fs/promises"), 1);
-    import_path7 = __toESM(require("path"), 1);
+    import_path10 = __toESM(require("path"), 1);
     import_axios2 = __toESM(require("axios"), 1);
     init_tools();
-    DATA_DIR = import_path7.default.join(process.cwd(), "data");
-    ACCOUNTS_FILE = import_path7.default.join(DATA_DIR, "deepgram_accounts.json");
-    CONFIG_FILE = import_path7.default.join(DATA_DIR, "deepgram_config.json");
-    LOGS_FILE = import_path7.default.join(DATA_DIR, "deepgram_logs.json");
+    DATA_DIR = import_path10.default.join(process.cwd(), "data");
+    ACCOUNTS_FILE = import_path10.default.join(DATA_DIR, "deepgram_accounts.json");
+    CONFIG_FILE = import_path10.default.join(DATA_DIR, "deepgram_config.json");
+    LOGS_FILE = import_path10.default.join(DATA_DIR, "deepgram_logs.json");
     accountsCache = null;
     configCache = null;
     logsCache = null;
@@ -4206,28 +4573,28 @@ function getUserWASession(userId) {
 }
 function getAuthDir(userId) {
   if (!userId || userId === "usr_admin_badar" || userId === "admin") {
-    return import_path8.default.join(process.cwd(), "data", "auth", "admin");
+    return import_path11.default.join(process.cwd(), "data", "auth", "admin");
   }
-  return import_path8.default.join(process.cwd(), "data", "auth", userId);
+  return import_path11.default.join(process.cwd(), "data", "auth", userId);
 }
 async function ensureAuthDir(userId) {
   const authDir = getAuthDir(userId);
   await import_promises8.default.mkdir(authDir, { recursive: true });
   if (userId === "usr_admin_badar" || userId === "admin") {
-    const legacyAuthDir = import_path8.default.join(process.cwd(), "data", "auth");
+    const legacyAuthDir = import_path11.default.join(process.cwd(), "data", "auth");
     try {
-      const legacyCreds = import_path8.default.join(legacyAuthDir, "creds.json");
+      const legacyCreds = import_path11.default.join(legacyAuthDir, "creds.json");
       await import_promises8.default.access(legacyCreds);
-      const targetCreds = import_path8.default.join(authDir, "creds.json");
+      const targetCreds = import_path11.default.join(authDir, "creds.json");
       try {
         await import_promises8.default.access(targetCreds);
       } catch {
         const files = await import_promises8.default.readdir(legacyAuthDir);
         for (const file of files) {
-          const srcFile = import_path8.default.join(legacyAuthDir, file);
+          const srcFile = import_path11.default.join(legacyAuthDir, file);
           const stat = await import_promises8.default.stat(srcFile);
           if (stat.isFile()) {
-            await import_promises8.default.copyFile(srcFile, import_path8.default.join(authDir, file));
+            await import_promises8.default.copyFile(srcFile, import_path11.default.join(authDir, file));
           }
         }
         console.log("[WhatsApp] Migrated legacy credentials to data/auth/admin");
@@ -4415,7 +4782,7 @@ async function sendToolImage(jid, imagePath, caption, userId) {
   }
   try {
     const formattedJid = jid.includes("@") ? jid : `${jid}@s.whatsapp.net`;
-    const fullPath = import_path8.default.isAbsolute(imagePath) ? imagePath : import_path8.default.join(process.cwd(), imagePath);
+    const fullPath = import_path11.default.isAbsolute(imagePath) ? imagePath : import_path11.default.join(process.cwd(), imagePath);
     try {
       await import_promises8.default.access(fullPath);
     } catch {
@@ -4423,7 +4790,7 @@ async function sendToolImage(jid, imagePath, caption, userId) {
       return false;
     }
     const imageBuffer = await import_promises8.default.readFile(fullPath);
-    console.log(`[WhatsApp:${userId || "default"}] Sending tool image (${import_path8.default.basename(fullPath)}) to ${formattedJid}`);
+    console.log(`[WhatsApp:${userId || "default"}] Sending tool image (${import_path11.default.basename(fullPath)}) to ${formattedJid}`);
     await targetSock.sendMessage(formattedJid, {
       image: imageBuffer,
       caption: caption || void 0
@@ -4587,7 +4954,7 @@ function setupWhatsAppRoutes(app) {
     res.json({ success: true });
   });
 }
-var import_baileys, import_pino, import_qrcode, import_promises8, import_path8, userSessions, sentMessageIds;
+var import_baileys, import_pino, import_qrcode, import_promises8, import_path11, userSessions, sentMessageIds;
 var init_whatsapp = __esm({
   "src/server/whatsapp.ts"() {
     import_baileys = require("@whiskeysockets/baileys");
@@ -4598,16 +4965,16 @@ var init_whatsapp = __esm({
     import_pino = __toESM(require("pino"), 1);
     import_qrcode = __toESM(require("qrcode"), 1);
     import_promises8 = __toESM(require("fs/promises"), 1);
-    import_path8 = __toESM(require("path"), 1);
+    import_path11 = __toESM(require("path"), 1);
     userSessions = /* @__PURE__ */ new Map();
     sentMessageIds = /* @__PURE__ */ new Set();
     setTimeout(async () => {
       try {
-        const authBaseDir = import_path8.default.join(process.cwd(), "data", "auth");
+        const authBaseDir = import_path11.default.join(process.cwd(), "data", "auth");
         await import_promises8.default.mkdir(authBaseDir, { recursive: true });
         try {
           const adminAuthDir = await ensureAuthDir("usr_admin_badar");
-          const creds = import_path8.default.join(adminAuthDir, "creds.json");
+          const creds = import_path11.default.join(adminAuthDir, "creds.json");
           await import_promises8.default.access(creds);
           console.log("[WhatsApp] Admin session found. Auto-reconnecting admin WhatsApp...");
           await connectToWhatsApp("usr_admin_badar", false);
@@ -4616,7 +4983,7 @@ var init_whatsapp = __esm({
         const entries = await import_promises8.default.readdir(authBaseDir, { withFileTypes: true });
         for (const entry of entries) {
           if (entry.isDirectory() && entry.name !== "admin") {
-            const userCreds = import_path8.default.join(authBaseDir, entry.name, "creds.json");
+            const userCreds = import_path11.default.join(authBaseDir, entry.name, "creds.json");
             try {
               await import_promises8.default.access(userCreds);
               console.log(`[WhatsApp] Existing session found for user ${entry.name}. Auto-reconnecting...`);
@@ -4636,7 +5003,7 @@ var init_whatsapp = __esm({
 var import_dotenv = __toESM(require("dotenv"), 1);
 var import_express = __toESM(require("express"), 1);
 var import_cors = __toESM(require("cors"), 1);
-var import_path11 = __toESM(require("path"), 1);
+var import_path14 = __toESM(require("path"), 1);
 var import_vite = require("vite");
 var import_promises11 = __toESM(require("fs/promises"), 1);
 init_whatsapp();
@@ -4646,11 +5013,11 @@ init_settings();
 
 // src/server/campaign.ts
 var import_promises9 = __toESM(require("fs/promises"), 1);
-var import_path9 = __toESM(require("path"), 1);
+var import_path12 = __toESM(require("path"), 1);
 init_whatsapp();
 init_ai();
 init_tools();
-var CAMPAIGN_FILE = import_path9.default.join(process.cwd(), "data", "campaign.json");
+var CAMPAIGN_FILE = import_path12.default.join(process.cwd(), "data", "campaign.json");
 var campaignState = {
   id: "camp_" + Date.now(),
   name: "Targeted Outreach Campaign",
@@ -4704,7 +5071,7 @@ async function loadCampaignState() {
 async function saveCampaignState() {
   campaignState.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
   try {
-    await import_promises9.default.mkdir(import_path9.default.dirname(CAMPAIGN_FILE), { recursive: true });
+    await import_promises9.default.mkdir(import_path12.default.dirname(CAMPAIGN_FILE), { recursive: true });
     await import_promises9.default.writeFile(CAMPAIGN_FILE, JSON.stringify(campaignState, null, 2));
   } catch (error) {
     console.error("[Campaign] Failed to save campaign state:", error);
@@ -5064,13 +5431,13 @@ init_usage();
 
 // src/server/deployment.ts
 var import_promises10 = __toESM(require("fs/promises"), 1);
-var import_path10 = __toESM(require("path"), 1);
+var import_path13 = __toESM(require("path"), 1);
 var import_child_process = require("child_process");
 var import_util = require("util");
 var import_axios3 = __toESM(require("axios"), 1);
 init_auth();
 var execAsync = (0, import_util.promisify)(import_child_process.exec);
-var CONFIG_FILE2 = import_path10.default.join(process.cwd(), "data", "github_config.json");
+var CONFIG_FILE2 = import_path13.default.join(process.cwd(), "data", "github_config.json");
 var DEFAULT_CONFIG2 = {
   username: "badarbukharidev-alt",
   repo: "Whatsapp-Sales-Agent",
@@ -5195,8 +5562,8 @@ async function deployLatestCommit() {
     if (pullOut) logs.push(pullOut.trim());
     logs.push(`[4/5] Synchronizing production HTML & assets...`);
     try {
-      const rootIndex = import_path10.default.join(process.cwd(), "index.html");
-      const distIndex = import_path10.default.join(process.cwd(), "dist", "index.html");
+      const rootIndex = import_path13.default.join(process.cwd(), "index.html");
+      const distIndex = import_path13.default.join(process.cwd(), "dist", "index.html");
       await import_promises10.default.copyFile(distIndex, rootIndex);
       logs.push("Synchronized root index.html with dist/index.html");
     } catch (e) {
@@ -5204,9 +5571,9 @@ async function deployLatestCommit() {
     }
     logs.push(`[5/5] Reloading application server...`);
     try {
-      const tmpDir = import_path10.default.join(process.cwd(), "tmp");
+      const tmpDir = import_path13.default.join(process.cwd(), "tmp");
       await import_promises10.default.mkdir(tmpDir, { recursive: true });
-      await import_promises10.default.writeFile(import_path10.default.join(tmpDir, "restart.txt"), Date.now().toString());
+      await import_promises10.default.writeFile(import_path13.default.join(tmpDir, "restart.txt"), Date.now().toString());
       logs.push("Touched tmp/restart.txt - Phusion Passenger application reloaded.");
     } catch (e) {
       logs.push(`[Info] Restart trigger note: ${e.message}`);
@@ -5267,16 +5634,16 @@ async function rollbackToCommit(commitSha) {
     if (coErr) logs.push(coErr.trim());
     logs.push(`[3/4] Synchronizing production HTML...`);
     try {
-      const rootIndex = import_path10.default.join(process.cwd(), "index.html");
-      const distIndex = import_path10.default.join(process.cwd(), "dist", "index.html");
+      const rootIndex = import_path13.default.join(process.cwd(), "index.html");
+      const distIndex = import_path13.default.join(process.cwd(), "dist", "index.html");
       await import_promises10.default.copyFile(distIndex, rootIndex);
     } catch {
     }
     logs.push(`[4/4] Reloading application server...`);
     try {
-      const tmpDir = import_path10.default.join(process.cwd(), "tmp");
+      const tmpDir = import_path13.default.join(process.cwd(), "tmp");
       await import_promises10.default.mkdir(tmpDir, { recursive: true });
-      await import_promises10.default.writeFile(import_path10.default.join(tmpDir, "restart.txt"), Date.now().toString());
+      await import_promises10.default.writeFile(import_path13.default.join(tmpDir, "restart.txt"), Date.now().toString());
     } catch {
     }
     const { stdout: headOut } = await execAsync("git rev-parse HEAD");
@@ -5394,19 +5761,20 @@ function setupDeploymentRoutes(app) {
 
 // server.ts
 init_agent();
+init_customer_service();
 import_dotenv.default.config();
 async function initializeDataDirs() {
-  const dataDir = import_path11.default.join(process.cwd(), "data");
-  const defaultsDir = import_path11.default.join(process.cwd(), "data_defaults");
-  const toolImagesDir = import_path11.default.join(dataDir, "tool-images");
+  const dataDir = import_path14.default.join(process.cwd(), "data");
+  const defaultsDir = import_path14.default.join(process.cwd(), "data_defaults");
+  const toolImagesDir = import_path14.default.join(dataDir, "tool-images");
   try {
     await import_promises11.default.mkdir(dataDir, { recursive: true });
     await import_promises11.default.mkdir(toolImagesDir, { recursive: true });
     try {
       const defaultFiles = await import_promises11.default.readdir(defaultsDir);
       for (const file of defaultFiles) {
-        const src = import_path11.default.join(defaultsDir, file);
-        const dest = import_path11.default.join(dataDir, file);
+        const src = import_path14.default.join(defaultsDir, file);
+        const dest = import_path14.default.join(dataDir, file);
         const stat = await import_promises11.default.stat(src);
         if (stat.isFile()) {
           try {
@@ -5420,8 +5788,8 @@ async function initializeDataDirs() {
     } catch {
     }
     try {
-      const defaultToolsPath = import_path11.default.join(defaultsDir, "tools.json");
-      const activeToolsPath = import_path11.default.join(dataDir, "tools.json");
+      const defaultToolsPath = import_path14.default.join(defaultsDir, "tools.json");
+      const activeToolsPath = import_path14.default.join(dataDir, "tools.json");
       const defaultToolsRaw = await import_promises11.default.readFile(defaultToolsPath, "utf-8").catch(() => null);
       if (defaultToolsRaw) {
         const defaultTools = JSON.parse(defaultToolsRaw);
@@ -5487,9 +5855,14 @@ async function initializeDataDirs() {
     }
     await getUsers();
     await getLists();
+    try {
+      await customerService.migrateLegacyCustomers();
+    } catch (migErr) {
+      console.warn("[Init] Legacy customer migration note:", migErr);
+    }
     const files = ["customers.json", "tools.json", "settings.json"];
     for (const file of files) {
-      const filePath = import_path11.default.join(dataDir, file);
+      const filePath = import_path14.default.join(dataDir, file);
       try {
         await import_promises11.default.access(filePath);
       } catch {
@@ -5507,7 +5880,7 @@ async function startServer() {
   const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001;
   app.use((0, import_cors.default)());
   app.use(import_express.default.json({ limit: "50mb" }));
-  app.use("/tool-images", import_express.default.static(import_path11.default.join(process.cwd(), "data", "tool-images")));
+  app.use("/tool-images", import_express.default.static(import_path14.default.join(process.cwd(), "data", "tool-images")));
   setupAuthRoutes(app);
   setupWhatsAppRoutes(app);
   setupMemoryRoutes(app);
@@ -5536,7 +5909,7 @@ async function startServer() {
       if (req.method !== "GET") return next();
       const url = req.originalUrl;
       try {
-        let template = await import_promises11.default.readFile(import_path11.default.resolve(process.cwd(), "index.html"), "utf-8");
+        let template = await import_promises11.default.readFile(import_path14.default.resolve(process.cwd(), "index.html"), "utf-8");
         template = await vite.transformIndexHtml(url, template);
         res.status(200).set({ "Content-Type": "text/html" }).end(template);
       } catch (e) {
@@ -5545,10 +5918,10 @@ async function startServer() {
       }
     });
   } else {
-    const distPath = import_path11.default.join(process.cwd(), "dist");
+    const distPath = import_path14.default.join(process.cwd(), "dist");
     app.use(import_express.default.static(distPath));
     app.get("*", (req, res) => {
-      res.sendFile(import_path11.default.join(distPath, "index.html"));
+      res.sendFile(import_path14.default.join(distPath, "index.html"));
     });
   }
   const rawPort = process.env.PORT;

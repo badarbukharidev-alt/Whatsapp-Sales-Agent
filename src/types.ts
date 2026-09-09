@@ -71,6 +71,7 @@ export interface ToolObjectionResponses {
 export interface Tool {
   id: string;
   name: string;
+  userId?: string;
   aliases?: string[];
   keywords?: string[];
   category?: string;
@@ -98,6 +99,21 @@ export interface ChatMessage {
   content: string;
   timestamp: string;
   imageUrl?: string;
+}
+
+export interface CustomerMemorySummary {
+  lastSummarizedAt?: string;
+  summaryText?: string;
+  customerName?: string;
+  preferredLanguage?: string;
+  interestedTools?: string[];
+  quotedPrices?: Record<string, string>;
+  objectionsRaised?: string[];
+  objectionsResolved?: string[];
+  keyFacts?: string[];
+  stage?: "greeting" | "discovery" | "negotiation" | "payment_pending" | "paid" | "support" | string;
+  lastToolDiscussed?: string;
+  totalTurnsCount?: number;
 }
 
 export interface CustomerList {
@@ -131,10 +147,12 @@ export type CustomerStatus =
 
 export interface Customer {
   phoneNumber: string;
+  userId?: string;
   name?: string;
   status?: CustomerStatus;
   listIds?: string[];
   summary?: string;
+  memorySummary?: CustomerMemorySummary;
   notes?: string;
   interestedTools?: string[];
   importantFacts?: string[];
