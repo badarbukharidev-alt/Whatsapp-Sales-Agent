@@ -867,6 +867,44 @@ function setupSettingsRoutes(app) {
       res.status(500).json({ error: "Failed to save settings" });
     }
   });
+  app.post("/api/ai/test", async (req, res) => {
+    try {
+      const user = await getUserByToken(req.headers.authorization);
+      const prompt = req.body?.prompt || "Test Pakistani Roman Urdu greeting";
+      const reply = await askAI(prompt, "You are a helpful Pakistani WhatsApp sales closer. Reply in 1 short Roman Urdu sentence.", user?.id);
+      res.json({ success: true, reply });
+    } catch (error) {
+      res.status(500).json({ error: error.message || "AI test failed" });
+    }
+  });
+  app.post("/api/ai/test-key", async (req, res) => {
+    try {
+      const { provider, apiKey } = req.body;
+      if (!apiKey || typeof apiKey !== "string" || !apiKey.trim()) {
+        return res.status(400).json({ success: false, error: "Please enter a valid API key to test." });
+      }
+      const cleanKey = apiKey.trim();
+      const testPrompt = "Test Pakistani Roman Urdu greeting";
+      const testSysPrompt = "You are a Pakistani WhatsApp sales agent. Reply with 'All systems operational!' in Roman Urdu.";
+      let result = { success: false, text: "", provider };
+      if (provider === "gemini") {
+        result = await callOfficialGemini(cleanKey, testPrompt, testSysPrompt);
+      } else if (provider === "groq") {
+        result = await callGroq(cleanKey, testPrompt, testSysPrompt);
+      } else if (provider === "openai") {
+        result = await callOpenAI(cleanKey, testPrompt, testSysPrompt);
+      } else {
+        return res.status(400).json({ success: false, error: "Unknown provider" });
+      }
+      if (result.success && result.text) {
+        return res.json({ success: true, reply: result.text, provider: result.provider });
+      } else {
+        return res.status(400).json({ success: false, error: result.error || "Failed to generate reply with this key." });
+      }
+    } catch (error) {
+      res.status(500).json({ success: false, error: error.message || "API key test failed" });
+    }
+  });
   app.get("/api/skill", async (req, res) => {
     try {
       const user = await getUserByToken(req.headers.authorization);
@@ -908,6 +946,7 @@ var init_settings = __esm({
   "src/server/settings.ts"() {
     import_promises2 = __toESM(require("fs/promises"), 1);
     import_path2 = __toESM(require("path"), 1);
+    init_ai();
     init_auth();
     getSettingsFile = (userId) => {
       if (!userId || userId === "usr_admin_badar" || userId === "admin") {
@@ -956,135 +995,262 @@ var init_settings = __esm({
 });
 
 // src/server/ai.ts
-function getGeminiClient() {
-  if (!geminiClient && process.env.GEMINI_API_KEY) {
+async function callOfficialGemini(apiKey, prompt, systemPrompt) {
+  const cleanKey = apiKey.trim();
+  if (!cleanKey) return { success: false, text: "", provider: "Gemini", error: "Missing API Key" };
+  const candidateModels = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-lite"];
+  try {
+    const client = new import_genai.GoogleGenAI({ apiKey: cleanKey });
+    for (const model of candidateModels) {
+      try {
+        console.log(`[AI] Requesting Gemini SDK (model: ${model})...`);
+        const response = await client.models.generateContent({
+          model,
+          contents: prompt,
+          config: {
+            systemInstruction: systemPrompt || void 0,
+            temperature: 0.7
+          }
+        });
+        const text = response.text?.trim();
+        if (text && text.length > 0) {
+          console.log(`[AI] Gemini SDK success via ${model} (${text.length} chars)`);
+          return { success: true, text, provider: `Gemini (${model})` };
+        }
+      } catch (mErr) {
+        console.warn(`[AI] Gemini SDK attempt with ${model} failed:`, mErr?.message || mErr);
+      }
+    }
+  } catch (sdkErr) {
+    console.warn("[AI] GoogleGenAI SDK init failed:", sdkErr?.message || sdkErr);
+  }
+  for (const model of candidateModels) {
     try {
-      geminiClient = new import_genai.GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-    } catch (e) {
-      console.warn("[AI] Failed to init GoogleGenAI SDK:", e);
+      console.log(`[AI] Requesting Gemini REST API (model: ${model})...`);
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(cleanKey)}`;
+      const payload = {
+        contents: [
+          {
+            role: "user",
+            parts: [{ text: prompt }]
+          }
+        ],
+        generationConfig: {
+          temperature: 0.7
+        }
+      };
+      if (systemPrompt) {
+        payload.systemInstruction = {
+          parts: [{ text: systemPrompt }]
+        };
+      }
+      const resp = await import_axios.default.post(url, payload, {
+        headers: { "Content-Type": "application/json" },
+        timeout: 2e4
+      });
+      const text = resp.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+      if (text && text.length > 0) {
+        console.log(`[AI] Gemini REST success via ${model} (${text.length} chars)`);
+        return { success: true, text, provider: `Gemini REST (${model})` };
+      }
+    } catch (restErr) {
+      const errMsg = restErr.response?.data?.error?.message || restErr.message;
+      console.warn(`[AI] Gemini REST attempt with ${model} failed:`, errMsg);
     }
   }
-  return geminiClient;
+  return { success: false, text: "", provider: "Gemini", error: "All Gemini models failed" };
 }
-async function callOfficialGemini(prompt, systemPrompt) {
-  const client = getGeminiClient();
-  if (!client) return { success: false, text: "", provider: "Gemini (Official)" };
-  try {
-    console.log("[AI] Requesting Official Gemini API...");
-    const response = await client.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: prompt,
-      config: {
-        systemInstruction: systemPrompt || void 0,
-        temperature: 0.7
+async function callGroq(apiKey, prompt, systemPrompt) {
+  const cleanKey = apiKey.trim();
+  if (!cleanKey) return { success: false, text: "", provider: "Groq", error: "Missing API Key" };
+  const candidateModels = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768", "gemma2-9b-it"];
+  for (const model of candidateModels) {
+    try {
+      console.log(`[AI] Requesting Groq Cloud API (${model})...`);
+      const messages = [];
+      if (systemPrompt) {
+        messages.push({ role: "system", content: systemPrompt });
       }
-    });
-    const text = response.text?.trim();
-    if (text) {
-      return { success: true, text, provider: "Gemini (Official)" };
+      messages.push({ role: "user", content: prompt });
+      const resp = await import_axios.default.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        {
+          model,
+          messages,
+          temperature: 0.7
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${cleanKey}`,
+            "Content-Type": "application/json"
+          },
+          timeout: 18e3
+        }
+      );
+      const text = resp.data?.choices?.[0]?.message?.content?.trim();
+      if (text && text.length > 0) {
+        console.log(`[AI] Groq success via ${model} (${text.length} chars)`);
+        return { success: true, text, provider: `Groq (${model})` };
+      }
+    } catch (err) {
+      const errMsg = err?.response?.data?.error?.message || err?.message;
+      console.warn(`[AI] Groq attempt with ${model} failed:`, errMsg);
+    }
+  }
+  return { success: false, text: "", provider: "Groq", error: "All Groq models failed" };
+}
+async function callOpenAI(apiKey, prompt, systemPrompt) {
+  const cleanKey = apiKey.trim();
+  if (!cleanKey) return { success: false, text: "", provider: "OpenAI", error: "Missing API Key" };
+  try {
+    const isRouter = cleanKey.startsWith("sk-or-");
+    const endpoint = isRouter ? "https://openrouter.ai/api/v1/chat/completions" : "https://api.openai.com/v1/chat/completions";
+    const candidateModels = isRouter ? ["meta-llama/llama-3.3-70b-instruct", "google/gemini-2.0-flash-001", "deepseek/deepseek-chat"] : ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"];
+    for (const model of candidateModels) {
+      try {
+        console.log(`[AI] Requesting ${isRouter ? "OpenRouter" : "OpenAI"} API (${model})...`);
+        const messages = [];
+        if (systemPrompt) {
+          messages.push({ role: "system", content: systemPrompt });
+        }
+        messages.push({ role: "user", content: prompt });
+        const resp = await import_axios.default.post(
+          endpoint,
+          {
+            model,
+            messages,
+            temperature: 0.7
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${cleanKey}`,
+              "Content-Type": "application/json"
+            },
+            timeout: 25e3
+          }
+        );
+        const text = resp.data?.choices?.[0]?.message?.content?.trim();
+        if (text && text.length > 0) {
+          console.log(`[AI] OpenAI/Router success (${text.length} chars)`);
+          return { success: true, text, provider: `${isRouter ? "OpenRouter" : "OpenAI"} (${model})` };
+        }
+      } catch (err) {
+        console.warn(`[AI] ${isRouter ? "OpenRouter" : "OpenAI"} failed with ${model}:`, err?.response?.data?.error?.message || err?.message);
+      }
     }
   } catch (err) {
-    console.warn("[AI] Official Gemini API failed:", err?.message || err);
+    console.warn("[AI] OpenAI/Router general failure:", err?.message);
   }
-  return { success: false, text: "", provider: "Gemini (Official)" };
+  return { success: false, text: "", provider: "OpenAI", error: "OpenAI request failed" };
 }
-function buildProviderUrl(provider, query, systemPrompt) {
-  const encodedQuery = encodeURIComponent(query);
-  switch (provider) {
-    case "Gemini":
-      return `https://api-rebix.zone.id/api/gemini?q=${encodedQuery}`;
-    case "DeepSeek":
-      return `https://api-rebix.zone.id/api/deepseek-v3?q=${encodedQuery}`;
-    case "Claude":
-      return `https://api-rebix.zone.id/api/claude-haiku?q=${encodedQuery}`;
-    case "GPTLogic": {
-      const prompt = encodeURIComponent(systemPrompt || "You are a helpful WhatsApp sales agent.");
-      return `https://api-rebix.zone.id/api/gptlogic?q=${encodedQuery}&prompt=${prompt}`;
-    }
-    default:
-      return `https://api-rebix.zone.id/api/gemini?q=${encodedQuery}`;
+function buildCompactPublicQuery(prompt, systemPrompt) {
+  if (prompt.length <= 600) return prompt;
+  let customerMsg = "";
+  const matchMsg = prompt.match(/CUSTOMER'S NEW MESSAGE\(S\):\s*["']?([\s\S]*?)["']?\s*(?:Provide your|$)/i);
+  if (matchMsg && matchMsg[1]) {
+    customerMsg = matchMsg[1].trim();
   }
+  let toolSummary = "";
+  if (prompt.includes("VoiceDelta")) {
+    toolSummary = "Tool: VoiceDelta (Rs. 1,199/month, 3,600+ AI voices, voice cloning).";
+  } else if (prompt.includes("ClipShield")) {
+    toolSummary = "Tool: ClipShield (Video copyright & re-edit protection).";
+  }
+  const roleRule = "Pakistani WhatsApp sales representative. Casual Roman Urdu only. Short conversational reply.";
+  const parts = [
+    roleRule,
+    toolSummary,
+    customerMsg ? `Customer said: "${customerMsg}"` : prompt.slice(-300),
+    "Reply in Roman Urdu:"
+  ].filter(Boolean);
+  return parts.join("\n");
 }
-async function callSingleProvider(provider, query, systemPrompt) {
-  if (provider === "Gemini" && process.env.GEMINI_API_KEY) {
-    const officialRes = await callOfficialGemini(query, systemPrompt);
-    if (officialRes.success && officialRes.text) {
-      return officialRes;
-    }
+async function callPublicFallback(provider, prompt, systemPrompt) {
+  const compactQuery = buildCompactPublicQuery(prompt, systemPrompt);
+  const safeQuery = compactQuery.length > 600 ? compactQuery.substring(0, 600) : compactQuery;
+  const encodedQuery = encodeURIComponent(safeQuery);
+  let url = `https://api-rebix.zone.id/api/gemini?q=${encodedQuery}`;
+  if (provider === "DeepSeek") url = `https://api-rebix.zone.id/api/deepseek-v3?q=${encodedQuery}`;
+  if (provider === "GPTLogic") {
+    const promptParam = encodeURIComponent(systemPrompt || "You are a helpful Pakistani sales closer.");
+    url = `https://api-rebix.zone.id/api/gptlogic?q=${encodedQuery}&prompt=${promptParam}`;
   }
-  const url = buildProviderUrl(provider, query, systemPrompt);
   try {
-    console.log(`[AI] Requesting ${provider} API...`);
+    console.log(`[AI] Attempting public fallback ${provider}...`);
     const response = await import_axios.default.get(url, {
-      timeout: 15e3,
-      headers: {
-        "User-Agent": "WhatsApp-Sales-Agent/1.0",
-        "Accept": "application/json, text/plain, */*"
-      }
+      timeout: 12e3,
+      headers: { "User-Agent": "WhatsApp-Sales-Agent/1.0" }
     });
     const data = response.data;
-    if (!data) {
-      console.warn(`[AI] ${provider} returned empty response body.`);
-      return { success: false, text: "", provider };
-    }
-    let extractedText = "";
-    if (typeof data === "string") {
-      extractedText = data.trim();
-    } else if (typeof data === "object") {
-      const candidate = data.message ?? data.response ?? data.result ?? data.reply ?? data.text ?? data.content ?? data.data;
-      if (typeof candidate === "string") {
-        extractedText = candidate.trim();
-      } else if (candidate && typeof candidate === "object") {
-        extractedText = JSON.stringify(candidate);
+    if (data && typeof data === "object") {
+      if (data.status === false || typeof data.status === "number" && data.status >= 400) {
+        console.warn(`[AI] Public fallback ${provider} returned error status:`, data);
+        return { success: false, text: "", provider };
       }
     }
-    if (extractedText && extractedText.length > 0) {
-      console.log(`[AI] Successfully received response from ${provider} (${extractedText.length} chars)`);
-      return {
-        success: true,
-        text: extractedText,
-        provider
-      };
-    } else {
-      console.warn(`[AI] ${provider} returned JSON but no usable text field found:`, JSON.stringify(data));
-      return { success: false, text: "", provider };
+    let text = "";
+    if (typeof data === "string") {
+      text = data.trim();
+    } else if (typeof data === "object" && data !== null) {
+      const candidate = data.message ?? data.response ?? data.result ?? data.reply ?? data.text ?? data.content ?? data.data;
+      if (typeof candidate === "string") text = candidate.trim();
     }
-  } catch (error) {
-    const errorMsg = error?.response?.status ? `HTTP ${error.response.status}` : error?.message || error;
-    console.warn(`[AI] ${provider} failed (reason: ${errorMsg}).`);
-    return { success: false, text: "", provider };
+    if (text && !text.startsWith('{"error"') && !text.includes("plan quota") && !text.includes("credit pack") && text.length > 3) {
+      console.log(`[AI] Public fallback ${provider} succeeded (${text.length} chars)`);
+      return { success: true, text, provider: `${provider} (Public)` };
+    }
+  } catch (err) {
+    console.warn(`[AI] Public fallback ${provider} failed:`, err?.message);
   }
+  return { success: false, text: "", provider };
 }
-async function askAI(prompt, systemPrompt) {
-  const settings = await getSettings();
-  const preferred = settings.defaultLLM || "Gemini";
-  const fallbackOrder = [
-    preferred,
-    ...ALL_PROVIDERS.filter((p) => p !== preferred)
-  ];
-  console.log(`[AI] Starting request. Provider sequence: ${fallbackOrder.join(" -> ")}`);
-  for (const provider of fallbackOrder) {
-    const res = await callSingleProvider(provider, prompt, systemPrompt);
+async function askAI(prompt, systemPrompt, userId) {
+  const settings = await getSettings(userId);
+  const geminiKey = settings.geminiApiKey?.trim() || process.env.GEMINI_API_KEY?.trim();
+  const groqKey = settings.groqApiKey?.trim() || process.env.GROQ_API_KEY?.trim();
+  const openAiKey = settings.openAiApiKey?.trim() || process.env.OPENAI_API_KEY?.trim();
+  const preferred = (settings.preferredApi || "gemini").toLowerCase();
+  const attempts = [];
+  if (preferred.includes("groq")) {
+    if (groqKey) attempts.push(() => callGroq(groqKey, prompt, systemPrompt));
+    if (geminiKey) attempts.push(() => callOfficialGemini(geminiKey, prompt, systemPrompt));
+    if (openAiKey) attempts.push(() => callOpenAI(openAiKey, prompt, systemPrompt));
+  } else if (preferred.includes("openai") || preferred.includes("gpt")) {
+    if (openAiKey) attempts.push(() => callOpenAI(openAiKey, prompt, systemPrompt));
+    if (geminiKey) attempts.push(() => callOfficialGemini(geminiKey, prompt, systemPrompt));
+    if (groqKey) attempts.push(() => callGroq(groqKey, prompt, systemPrompt));
+  } else {
+    if (geminiKey) attempts.push(() => callOfficialGemini(geminiKey, prompt, systemPrompt));
+    if (groqKey) attempts.push(() => callGroq(groqKey, prompt, systemPrompt));
+    if (openAiKey) attempts.push(() => callOpenAI(openAiKey, prompt, systemPrompt));
+  }
+  for (const attempt of attempts) {
+    const res = await attempt();
     if (res.success && res.text) {
       return res.text;
     }
-    console.log(`[AI] Trying next available fallback provider in chain...`);
   }
-  console.error("[AI] All AI endpoints failed or timed out.");
+  console.warn("[AI] Official API keys not available or failed. Trying public proxy fallbacks...");
+  const publicProviders = preferred.includes("deepseek") ? ["DeepSeek", "Gemini", "GPTLogic"] : ["Gemini", "DeepSeek", "GPTLogic"];
+  for (const prov of publicProviders) {
+    const res = await callPublicFallback(prov, prompt, systemPrompt);
+    if (res.success && res.text) {
+      return res.text;
+    }
+  }
+  console.error("[AI] All AI endpoints failed or timed out. Please configure an API Key (Gemini, Groq, or OpenAI) in Settings.");
   const lang = settings.language || "Roman Urdu";
   if (lang.toLowerCase().includes("urdu")) {
     return "Haan bhai, abhi thoda network issue hai. Thodi der baad msg krna ya try krlo.";
   }
   return "Hey, having a brief network issue. Please try again in a moment.";
 }
-var import_axios, import_genai, ALL_PROVIDERS, geminiClient;
+var import_axios, import_genai;
 var init_ai = __esm({
   "src/server/ai.ts"() {
     import_axios = __toESM(require("axios"), 1);
     import_genai = require("@google/genai");
     init_settings();
-    ALL_PROVIDERS = ["Gemini", "DeepSeek", "Claude", "GPTLogic"];
-    geminiClient = null;
   }
 });
 
@@ -1877,7 +2043,7 @@ async function getTools(userId) {
       if (t.userId) {
         return t.userId === userId;
       }
-      return userId === "usr_admin_badar" || userId === "admin";
+      return true;
     });
   } catch (error) {
     return [];
@@ -2358,9 +2524,30 @@ ${messageHistory || "No previous messages with this customer."}
 CUSTOMER'S NEW MESSAGE(S):
 "${latestCustomerText}"
 
-Provide your reply below in casual Roman Urdu. Separate 1\u20133 short messages using "---MSG---". Keep it ultra-natural, conversational, and helpful.`;
+==================================================
+MANDATORY FINAL LANGUAGE & BEHAVIOR DIRECTIVE:
+==================================================
+1. STRICT ROMAN URDU ONLY:
+   - Your reply MUST be 100% in natural Pakistani Roman Urdu (e.g. "Han bhai", "jee bilkul", "VoiceDelta Pro Rs. 1,199/month ka hai").
+   - NEVER write in English! Even if the customer writes in English or Hindi, YOU MUST REPLY IN ROMAN URDU!
+2. NO BROCHURE / NO BULLET LISTS:
+   - NEVER use markdown bold headers (e.g. **Elevate AI**), asterisks (* item), or numbered lists!
+   - Write like a real person sending 1 to 3 short WhatsApp bubbles.
+3. STRICT PRODUCT LOCK:
+   - Voiceover inquiry -> VoiceDelta ONLY (Rs. 1,199/mo).
+   - Video copyright inquiry -> ClipShield ONLY.
+   - NEVER mention any external tools.
+
+Separate 1\u20133 short messages using "---MSG---". Provide your natural Roman Urdu reply below:`;
+  const systemInstruction = `You are a real Pakistani WhatsApp sales closer for VoiceDelta and ClipShield.
+CRITICAL LANGUAGE & STYLE MANDATE:
+- You MUST ALWAYS reply in 100% natural, casual Pakistani Roman Urdu using Latin alphabet (e.g. "han bhai", "jee bilkul", "VoiceDelta Pro Rs. 1,199/month ka hai", "scene ye hai", "batao kis type ke videos hain?").
+- NEVER reply in English!
+- NEVER reply in Hindi / Devanagari script!
+- NEVER output markdown bold headers, bullet lists, or corporate brochures!
+- Write strictly 1 to 3 short conversational sentences (15 to 40 words total).`;
   console.log(`[Agent] Generating AI response for ${phoneNumber}...`);
-  const rawReply = await askAI(prompt);
+  const rawReply = await askAI(prompt, systemInstruction, userId);
   console.log(`[Agent] AI raw response for ${phoneNumber}:
 ${rawReply}`);
   let extractedAiStatus = null;

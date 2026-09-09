@@ -48,6 +48,43 @@ export default function SettingsPage({ agentSettings, fetchSettings }: SettingsP
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [testingApi, setTestingApi] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
+  const [testingKeyProvider, setTestingKeyProvider] = useState<string | null>(null);
+  const [keyTestStatus, setKeyTestStatus] = useState<Record<string, { success: boolean; message: string }>>({});
+
+  const handleTestIndividualKey = async (provider: "gemini" | "groq" | "openai") => {
+    let keyToTest = "";
+    if (provider === "gemini") keyToTest = settings.geminiApiKey || "";
+    if (provider === "groq") keyToTest = settings.groqApiKey || "";
+    if (provider === "openai") keyToTest = settings.openAiApiKey || "";
+
+    if (!keyToTest.trim()) {
+      alert(`Please enter a ${provider.toUpperCase()} API key first.`);
+      return;
+    }
+
+    setTestingKeyProvider(provider);
+    try {
+      const res = await axios.post("/api/ai/test-key", { provider, apiKey: keyToTest.trim() });
+      if (res.data?.success) {
+        setKeyTestStatus((prev) => ({
+          ...prev,
+          [provider]: { success: true, message: `Connected! (${res.data.provider || provider})` }
+        }));
+      } else {
+        setKeyTestStatus((prev) => ({
+          ...prev,
+          [provider]: { success: false, message: res.data?.error || "Key test failed" }
+        }));
+      }
+    } catch (err: any) {
+      setKeyTestStatus((prev) => ({
+        ...prev,
+        [provider]: { success: false, message: err?.response?.data?.error || err?.message || "Connection failed" }
+      }));
+    } finally {
+      setTestingKeyProvider(null);
+    }
+  };
 
   useEffect(() => {
     axios.get("/api/lists/sync-status")
@@ -667,9 +704,160 @@ export default function SettingsPage({ agentSettings, fetchSettings }: SettingsP
             </div>
           </div>
 
+          {/* API Key Configuration Inputs */}
+          <div className="pt-3 border-t border-slate-100 space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
+                  Cloud / Official LLM API Keys (High-Speed & Ultra-Reliable)
+                </h4>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  Configure your API keys for 100% uptime. If keys are omitted, the agent will safely fallback to public proxies.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {/* Google Gemini Card */}
+              <div className="p-4 bg-slate-50/80 rounded-xl border border-slate-200 flex flex-col justify-between space-y-3">
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-blue-500"></span>
+                      Google Gemini Key
+                    </label>
+                    <a
+                      href="https://aistudio.google.com/app/apikey"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-[10px] font-bold text-blue-600 hover:text-blue-700 flex items-center gap-0.5 hover:underline"
+                    >
+                      Get Free Key <ExternalLink className="w-2.5 h-2.5" />
+                    </a>
+                  </div>
+                  <input
+                    type="password"
+                    value={settings.geminiApiKey || ""}
+                    onChange={(e) => setSettings({ ...settings, geminiApiKey: e.target.value })}
+                    placeholder="AIzaSy..."
+                    className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs text-slate-800 font-mono outline-none focus:border-blue-500"
+                  />
+                  <span className="text-[10px] text-slate-400 mt-1 block">Models: Gemini 2.0 Flash / 1.5 Pro</span>
+                </div>
+
+                <div className="pt-2 border-t border-slate-200/60 flex items-center justify-between gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleTestIndividualKey("gemini")}
+                    disabled={testingKeyProvider === "gemini"}
+                    className="px-3 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-lg text-[11px] font-bold transition-all flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                  >
+                    {testingKeyProvider === "gemini" ? <Loader2 className="w-3 h-3 animate-spin" /> : <Zap className="w-3 h-3" />}
+                    Test Key
+                  </button>
+                  {keyTestStatus["gemini"] && (
+                    <span className={`text-[10px] font-bold truncate ${keyTestStatus["gemini"].success ? "text-emerald-600" : "text-rose-600"}`} title={keyTestStatus["gemini"].message}>
+                      {keyTestStatus["gemini"].success ? "✓ Valid" : "✗ Error"}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Groq Card */}
+              <div className="p-4 bg-slate-50/80 rounded-xl border border-slate-200 flex flex-col justify-between space-y-3">
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-orange-500"></span>
+                      Groq Cloud Key
+                    </label>
+                    <a
+                      href="https://console.groq.com/keys"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-[10px] font-bold text-orange-600 hover:text-orange-700 flex items-center gap-0.5 hover:underline"
+                    >
+                      Get Free Key <ExternalLink className="w-2.5 h-2.5" />
+                    </a>
+                  </div>
+                  <input
+                    type="password"
+                    value={settings.groqApiKey || ""}
+                    onChange={(e) => setSettings({ ...settings, groqApiKey: e.target.value })}
+                    placeholder="gsk_..."
+                    className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs text-slate-800 font-mono outline-none focus:border-orange-500"
+                  />
+                  <span className="text-[10px] text-slate-400 mt-1 block">Ultra-fast Llama-3.3-70B on Groq</span>
+                </div>
+
+                <div className="pt-2 border-t border-slate-200/60 flex items-center justify-between gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleTestIndividualKey("groq")}
+                    disabled={testingKeyProvider === "groq"}
+                    className="px-3 py-1 bg-orange-50 hover:bg-orange-100 text-orange-700 border border-orange-200 rounded-lg text-[11px] font-bold transition-all flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                  >
+                    {testingKeyProvider === "groq" ? <Loader2 className="w-3 h-3 animate-spin" /> : <Zap className="w-3 h-3" />}
+                    Test Key
+                  </button>
+                  {keyTestStatus["groq"] && (
+                    <span className={`text-[10px] font-bold truncate ${keyTestStatus["groq"].success ? "text-emerald-600" : "text-rose-600"}`} title={keyTestStatus["groq"].message}>
+                      {keyTestStatus["groq"].success ? "✓ Valid" : "✗ Error"}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* OpenAI / OpenRouter Card */}
+              <div className="p-4 bg-slate-50/80 rounded-xl border border-slate-200 flex flex-col justify-between space-y-3">
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                      OpenAI / Router Key
+                    </label>
+                    <a
+                      href="https://openrouter.ai/keys"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-[10px] font-bold text-emerald-600 hover:text-emerald-700 flex items-center gap-0.5 hover:underline"
+                    >
+                      OpenRouter <ExternalLink className="w-2.5 h-2.5" />
+                    </a>
+                  </div>
+                  <input
+                    type="password"
+                    value={settings.openAiApiKey || ""}
+                    onChange={(e) => setSettings({ ...settings, openAiApiKey: e.target.value })}
+                    placeholder="sk-... or sk-or-..."
+                    className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs text-slate-800 font-mono outline-none focus:border-emerald-500"
+                  />
+                  <span className="text-[10px] text-slate-400 mt-1 block">GPT-4o mini or OpenRouter</span>
+                </div>
+
+                <div className="pt-2 border-t border-slate-200/60 flex items-center justify-between gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleTestIndividualKey("openai")}
+                    disabled={testingKeyProvider === "openai"}
+                    className="px-3 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-lg text-[11px] font-bold transition-all flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                  >
+                    {testingKeyProvider === "openai" ? <Loader2 className="w-3 h-3 animate-spin" /> : <Zap className="w-3 h-3" />}
+                    Test Key
+                  </button>
+                  {keyTestStatus["openai"] && (
+                    <span className={`text-[10px] font-bold truncate ${keyTestStatus["openai"].success ? "text-emerald-600" : "text-rose-600"}`} title={keyTestStatus["openai"].message}>
+                      {keyTestStatus["openai"].success ? "✓ Valid" : "✗ Error"}
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 text-xs text-slate-600 leading-relaxed">
             <span className="font-bold text-slate-800 block mb-1">Automatic Failover Mechanism:</span>
-            If <strong>{(settings.preferredApi || settings.defaultLLM || "gemini").toUpperCase()}</strong> fails or hits rate limits, the system instantly hops to the next online engine in the chain without dropping WhatsApp messages.
+            When an API key is configured above, the system connects directly to Google/Groq/OpenAI cloud servers via high-priority REST POST. If no key is set or quota is exhausted, it automatically falls back to public proxies without dropping customer WhatsApp messages.
           </div>
         </div>
 

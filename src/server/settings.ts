@@ -1,7 +1,7 @@
 import { Express } from "express";
 import fs from "fs/promises";
 import path from "path";
-import { askAI } from "./ai.js";
+import { askAI, callOfficialGemini, callGroq, callOpenAI } from "./ai.js";
 import { getUserByToken } from "./auth.js";
 
 export const getSettingsFile = (userId?: string) => {
@@ -123,6 +123,49 @@ export function setupSettingsRoutes(app: Express) {
       res.json({ success: true, settings: saved });
     } catch (error) {
       res.status(500).json({ error: "Failed to save settings" });
+    }
+  });
+
+  app.post("/api/ai/test", async (req, res) => {
+    try {
+      const user = await getUserByToken(req.headers.authorization);
+      const prompt = req.body?.prompt || "Test Pakistani Roman Urdu greeting";
+      const reply = await askAI(prompt, "You are a helpful Pakistani WhatsApp sales closer. Reply in 1 short Roman Urdu sentence.", user?.id);
+      res.json({ success: true, reply });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "AI test failed" });
+    }
+  });
+
+  app.post("/api/ai/test-key", async (req, res) => {
+    try {
+      const { provider, apiKey } = req.body;
+      if (!apiKey || typeof apiKey !== "string" || !apiKey.trim()) {
+        return res.status(400).json({ success: false, error: "Please enter a valid API key to test." });
+      }
+      const cleanKey = apiKey.trim();
+      const testPrompt = "Test Pakistani Roman Urdu greeting";
+      const testSysPrompt = "You are a Pakistani WhatsApp sales agent. Reply with 'All systems operational!' in Roman Urdu.";
+
+      let result: any = { success: false, text: "", provider };
+
+      if (provider === "gemini") {
+        result = await callOfficialGemini(cleanKey, testPrompt, testSysPrompt);
+      } else if (provider === "groq") {
+        result = await callGroq(cleanKey, testPrompt, testSysPrompt);
+      } else if (provider === "openai") {
+        result = await callOpenAI(cleanKey, testPrompt, testSysPrompt);
+      } else {
+        return res.status(400).json({ success: false, error: "Unknown provider" });
+      }
+
+      if (result.success && result.text) {
+        return res.json({ success: true, reply: result.text, provider: result.provider });
+      } else {
+        return res.status(400).json({ success: false, error: result.error || "Failed to generate reply with this key." });
+      }
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error.message || "API key test failed" });
     }
   });
 

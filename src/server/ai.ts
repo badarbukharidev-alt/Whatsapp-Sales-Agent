@@ -6,173 +6,337 @@ export interface NormalizedAIResponse {
   success: boolean;
   text: string;
   provider?: string;
+  error?: string;
 }
 
-const ALL_PROVIDERS = ["Gemini", "DeepSeek", "Claude", "GPTLogic"] as const;
-type ProviderName = typeof ALL_PROVIDERS[number];
+/**
+ * Calls official Google Gemini API via official SDK with fallback to direct REST POST.
+ */
+export async function callOfficialGemini(apiKey: string, prompt: string, systemPrompt?: string): Promise<NormalizedAIResponse> {
+  const cleanKey = apiKey.trim();
+  if (!cleanKey) return { success: false, text: "", provider: "Gemini", error: "Missing API Key" };
 
-let geminiClient: GoogleGenAI | null = null;
+  const candidateModels = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-lite"];
 
-function getGeminiClient(): GoogleGenAI | null {
-  if (!geminiClient && process.env.GEMINI_API_KEY) {
+  // 1. Try GoogleGenAI SDK
+  try {
+    const client = new GoogleGenAI({ apiKey: cleanKey });
+    for (const model of candidateModels) {
+      try {
+        console.log(`[AI] Requesting Gemini SDK (model: ${model})...`);
+        const response = await client.models.generateContent({
+          model,
+          contents: prompt,
+          config: {
+            systemInstruction: systemPrompt || undefined,
+            temperature: 0.7,
+          }
+        });
+
+        const text = response.text?.trim();
+        if (text && text.length > 0) {
+          console.log(`[AI] Gemini SDK success via ${model} (${text.length} chars)`);
+          return { success: true, text, provider: `Gemini (${model})` };
+        }
+      } catch (mErr: any) {
+        console.warn(`[AI] Gemini SDK attempt with ${model} failed:`, mErr?.message || mErr);
+      }
+    }
+  } catch (sdkErr: any) {
+    console.warn("[AI] GoogleGenAI SDK init failed:", sdkErr?.message || sdkErr);
+  }
+
+  // 2. Direct REST POST fallback
+  for (const model of candidateModels) {
     try {
-      geminiClient = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-    } catch (e) {
-      console.warn("[AI] Failed to init GoogleGenAI SDK:", e);
+      console.log(`[AI] Requesting Gemini REST API (model: ${model})...`);
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(cleanKey)}`;
+      
+      const payload: any = {
+        contents: [
+          {
+            role: "user",
+            parts: [{ text: prompt }]
+          }
+        ],
+        generationConfig: {
+          temperature: 0.7,
+        }
+      };
+
+      if (systemPrompt) {
+        payload.systemInstruction = {
+          parts: [{ text: systemPrompt }]
+        };
+      }
+
+      const resp = await axios.post(url, payload, {
+        headers: { "Content-Type": "application/json" },
+        timeout: 20000
+      });
+
+      const text = resp.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+      if (text && text.length > 0) {
+        console.log(`[AI] Gemini REST success via ${model} (${text.length} chars)`);
+        return { success: true, text, provider: `Gemini REST (${model})` };
+      }
+    } catch (restErr: any) {
+      const errMsg = restErr.response?.data?.error?.message || restErr.message;
+      console.warn(`[AI] Gemini REST attempt with ${model} failed:`, errMsg);
     }
   }
-  return geminiClient;
+
+  return { success: false, text: "", provider: "Gemini", error: "All Gemini models failed" };
 }
 
-async function callOfficialGemini(prompt: string, systemPrompt?: string): Promise<NormalizedAIResponse> {
-  const client = getGeminiClient();
-  if (!client) return { success: false, text: "", provider: "Gemini (Official)" };
+/**
+ * Calls Groq Cloud API (Ultra-fast Llama-3.3-70b-versatile).
+ */
+export async function callGroq(apiKey: string, prompt: string, systemPrompt?: string): Promise<NormalizedAIResponse> {
+  const cleanKey = apiKey.trim();
+  if (!cleanKey) return { success: false, text: "", provider: "Groq", error: "Missing API Key" };
+
+  const candidateModels = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768", "gemma2-9b-it"];
+
+  for (const model of candidateModels) {
+    try {
+      console.log(`[AI] Requesting Groq Cloud API (${model})...`);
+      const messages: any[] = [];
+      if (systemPrompt) {
+        messages.push({ role: "system", content: systemPrompt });
+      }
+      messages.push({ role: "user", content: prompt });
+
+      const resp = await axios.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        {
+          model,
+          messages,
+          temperature: 0.7,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${cleanKey}`,
+            "Content-Type": "application/json",
+          },
+          timeout: 18000,
+        }
+      );
+
+      const text = resp.data?.choices?.[0]?.message?.content?.trim();
+      if (text && text.length > 0) {
+        console.log(`[AI] Groq success via ${model} (${text.length} chars)`);
+        return { success: true, text, provider: `Groq (${model})` };
+      }
+    } catch (err: any) {
+      const errMsg = err?.response?.data?.error?.message || err?.message;
+      console.warn(`[AI] Groq attempt with ${model} failed:`, errMsg);
+    }
+  }
+  return { success: false, text: "", provider: "Groq", error: "All Groq models failed" };
+}
+
+/**
+ * Calls OpenAI or OpenRouter API.
+ */
+export async function callOpenAI(apiKey: string, prompt: string, systemPrompt?: string): Promise<NormalizedAIResponse> {
+  const cleanKey = apiKey.trim();
+  if (!cleanKey) return { success: false, text: "", provider: "OpenAI", error: "Missing API Key" };
 
   try {
-    console.log("[AI] Requesting Official Gemini API...");
-    const response = await client.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: prompt,
-      config: {
-        systemInstruction: systemPrompt || undefined,
-        temperature: 0.7,
-      }
-    });
+    const isRouter = cleanKey.startsWith("sk-or-");
+    const endpoint = isRouter 
+      ? "https://openrouter.ai/api/v1/chat/completions" 
+      : "https://api.openai.com/v1/chat/completions";
+    
+    const candidateModels = isRouter
+      ? ["meta-llama/llama-3.3-70b-instruct", "google/gemini-2.0-flash-001", "deepseek/deepseek-chat"]
+      : ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"];
 
-    const text = response.text?.trim();
-    if (text) {
-      return { success: true, text, provider: "Gemini (Official)" };
+    for (const model of candidateModels) {
+      try {
+        console.log(`[AI] Requesting ${isRouter ? "OpenRouter" : "OpenAI"} API (${model})...`);
+        const messages: any[] = [];
+        if (systemPrompt) {
+          messages.push({ role: "system", content: systemPrompt });
+        }
+        messages.push({ role: "user", content: prompt });
+
+        const resp = await axios.post(
+          endpoint,
+          {
+            model,
+            messages,
+            temperature: 0.7,
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${cleanKey}`,
+              "Content-Type": "application/json",
+            },
+            timeout: 25000,
+          }
+        );
+
+        const text = resp.data?.choices?.[0]?.message?.content?.trim();
+        if (text && text.length > 0) {
+          console.log(`[AI] OpenAI/Router success (${text.length} chars)`);
+          return { success: true, text, provider: `${isRouter ? "OpenRouter" : "OpenAI"} (${model})` };
+        }
+      } catch (err: any) {
+        console.warn(`[AI] ${isRouter ? "OpenRouter" : "OpenAI"} failed with ${model}:`, err?.response?.data?.error?.message || err?.message);
+      }
     }
   } catch (err: any) {
-    console.warn("[AI] Official Gemini API failed:", err?.message || err);
+    console.warn("[AI] OpenAI/Router general failure:", err?.message);
   }
-  return { success: false, text: "", provider: "Gemini (Official)" };
+  return { success: false, text: "", provider: "OpenAI", error: "OpenAI request failed" };
 }
 
 /**
- * Builds the URL for each of the 4 supported GET APIs
+ * Builds a compact query for public GET fallbacks that preserves customer message and intent.
  */
-function buildProviderUrl(provider: ProviderName, query: string, systemPrompt?: string): string {
-  const encodedQuery = encodeURIComponent(query);
-  switch (provider) {
-    case "Gemini":
-      return `https://api-rebix.zone.id/api/gemini?q=${encodedQuery}`;
-    case "DeepSeek":
-      return `https://api-rebix.zone.id/api/deepseek-v3?q=${encodedQuery}`;
-    case "Claude":
-      return `https://api-rebix.zone.id/api/claude-haiku?q=${encodedQuery}`;
-    case "GPTLogic": {
-      const prompt = encodeURIComponent(systemPrompt || "You are a helpful WhatsApp sales agent.");
-      return `https://api-rebix.zone.id/api/gptlogic?q=${encodedQuery}&prompt=${prompt}`;
-    }
-    default:
-      return `https://api-rebix.zone.id/api/gemini?q=${encodedQuery}`;
+function buildCompactPublicQuery(prompt: string, systemPrompt?: string): string {
+  // If prompt is short, use as is
+  if (prompt.length <= 600) return prompt;
+
+  // Extract customer message section if present
+  let customerMsg = "";
+  const matchMsg = prompt.match(/CUSTOMER'S NEW MESSAGE\(S\):\s*["']?([\s\S]*?)["']?\s*(?:Provide your|$)/i);
+  if (matchMsg && matchMsg[1]) {
+    customerMsg = matchMsg[1].trim();
   }
+
+  // Extract tool info summary if present
+  let toolSummary = "";
+  if (prompt.includes("VoiceDelta")) {
+    toolSummary = "Tool: VoiceDelta (Rs. 1,199/month, 3,600+ AI voices, voice cloning).";
+  } else if (prompt.includes("ClipShield")) {
+    toolSummary = "Tool: ClipShield (Video copyright & re-edit protection).";
+  }
+
+  const roleRule = "Pakistani WhatsApp sales representative. Casual Roman Urdu only. Short conversational reply.";
+  const parts = [
+    roleRule,
+    toolSummary,
+    customerMsg ? `Customer said: "${customerMsg}"` : prompt.slice(-300),
+    "Reply in Roman Urdu:"
+  ].filter(Boolean);
+
+  return parts.join("\n");
 }
 
 /**
- * Calls a single AI endpoint with a strict 15-second timeout and normalizes the JSON response.
+ * Calls public backup proxy endpoint with sanitized prompt length and strict validation.
  */
-async function callSingleProvider(
-  provider: ProviderName,
-  query: string,
-  systemPrompt?: string
-): Promise<NormalizedAIResponse> {
-  // If Gemini provider and official API key is present, try official SDK first
-  if (provider === "Gemini" && process.env.GEMINI_API_KEY) {
-    const officialRes = await callOfficialGemini(query, systemPrompt);
-    if (officialRes.success && officialRes.text) {
-      return officialRes;
-    }
+async function callPublicFallback(provider: string, prompt: string, systemPrompt?: string): Promise<NormalizedAIResponse> {
+  const compactQuery = buildCompactPublicQuery(prompt, systemPrompt);
+  const safeQuery = compactQuery.length > 600 ? compactQuery.substring(0, 600) : compactQuery;
+  const encodedQuery = encodeURIComponent(safeQuery);
+
+  let url = `https://api-rebix.zone.id/api/gemini?q=${encodedQuery}`;
+  if (provider === "DeepSeek") url = `https://api-rebix.zone.id/api/deepseek-v3?q=${encodedQuery}`;
+  if (provider === "GPTLogic") {
+    const promptParam = encodeURIComponent(systemPrompt || "You are a helpful Pakistani sales closer.");
+    url = `https://api-rebix.zone.id/api/gptlogic?q=${encodedQuery}&prompt=${promptParam}`;
   }
 
-  const url = buildProviderUrl(provider, query, systemPrompt);
   try {
-    console.log(`[AI] Requesting ${provider} API...`);
+    console.log(`[AI] Attempting public fallback ${provider}...`);
     const response = await axios.get(url, {
-      timeout: 15000,
-      headers: {
-        "User-Agent": "WhatsApp-Sales-Agent/1.0",
-        "Accept": "application/json, text/plain, */*",
-      }
+      timeout: 12000,
+      headers: { "User-Agent": "WhatsApp-Sales-Agent/1.0" }
     });
-
     const data = response.data;
-    if (!data) {
-      console.warn(`[AI] ${provider} returned empty response body.`);
-      return { success: false, text: "", provider };
-    }
 
-    let extractedText = "";
-
-    if (typeof data === "string") {
-      extractedText = data.trim();
-    } else if (typeof data === "object") {
-      // Normalize different possible JSON keys: message, response, result, reply, text, content
-      const candidate =
-        data.message ??
-        data.response ??
-        data.result ??
-        data.reply ??
-        data.text ??
-        data.content ??
-        data.data;
-
-      if (typeof candidate === "string") {
-        extractedText = candidate.trim();
-      } else if (candidate && typeof candidate === "object") {
-        extractedText = JSON.stringify(candidate);
+    // Check if API returned an error status in response body
+    if (data && typeof data === "object") {
+      if (data.status === false || (typeof data.status === "number" && data.status >= 400)) {
+        console.warn(`[AI] Public fallback ${provider} returned error status:`, data);
+        return { success: false, text: "", provider };
       }
     }
 
-    if (extractedText && extractedText.length > 0) {
-      console.log(`[AI] Successfully received response from ${provider} (${extractedText.length} chars)`);
-      return {
-        success: true,
-        text: extractedText,
-        provider
-      };
-    } else {
-      console.warn(`[AI] ${provider} returned JSON but no usable text field found:`, JSON.stringify(data));
-      return { success: false, text: "", provider };
+    let text = "";
+    if (typeof data === "string") {
+      text = data.trim();
+    } else if (typeof data === "object" && data !== null) {
+      const candidate = data.message ?? data.response ?? data.result ?? data.reply ?? data.text ?? data.content ?? data.data;
+      if (typeof candidate === "string") text = candidate.trim();
     }
-  } catch (error: any) {
-    const errorMsg = error?.response?.status ? `HTTP ${error.response.status}` : error?.message || error;
-    console.warn(`[AI] ${provider} failed (reason: ${errorMsg}).`);
-    return { success: false, text: "", provider };
+
+    // Reject error strings that pretend to be replies
+    if (
+      text &&
+      !text.startsWith('{"error"') &&
+      !text.includes("plan quota") &&
+      !text.includes("credit pack") &&
+      text.length > 3
+    ) {
+      console.log(`[AI] Public fallback ${provider} succeeded (${text.length} chars)`);
+      return { success: true, text, provider: `${provider} (Public)` };
+    }
+  } catch (err: any) {
+    console.warn(`[AI] Public fallback ${provider} failed:`, err?.message);
   }
+  return { success: false, text: "", provider };
 }
 
 /**
  * Central askAI function:
- * 1. Checks user preferred LLM from settings (Gemini / DeepSeek / Claude / GPTLogic).
- * 2. Attempts preferred API first.
- * 3. On failure / timeout / invalid response, automatically falls back to remaining APIs in order.
- * 4. Normalizes all responses.
- * 5. Returns safe fallback string if all 4 endpoints fail, without crashing WhatsApp connection.
+ * 1. Checks configured API keys (Gemini / Groq / OpenAI) from user settings or process.env.
+ * 2. Attempts configured official/cloud APIs in order of preference.
+ * 3. Falls back to public proxies if official keys are absent or failed.
+ * 4. Returns safe fallback string if all fail, without crashing WhatsApp connection.
  */
-export async function askAI(prompt: string, systemPrompt?: string): Promise<string> {
-  const settings = await getSettings();
-  const preferred = (settings.defaultLLM as ProviderName) || "Gemini";
+export async function askAI(prompt: string, systemPrompt?: string, userId?: string): Promise<string> {
+  const settings = await getSettings(userId);
+  const geminiKey = (settings as any).geminiApiKey?.trim() || process.env.GEMINI_API_KEY?.trim();
+  const groqKey = (settings as any).groqApiKey?.trim() || process.env.GROQ_API_KEY?.trim();
+  const openAiKey = (settings as any).openAiApiKey?.trim() || process.env.OPENAI_API_KEY?.trim();
+  const preferred = (settings.preferredApi || "gemini").toLowerCase();
 
-  // Build fallback order starting with preferred provider
-  const fallbackOrder: ProviderName[] = [
-    preferred,
-    ...ALL_PROVIDERS.filter((p) => p !== preferred),
-  ];
+  // Helper list of official caller attempts based on priority
+  const attempts: Array<() => Promise<NormalizedAIResponse>> = [];
 
-  console.log(`[AI] Starting request. Provider sequence: ${fallbackOrder.join(" -> ")}`);
+  if (preferred.includes("groq")) {
+    if (groqKey) attempts.push(() => callGroq(groqKey, prompt, systemPrompt));
+    if (geminiKey) attempts.push(() => callOfficialGemini(geminiKey, prompt, systemPrompt));
+    if (openAiKey) attempts.push(() => callOpenAI(openAiKey, prompt, systemPrompt));
+  } else if (preferred.includes("openai") || preferred.includes("gpt")) {
+    if (openAiKey) attempts.push(() => callOpenAI(openAiKey, prompt, systemPrompt));
+    if (geminiKey) attempts.push(() => callOfficialGemini(geminiKey, prompt, systemPrompt));
+    if (groqKey) attempts.push(() => callGroq(groqKey, prompt, systemPrompt));
+  } else {
+    // Default: Gemini first
+    if (geminiKey) attempts.push(() => callOfficialGemini(geminiKey, prompt, systemPrompt));
+    if (groqKey) attempts.push(() => callGroq(groqKey, prompt, systemPrompt));
+    if (openAiKey) attempts.push(() => callOpenAI(openAiKey, prompt, systemPrompt));
+  }
 
-  for (const provider of fallbackOrder) {
-    const res = await callSingleProvider(provider, prompt, systemPrompt);
+  // Execute configured official API keys first
+  for (const attempt of attempts) {
+    const res = await attempt();
     if (res.success && res.text) {
       return res.text;
     }
-    console.log(`[AI] Trying next available fallback provider in chain...`);
   }
 
-  console.error("[AI] All AI endpoints failed or timed out.");
-  
+  // Fallback to public endpoints if official keys failed or not configured
+  console.warn("[AI] Official API keys not available or failed. Trying public proxy fallbacks...");
+  const publicProviders = preferred.includes("deepseek")
+    ? ["DeepSeek", "Gemini", "GPTLogic"]
+    : ["Gemini", "DeepSeek", "GPTLogic"];
+
+  for (const prov of publicProviders) {
+    const res = await callPublicFallback(prov, prompt, systemPrompt);
+    if (res.success && res.text) {
+      return res.text;
+    }
+  }
+
+  console.error("[AI] All AI endpoints failed or timed out. Please configure an API Key (Gemini, Groq, or OpenAI) in Settings.");
+
   // Safe conversational fallback in case of total external API outage
   const lang = settings.language || "Roman Urdu";
   if (lang.toLowerCase().includes("urdu")) {
@@ -180,5 +344,3 @@ export async function askAI(prompt: string, systemPrompt?: string): Promise<stri
   }
   return "Hey, having a brief network issue. Please try again in a moment.";
 }
-
-

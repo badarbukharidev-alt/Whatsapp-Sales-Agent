@@ -26,13 +26,13 @@ export async function getTools(userId?: string): Promise<any[]> {
     if (!userId) {
       return tools;
     }
-    // Return tools belonging to this specific user (or global admin tools if admin)
+    // Return tools belonging to this specific user (or global catalog tools if no userId)
     return tools.filter((t: any) => {
       if (t.userId) {
         return t.userId === userId;
       }
-      // If tool has no userId (legacy), treat as belonging to admin
-      return userId === "usr_admin_badar" || userId === "admin";
+      // If tool has no userId (global catalog), allow for all sessions
+      return true;
     });
   } catch (error) {
     return [];

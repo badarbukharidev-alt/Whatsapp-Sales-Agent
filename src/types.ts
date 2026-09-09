@@ -174,6 +174,9 @@ export interface AgentSettings {
   paymentMethods?: PaymentMethod[];
   paymentInstructions?: string;
   responseDelaySeconds?: number;
+  geminiApiKey?: string;
+  groqApiKey?: string;
+  openAiApiKey?: string;
 }
 
 export interface WhatsAppStatus {
