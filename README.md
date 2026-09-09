@@ -29,6 +29,8 @@ Includes a comprehensive, modern **React 19 management dashboard** with real-tim
 
 ## 🏗️ Architecture Overview
 
+> 📖 **Complete Architecture & Internal Workflow Guide:** For the full in-depth technical documentation including diagrams, CRM state transitions, prompt synthesis, and Deepgram pool routing, see [**`ARCHITECTURE_AND_WORKFLOW.md`**](ARCHITECTURE_AND_WORKFLOW.md).
+
 ```
                           ┌──────────────────────────┐
                           │   Customer on WhatsApp   │
