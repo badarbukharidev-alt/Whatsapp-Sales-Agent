@@ -1,5 +1,14 @@
 import assert from "assert";
-import { matchTool, getUnstatedFacts, recordStatedFacts, clampPriceFloors, extractMentionedFacts } from "../src/server/tool-matcher.js";
+import {
+  matchTool,
+  matchToolSync,
+  matchToolExactOrAlias,
+  classifyToolIntentWithLLM,
+  getUnstatedFacts,
+  recordStatedFacts,
+  clampPriceFloors,
+  extractMentionedFacts
+} from "../src/server/tool-matcher.js";
 import { Tool, Customer } from "../src/types.js";
 
 const mockTools: Tool[] = [
@@ -37,29 +46,21 @@ const mockTools: Tool[] = [
   }
 ];
 
-function runTests() {
+async function runTests() {
   console.log("==================================================");
   console.log("  RUNNING TOOL-MATCHER UNIT TESTS");
   console.log("==================================================");
 
   let passed = 0;
-  let total = 0;
+  const testQueue: Array<{ name: string; fn: () => void | Promise<void> }> = [];
 
-  function test(name: string, fn: () => void) {
-    total++;
-    try {
-      fn();
-      console.log(`  ✓ PASS: ${name}`);
-      passed++;
-    } catch (err: any) {
-      console.error(`  ✗ FAIL: ${name}`);
-      console.error(err);
-    }
+  function test(name: string, fn: () => void | Promise<void>) {
+    testQueue.push({ name, fn });
   }
 
   // 1. Exact Match Test
   test("Exact match on tool name", () => {
-    const res = matchTool("Bhai VoiceDelta ka price kitna hai?", mockTools);
+    const res = matchToolSync("Bhai VoiceDelta ka price kitna hai?", mockTools);
     assert.strictEqual(res.confidence, "exact");
     assert.strictEqual(res.matched.length, 1);
     assert.strictEqual(res.matched[0].id, "tool_voicedelta");
@@ -68,7 +69,7 @@ function runTests() {
 
   // 2. Alias Match Test
   test("Alias match (spaced or hyphenated)", () => {
-    const res = matchTool("Mujhe clip shield software chahiye", mockTools);
+    const res = matchToolSync("Mujhe clip shield software chahiye", mockTools);
     assert.strictEqual(res.confidence, "alias");
     assert.strictEqual(res.matched.length, 1);
     assert.strictEqual(res.matched[0].id, "tool_clipshield");
@@ -77,14 +78,14 @@ function runTests() {
 
   // 3. Keyword Match Test
   test("Keyword match when tool name is not explicitly mentioned", () => {
-    const res = matchTool("Aapke pas voice cloning wala koi system hai?", mockTools);
+    const res = matchToolSync("Aapke pas voice cloning wala koi system hai?", mockTools);
     assert.strictEqual(res.confidence, "keyword");
     assert.strictEqual(res.matched.length, 1);
     assert.strictEqual(res.matched[0].id, "tool_voicedelta");
   });
 
   test("Keyword match for copyright claim bypass", () => {
-    const res = matchTool("YouTube videos par copyright claim na aye aisi cheez chahiye", mockTools);
+    const res = matchToolSync("YouTube videos par copyright claim na aye aisi cheez chahiye", mockTools);
     assert.strictEqual(res.confidence, "keyword");
     assert.strictEqual(res.matched.length, 1);
     assert.strictEqual(res.matched[0].id, "tool_clipshield");
@@ -92,7 +93,7 @@ function runTests() {
 
   // 4. Multiple Tools Match Test
   test("Matches multiple tools when user asks about both", () => {
-    const res = matchTool("VoiceDelta aur ClipShield dono ka demo de do", mockTools);
+    const res = matchToolSync("VoiceDelta aur ClipShield dono ka demo de do", mockTools);
     assert.strictEqual(res.matched.length, 2);
     const ids = res.matched.map(t => t.id);
     assert.ok(ids.includes("tool_voicedelta"));
@@ -101,7 +102,7 @@ function runTests() {
 
   // 5. No Match Test (Casual Conversation)
   test("No match on casual greeting or vague chatter", () => {
-    const res = matchTool("Assalam o Alaikum bhai kaise ho?", mockTools);
+    const res = matchToolSync("Assalam o Alaikum bhai kaise ho?", mockTools);
     assert.strictEqual(res.confidence, "none");
     assert.strictEqual(res.matched.length, 0);
     assert.strictEqual(res.isUnknownProduct, false);
@@ -109,7 +110,7 @@ function runTests() {
 
   // 6. Unknown External Product Detection
   test("Detects unknown product inquiry: CapCut", () => {
-    const res = matchTool("Bhai CapCut pro account mil jayega kya?", mockTools);
+    const res = matchToolSync("Bhai CapCut pro account mil jayega kya?", mockTools);
     assert.strictEqual(res.confidence, "none");
     assert.strictEqual(res.matched.length, 0);
     assert.strictEqual(res.isUnknownProduct, true);
@@ -117,17 +118,30 @@ function runTests() {
   });
 
   test("Detects unknown product inquiry: Canva", () => {
-    const res = matchTool("Canva subscription hai aapke pas?", mockTools);
+    const res = matchToolSync("Canva subscription hai aapke pas?", mockTools);
     assert.strictEqual(res.confidence, "none");
     assert.strictEqual(res.isUnknownProduct, true);
     assert.strictEqual(res.queryProduct?.toLowerCase(), "canva");
   });
 
   test("Detects unknown product inquiry: InVideo", () => {
-    const res = matchTool("InVideo software ka rate kya hai?", mockTools);
+    const res = matchToolSync("InVideo software ka rate kya hai?", mockTools);
     assert.strictEqual(res.confidence, "none");
     assert.strictEqual(res.isUnknownProduct, true);
     assert.strictEqual(res.queryProduct?.toLowerCase(), "invideo");
+  });
+
+  // 7. Hybrid Async Tool Matcher (Fast path + Fallback resilience)
+  test("Hybrid matchTool resolves exact match without delay", async () => {
+    const res = await matchTool("VoiceDelta details please", mockTools);
+    assert.strictEqual(res.matched[0].id, "tool_voicedelta");
+    assert.strictEqual(res.confidence, "exact");
+  });
+
+  test("Hybrid matchTool resolves unknown product: Netflix", async () => {
+    const res = await matchTool("bhai netflix ka account kitne ka hai?", mockTools);
+    assert.strictEqual(res.isUnknownProduct, true);
+    assert.strictEqual(res.queryProduct?.toLowerCase(), "netflix");
   });
 
   // 7. Fact Subtraction Test (getUnstatedFacts)
@@ -197,6 +211,18 @@ function runTests() {
     assert.ok(facts.some(f => f.includes("3,600+")));
   });
 
+  for (const t of testQueue) {
+    try {
+      await t.fn();
+      console.log(`  ✓ PASS: ${t.name}`);
+      passed++;
+    } catch (err: any) {
+      console.error(`  ✗ FAIL: ${t.name}`);
+      console.error(err);
+    }
+  }
+
+  const total = testQueue.length;
   console.log("--------------------------------------------------");
   console.log(`RESULTS: ${passed}/${total} tests passed.`);
   console.log("==================================================");

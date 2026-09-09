@@ -1,15 +1,16 @@
 import { Tool, Customer } from "../types.js";
+import { askAI } from "./ai.js";
 
 export interface ToolMatchDetail {
   toolId: string;
   toolName: string;
-  matchedOn: "exact" | "alias" | "keyword";
+  matchedOn: "exact" | "alias" | "keyword" | "semantic";
   matchedToken: string;
 }
 
 export interface ToolMatchResult {
   matched: Tool[];
-  confidence: "exact" | "alias" | "keyword" | "none";
+  confidence: "exact" | "alias" | "keyword" | "semantic" | "none";
   isUnknownProduct: boolean;
   queryProduct?: string;
   matchedDetails: ToolMatchDetail[];
@@ -20,7 +21,7 @@ const COMMON_EXTERNAL_TOOLS = [
   "capcut", "vrew", "invideo", "canva", "filmora", "synthesia", "midjourney",
   "suno", "runway", "pika", "luma", "adobe", "premiere", "photoshop", "chatgpt",
   "d-id", "descript", "opus clip", "submagic", "fliki", "pictory", "leonardo",
-  "murf", "speechify", "resemble", "veed", "cupcut", "kamua"
+  "murf", "speechify", "resemble", "veed", "cupcut", "kamua", "netflix", "prime"
 ];
 
 // Common Urdu/English non-product words to ignore when scanning for product nouns
@@ -96,31 +97,15 @@ function detectUnknownProduct(text: string, tools: Tool[]): string | undefined {
 }
 
 /**
- * Matches customer message against catalog tools in strict priority order:
- * 1. Exact Name / Base Name Match
- * 2. Alias Match
- * 3. Keyword / Category Match
- *
- * If no tool matches and customer appears to name an uncataloged tool,
- * flags isUnknownProduct = true with queryProduct.
+ * Deterministic Fast-Path: Checks exact name, base name, and direct aliases.
+ * Returns match result immediately if found, with zero network latency.
  */
-export function matchTool(
-  text: string,
-  tools: Tool[],
-  conversationHistory?: string[]
-): ToolMatchResult {
+export function matchToolExactOrAlias(text: string, tools: Tool[]): ToolMatchResult | null {
   const normText = normalizeText(text);
   const matchedDetails: ToolMatchDetail[] = [];
   const matchedToolsSet = new Map<string, Tool>();
 
-  // Also extract context from the last 2-3 turns of history if needed
-  const historyText = conversationHistory && conversationHistory.length > 0
-    ? normalizeText(conversationHistory.slice(-3).join(" "))
-    : "";
-
-  // -------------------------------------------------------------
-  // STAGE 1: Exact / Base Name Match
-  // -------------------------------------------------------------
+  // 1. Exact / Base Name Match
   for (const tool of tools) {
     const fullNameNorm = normalizeText(tool.name);
     const baseNameNorm = extractBaseName(tool.name);
@@ -148,9 +133,7 @@ export function matchTool(
     };
   }
 
-  // -------------------------------------------------------------
-  // STAGE 2: Alias Match
-  // -------------------------------------------------------------
+  // 2. Alias Match
   for (const tool of tools) {
     const aliases = tool.aliases || [];
     for (const alias of aliases) {
@@ -180,10 +163,136 @@ export function matchTool(
     };
   }
 
-  // -------------------------------------------------------------
-  // STAGE 3: Keyword / Category Match
-  // -------------------------------------------------------------
-  // Sort keywords by length descending so multi-word keywords match first
+  return null;
+}
+
+/**
+ * AI LLM Semantic Intent Classifier:
+ * When exact/alias matching is ambiguous, uses LLM to understand natural phrasing,
+ * Roman Urdu slang, indirect problem descriptions, and uncataloged external tools.
+ */
+export async function classifyToolIntentWithLLM(
+  text: string,
+  tools: Tool[],
+  conversationHistory?: string[],
+  userId?: string
+): Promise<ToolMatchResult | null> {
+  if (!text || text.trim().length < 3) return null;
+
+  try {
+    const toolSummaries = tools.map(t =>
+      `- ID "${t.id}" (${t.name}): ${t.description.slice(0, 140)}`
+    ).join("\n");
+
+    const historySnippet = conversationHistory && conversationHistory.length > 0
+      ? `Recent conversation context: "${conversationHistory.slice(-2).join(" ")}"\n`
+      : "";
+
+    const prompt = `Classify customer software intent. Return STRICT JSON ONLY.
+Catalog:
+${toolSummaries}
+
+${historySnippet}Customer: "${text}"
+
+Rules:
+- If customer problem/need matches a catalog tool, put its ID in "matchedToolIds".
+- If customer asks for uncataloged software (e.g. Canva, CapCut, Netflix, etc.), set "isUnknownProduct": true, "queryProduct": "<name>".
+- If greeting/chit-chat, set "matchedToolIds": [].
+
+JSON format:
+{"matchedToolIds": string[], "isUnknownProduct": boolean, "queryProduct": string | null}`;
+
+    const reply = await askAI(prompt, "You are a JSON-only tool classifier. Output valid JSON only.", userId);
+    const jsonMatch = reply.match(/\{[\s\S]*?\}/);
+    if (!jsonMatch) return null;
+
+    const parsed = JSON.parse(jsonMatch[0]);
+    if (!parsed || typeof parsed !== "object") return null;
+
+    // Validate matched tools against catalog
+    const matchedTools: Tool[] = [];
+    const matchedDetails: ToolMatchDetail[] = [];
+
+    if (Array.isArray(parsed.matchedToolIds) && parsed.matchedToolIds.length > 0) {
+      for (const rawId of parsed.matchedToolIds) {
+        const idStr = String(rawId).trim().toLowerCase();
+        const found = tools.find(t =>
+          t.id.toLowerCase() === idStr ||
+          t.name.toLowerCase() === idStr ||
+          extractBaseName(t.name) === idStr
+        );
+        if (found && !matchedTools.some(m => m.id === found.id)) {
+          matchedTools.push(found);
+          matchedDetails.push({
+            toolId: found.id,
+            toolName: found.name,
+            matchedOn: "semantic",
+            matchedToken: text.slice(0, 40),
+          });
+        }
+      }
+    }
+
+    if (matchedTools.length > 0) {
+      return {
+        matched: matchedTools,
+        confidence: "semantic",
+        isUnknownProduct: false,
+        matchedDetails,
+      };
+    }
+
+    if (parsed.isUnknownProduct && parsed.queryProduct) {
+      const rawProd = String(parsed.queryProduct).trim();
+      const isCatalog = tools.some(t => {
+        const base = extractBaseName(t.name);
+        return base.includes(rawProd.toLowerCase()) || (t.aliases || []).some(a => a.toLowerCase().includes(rawProd.toLowerCase()));
+      });
+      if (!isCatalog) {
+        return {
+          matched: [],
+          confidence: "none",
+          isUnknownProduct: true,
+          queryProduct: rawProd,
+          matchedDetails: [],
+        };
+      }
+    }
+
+    return {
+      matched: [],
+      confidence: "none",
+      isUnknownProduct: false,
+      matchedDetails: [],
+    };
+  } catch (err) {
+    console.warn("[ToolMatcher] AI semantic classification failed or timed out:", (err as any)?.message || err);
+    return null;
+  }
+}
+
+/**
+ * Synchronous deterministic rule-based matcher (exact, alias, keywords, history, unknown-brand regex).
+ * Guaranteed 0ms offline execution for unit tests or fast fallbacks.
+ */
+export function matchToolSync(
+  text: string,
+  tools: Tool[],
+  conversationHistory?: string[]
+): ToolMatchResult {
+  const normText = normalizeText(text);
+  const matchedDetails: ToolMatchDetail[] = [];
+  const matchedToolsSet = new Map<string, Tool>();
+
+  const historyText = conversationHistory && conversationHistory.length > 0
+    ? normalizeText(conversationHistory.slice(-3).join(" "))
+    : "";
+
+  // 1. Exact / Alias
+  const fast = matchToolExactOrAlias(text, tools);
+  if (fast) return fast;
+
+  // 2. Keyword Match
   for (const tool of tools) {
     const keywords = (tool.keywords || []).slice().sort((a, b) => b.length - a.length);
     for (const kw of keywords) {
@@ -213,7 +322,7 @@ export function matchTool(
     };
   }
 
-  // If no match in current text, check if history mentions a tool recently
+  // 3. Conversation History Match
   if (historyText) {
     for (const tool of tools) {
       const baseNameNorm = extractBaseName(tool.name);
@@ -239,9 +348,7 @@ export function matchTool(
     }
   }
 
-  // -------------------------------------------------------------
-  // STAGE 4: Unknown External Product Detection
-  // -------------------------------------------------------------
+  // 4. Unknown External Product Detection
   const unknownProd = detectUnknownProduct(text, tools);
   if (unknownProd) {
     return {
@@ -259,6 +366,56 @@ export function matchTool(
     isUnknownProduct: false,
     matchedDetails: [],
   };
+}
+
+/**
+ * Hybrid Tool Matcher:
+ * 1. Deterministic Fast Path: Exact name & alias hits return instantly (0ms latency, zero API cost).
+ * 2. Deterministic Known External Brand Check (Canva, CapCut, Photoshop, etc.).
+ * 3. AI LLM Semantic Intent Classification: Understands Roman Urdu phrasing, slang, synonyms, and indirect problem descriptions.
+ * 4. Fallback: Robust keyword & history matching if AI call is unavailable or times out.
+ */
+export async function matchTool(
+  text: string,
+  tools: Tool[],
+  conversationHistory?: string[],
+  userId?: string
+): Promise<ToolMatchResult> {
+  // 1. Fast-Path: Exact Name or Alias
+  const fast = matchToolExactOrAlias(text, tools);
+  if (fast) return fast;
+
+  // 2. Fast-Path: Known external tools
+  const norm = normalizeText(text);
+  for (const ext of COMMON_EXTERNAL_TOOLS) {
+    const extRegex = new RegExp(`\\b${ext.replace(/\s+/g, "\\s*")}\\b`, "i");
+    if (extRegex.test(norm)) {
+      const isCatalog = tools.some(t => {
+        const base = extractBaseName(t.name);
+        return base.includes(ext) || (t.aliases || []).some(a => a.toLowerCase().includes(ext));
+      });
+      if (!isCatalog) {
+        return {
+          matched: [],
+          confidence: "none",
+          isUnknownProduct: true,
+          queryProduct: ext.charAt(0).toUpperCase() + ext.slice(1),
+          matchedDetails: [],
+        };
+      }
+    }
+  }
+
+  // 3. AI Semantic Classifier
+  const aiMatch = await classifyToolIntentWithLLM(text, tools, conversationHistory, userId);
+  if (aiMatch) {
+    if (aiMatch.matched.length > 0 || aiMatch.isUnknownProduct) {
+      return aiMatch;
+    }
+  }
+
+  // 4. Fallback to keyword / rule-based matching
+  return matchToolSync(text, tools, conversationHistory);
 }
 
 /**

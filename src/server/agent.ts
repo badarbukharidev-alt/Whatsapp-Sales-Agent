@@ -182,8 +182,8 @@ async function generateResponse(
     .slice(-3)
     .map((m: any) => m.content);
 
-  // 1. Tool Matching Protocol
-  const match = matchTool(latestCustomerText, tools, recentUserHistory);
+  // 1. Tool Matching Protocol (Fast Exact/Alias + AI LLM Intent Classifier + Fallback)
+  const match = await matchTool(latestCustomerText, tools, recentUserHistory, userId);
 
   // 2. Format tool context based on match results
   let toolContext = "";

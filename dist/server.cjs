@@ -1144,6 +1144,11 @@ async function callOpenAI(apiKey, prompt, systemPrompt) {
   return { success: false, text: "", provider: "OpenAI", error: "OpenAI request failed" };
 }
 function buildCompactPublicQuery(prompt, systemPrompt) {
+  const isClassification = Boolean(systemPrompt && /json|classif|match|categor/i.test(systemPrompt)) || /json|classifier|categor|intent/i.test(prompt);
+  if (isClassification) {
+    if (prompt.length <= 1e3) return prompt;
+    return prompt.slice(0, 1e3);
+  }
   if (prompt.length <= 600) return prompt;
   let customerMsg = "";
   const matchMsg = prompt.match(/CUSTOMER'S NEW MESSAGE\(S\):\s*["']?([\s\S]*?)["']?\s*(?:Provide your|$)/i);
@@ -1151,10 +1156,18 @@ function buildCompactPublicQuery(prompt, systemPrompt) {
     customerMsg = matchMsg[1].trim();
   }
   let toolSummary = "";
-  if (prompt.includes("VoiceDelta")) {
+  const hasClipShield = /clipshield/i.test(prompt);
+  const hasVoiceDelta = /voicedelta/i.test(prompt);
+  if (hasClipShield && !hasVoiceDelta) {
+    toolSummary = "Tool: ClipShield (YouTube copyright claim removal & video repurposing, Rs. 1,500/month).";
+  } else if (hasVoiceDelta && !hasClipShield) {
     toolSummary = "Tool: VoiceDelta (Rs. 1,199/month, 3,600+ AI voices, voice cloning).";
-  } else if (prompt.includes("ClipShield")) {
-    toolSummary = "Tool: ClipShield (Video copyright & re-edit protection).";
+  } else if (hasClipShield && hasVoiceDelta) {
+    if (/MATCHED CATALOG TOOL:[^\n]*ClipShield/i.test(prompt)) {
+      toolSummary = "Tool: ClipShield (YouTube copyright claim removal & video repurposing, Rs. 1,500/month).";
+    } else {
+      toolSummary = "Tool: VoiceDelta (Rs. 1,199/month, 3,600+ AI voices, voice cloning).";
+    }
   }
   const roleRule = "Pakistani WhatsApp sales representative. Casual Roman Urdu only. Short conversational reply.";
   const parts = [
@@ -1167,7 +1180,7 @@ function buildCompactPublicQuery(prompt, systemPrompt) {
 }
 async function callPublicFallback(provider, prompt, systemPrompt) {
   const compactQuery = buildCompactPublicQuery(prompt, systemPrompt);
-  const safeQuery = compactQuery.length > 600 ? compactQuery.substring(0, 600) : compactQuery;
+  const safeQuery = compactQuery.length > 1e3 ? compactQuery.substring(0, 1e3) : compactQuery;
   const encodedQuery = encodeURIComponent(safeQuery);
   let url = `https://api-rebix.zone.id/api/gemini?q=${encodedQuery}`;
   if (provider === "DeepSeek") url = `https://api-rebix.zone.id/api/deepseek-v3?q=${encodedQuery}`;
@@ -2270,11 +2283,10 @@ function detectUnknownProduct(text, tools) {
   }
   return void 0;
 }
-function matchTool(text, tools, conversationHistory) {
+function matchToolExactOrAlias(text, tools) {
   const normText = normalizeText(text);
   const matchedDetails = [];
   const matchedToolsSet = /* @__PURE__ */ new Map();
-  const historyText = conversationHistory && conversationHistory.length > 0 ? normalizeText(conversationHistory.slice(-3).join(" ")) : "";
   for (const tool of tools) {
     const fullNameNorm = normalizeText(tool.name);
     const baseNameNorm = extractBaseName(tool.name);
@@ -2324,6 +2336,95 @@ function matchTool(text, tools, conversationHistory) {
       matchedDetails
     };
   }
+  return null;
+}
+async function classifyToolIntentWithLLM(text, tools, conversationHistory, userId) {
+  if (!text || text.trim().length < 3) return null;
+  try {
+    const toolSummaries = tools.map(
+      (t) => `- ID "${t.id}" (${t.name}): ${t.description.slice(0, 140)}`
+    ).join("\n");
+    const historySnippet = conversationHistory && conversationHistory.length > 0 ? `Recent conversation context: "${conversationHistory.slice(-2).join(" ")}"
+` : "";
+    const prompt = `Classify customer software intent. Return STRICT JSON ONLY.
+Catalog:
+${toolSummaries}
+
+${historySnippet}Customer: "${text}"
+
+Rules:
+- If customer problem/need matches a catalog tool, put its ID in "matchedToolIds".
+- If customer asks for uncataloged software (e.g. Canva, CapCut, Netflix, etc.), set "isUnknownProduct": true, "queryProduct": "<name>".
+- If greeting/chit-chat, set "matchedToolIds": [].
+
+JSON format:
+{"matchedToolIds": string[], "isUnknownProduct": boolean, "queryProduct": string | null}`;
+    const reply = await askAI(prompt, "You are a JSON-only tool classifier. Output valid JSON only.", userId);
+    const jsonMatch = reply.match(/\{[\s\S]*?\}/);
+    if (!jsonMatch) return null;
+    const parsed = JSON.parse(jsonMatch[0]);
+    if (!parsed || typeof parsed !== "object") return null;
+    const matchedTools = [];
+    const matchedDetails = [];
+    if (Array.isArray(parsed.matchedToolIds) && parsed.matchedToolIds.length > 0) {
+      for (const rawId of parsed.matchedToolIds) {
+        const idStr = String(rawId).trim().toLowerCase();
+        const found = tools.find(
+          (t) => t.id.toLowerCase() === idStr || t.name.toLowerCase() === idStr || extractBaseName(t.name) === idStr
+        );
+        if (found && !matchedTools.some((m) => m.id === found.id)) {
+          matchedTools.push(found);
+          matchedDetails.push({
+            toolId: found.id,
+            toolName: found.name,
+            matchedOn: "semantic",
+            matchedToken: text.slice(0, 40)
+          });
+        }
+      }
+    }
+    if (matchedTools.length > 0) {
+      return {
+        matched: matchedTools,
+        confidence: "semantic",
+        isUnknownProduct: false,
+        matchedDetails
+      };
+    }
+    if (parsed.isUnknownProduct && parsed.queryProduct) {
+      const rawProd = String(parsed.queryProduct).trim();
+      const isCatalog = tools.some((t) => {
+        const base = extractBaseName(t.name);
+        return base.includes(rawProd.toLowerCase()) || (t.aliases || []).some((a) => a.toLowerCase().includes(rawProd.toLowerCase()));
+      });
+      if (!isCatalog) {
+        return {
+          matched: [],
+          confidence: "none",
+          isUnknownProduct: true,
+          queryProduct: rawProd,
+          matchedDetails: []
+        };
+      }
+    }
+    return {
+      matched: [],
+      confidence: "none",
+      isUnknownProduct: false,
+      matchedDetails: []
+    };
+  } catch (err) {
+    console.warn("[ToolMatcher] AI semantic classification failed or timed out:", err?.message || err);
+    return null;
+  }
+}
+function matchToolSync(text, tools, conversationHistory) {
+  const normText = normalizeText(text);
+  const matchedDetails = [];
+  const matchedToolsSet = /* @__PURE__ */ new Map();
+  const historyText = conversationHistory && conversationHistory.length > 0 ? normalizeText(conversationHistory.slice(-3).join(" ")) : "";
+  const fast = matchToolExactOrAlias(text, tools);
+  if (fast) return fast;
   for (const tool of tools) {
     const keywords = (tool.keywords || []).slice().sort((a, b) => b.length - a.length);
     for (const kw of keywords) {
@@ -2390,6 +2491,36 @@ function matchTool(text, tools, conversationHistory) {
     isUnknownProduct: false,
     matchedDetails: []
   };
+}
+async function matchTool(text, tools, conversationHistory, userId) {
+  const fast = matchToolExactOrAlias(text, tools);
+  if (fast) return fast;
+  const norm = normalizeText(text);
+  for (const ext of COMMON_EXTERNAL_TOOLS) {
+    const extRegex = new RegExp(`\\b${ext.replace(/\s+/g, "\\s*")}\\b`, "i");
+    if (extRegex.test(norm)) {
+      const isCatalog = tools.some((t) => {
+        const base = extractBaseName(t.name);
+        return base.includes(ext) || (t.aliases || []).some((a) => a.toLowerCase().includes(ext));
+      });
+      if (!isCatalog) {
+        return {
+          matched: [],
+          confidence: "none",
+          isUnknownProduct: true,
+          queryProduct: ext.charAt(0).toUpperCase() + ext.slice(1),
+          matchedDetails: []
+        };
+      }
+    }
+  }
+  const aiMatch = await classifyToolIntentWithLLM(text, tools, conversationHistory, userId);
+  if (aiMatch) {
+    if (aiMatch.matched.length > 0 || aiMatch.isUnknownProduct) {
+      return aiMatch;
+    }
+  }
+  return matchToolSync(text, tools, conversationHistory);
 }
 function extractFactKeyTokens(fact) {
   const clean = fact.replace(/(\d+),(\d+)/g, "$1$2").toLowerCase().replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
@@ -2531,6 +2662,7 @@ function clampPriceFloors(text, matchedTools) {
 var COMMON_EXTERNAL_TOOLS, COMMON_STOP_WORDS;
 var init_tool_matcher = __esm({
   "src/server/tool-matcher.ts"() {
+    init_ai();
     COMMON_EXTERNAL_TOOLS = [
       "capcut",
       "vrew",
@@ -2559,7 +2691,9 @@ var init_tool_matcher = __esm({
       "resemble",
       "veed",
       "cupcut",
-      "kamua"
+      "kamua",
+      "netflix",
+      "prime"
     ];
     COMMON_STOP_WORDS = /* @__PURE__ */ new Set([
       "kya",
@@ -2730,7 +2864,7 @@ async function generateResponse(phoneNumber, latestCustomerText, name, batch, us
   const tools = await getTools(userId);
   const customerMessages = customer.messages || [];
   const recentUserHistory = customerMessages.filter((m) => m.role === "user").slice(-3).map((m) => m.content);
-  const match = matchTool(latestCustomerText, tools, recentUserHistory);
+  const match = await matchTool(latestCustomerText, tools, recentUserHistory, userId);
   let toolContext = "";
   if (match.confidence === "none" && match.isUnknownProduct) {
     toolContext = `Customer asked about external uncataloged product: "${match.queryProduct}". No catalog tool matched.`;

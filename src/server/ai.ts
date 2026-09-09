@@ -197,7 +197,17 @@ export async function callOpenAI(apiKey: string, prompt: string, systemPrompt?: 
  * Builds a compact query for public GET fallbacks that preserves customer message and intent.
  */
 function buildCompactPublicQuery(prompt: string, systemPrompt?: string): string {
-  // If prompt is short, use as is
+  const isClassification =
+    Boolean(systemPrompt && /json|classif|match|categor/i.test(systemPrompt)) ||
+    /json|classifier|categor|intent/i.test(prompt);
+
+  // For classification tasks, preserve the prompt and schema intact
+  if (isClassification) {
+    if (prompt.length <= 1000) return prompt;
+    return prompt.slice(0, 1000);
+  }
+
+  // If conversational prompt is short, use as is
   if (prompt.length <= 600) return prompt;
 
   // Extract customer message section if present
@@ -207,12 +217,22 @@ function buildCompactPublicQuery(prompt: string, systemPrompt?: string): string 
     customerMsg = matchMsg[1].trim();
   }
 
-  // Extract tool info summary if present
+  // Determine active tool summary based on matched catalog tool in prompt
   let toolSummary = "";
-  if (prompt.includes("VoiceDelta")) {
+  const hasClipShield = /clipshield/i.test(prompt);
+  const hasVoiceDelta = /voicedelta/i.test(prompt);
+
+  if (hasClipShield && !hasVoiceDelta) {
+    toolSummary = "Tool: ClipShield (YouTube copyright claim removal & video repurposing, Rs. 1,500/month).";
+  } else if (hasVoiceDelta && !hasClipShield) {
     toolSummary = "Tool: VoiceDelta (Rs. 1,199/month, 3,600+ AI voices, voice cloning).";
-  } else if (prompt.includes("ClipShield")) {
-    toolSummary = "Tool: ClipShield (Video copyright & re-edit protection).";
+  } else if (hasClipShield && hasVoiceDelta) {
+    // Check which one is the active matched tool in the prompt
+    if (/MATCHED CATALOG TOOL:[^\n]*ClipShield/i.test(prompt)) {
+      toolSummary = "Tool: ClipShield (YouTube copyright claim removal & video repurposing, Rs. 1,500/month).";
+    } else {
+      toolSummary = "Tool: VoiceDelta (Rs. 1,199/month, 3,600+ AI voices, voice cloning).";
+    }
   }
 
   const roleRule = "Pakistani WhatsApp sales representative. Casual Roman Urdu only. Short conversational reply.";
@@ -231,7 +251,7 @@ function buildCompactPublicQuery(prompt: string, systemPrompt?: string): string 
  */
 async function callPublicFallback(provider: string, prompt: string, systemPrompt?: string): Promise<NormalizedAIResponse> {
   const compactQuery = buildCompactPublicQuery(prompt, systemPrompt);
-  const safeQuery = compactQuery.length > 600 ? compactQuery.substring(0, 600) : compactQuery;
+  const safeQuery = compactQuery.length > 1000 ? compactQuery.substring(0, 1000) : compactQuery;
   const encodedQuery = encodeURIComponent(safeQuery);
 
   let url = `https://api-rebix.zone.id/api/gemini?q=${encodedQuery}`;

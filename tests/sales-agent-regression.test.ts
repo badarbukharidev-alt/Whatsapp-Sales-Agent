@@ -4,6 +4,7 @@ import path from "path";
 import { Tool, Customer } from "../src/types.js";
 import {
   matchTool,
+  matchToolSync,
   getUnstatedFacts,
   recordStatedFacts,
   clampPriceFloors,
@@ -14,24 +15,16 @@ const toolsData: Tool[] = JSON.parse(
   fs.readFileSync(path.resolve(process.cwd(), "data", "tools.json"), "utf-8")
 );
 
-function runRegressionSuite() {
+async function runRegressionSuite() {
   console.log("==================================================");
   console.log("  RUNNING SALES CLOSER V2 REGRESSION TEST SUITE");
   console.log("==================================================");
 
   let passed = 0;
-  let total = 0;
+  const testQueue: Array<{ name: string; fn: () => void | Promise<void> }> = [];
 
-  function test(name: string, fn: () => void) {
-    total++;
-    try {
-      fn();
-      console.log(`  ✓ PASS: ${name}`);
-      passed++;
-    } catch (err: any) {
-      console.error(`  ✗ FAIL: ${name}`);
-      console.error(err);
-    }
+  function test(name: string, fn: () => void | Promise<void>) {
+    testQueue.push({ name, fn });
   }
 
   // =========================================================================
@@ -41,27 +34,27 @@ function runRegressionSuite() {
   // =========================================================================
   test("1.1 Unknown product detection (CapCut / Canva / InVideo)", () => {
     const query1 = "Bhai CapCut pro account mil sakta hai?";
-    const match1 = matchTool(query1, toolsData);
+    const match1 = matchToolSync(query1, toolsData);
     assert.strictEqual(match1.confidence, "none");
     assert.strictEqual(match1.isUnknownProduct, true);
     assert.strictEqual(match1.queryProduct?.toLowerCase(), "capcut");
     assert.strictEqual(match1.matched.length, 0);
 
     const query2 = "Canva pro subscription chahiye mujhe";
-    const match2 = matchTool(query2, toolsData);
+    const match2 = matchToolSync(query2, toolsData);
     assert.strictEqual(match2.confidence, "none");
     assert.strictEqual(match2.isUnknownProduct, true);
     assert.strictEqual(match2.queryProduct?.toLowerCase(), "canva");
 
     const query3 = "InVideo software ka rate kya hai?";
-    const match3 = matchTool(query3, toolsData);
+    const match3 = matchToolSync(query3, toolsData);
     assert.strictEqual(match3.confidence, "none");
     assert.strictEqual(match3.isUnknownProduct, true);
     assert.strictEqual(match3.queryProduct?.toLowerCase(), "invideo");
   });
 
   test("1.2 Unknown product handling produces honest boundary and diagnostic question", () => {
-    const match = matchTool("Bhai CapCut pro account mil sakta hai?", toolsData);
+    const match = matchToolSync("Bhai CapCut pro account mil sakta hai?", toolsData);
     assert.ok(match.isUnknownProduct);
 
     // Simulated compliant AI response adhering to unknown product rules
@@ -200,6 +193,18 @@ function runRegressionSuite() {
     assert.ok(hasCondition, "Discount concession must be explicitly conditional upon same-day payment or term");
   });
 
+  for (const t of testQueue) {
+    try {
+      await t.fn();
+      console.log(`  ✓ PASS: ${t.name}`);
+      passed++;
+    } catch (err: any) {
+      console.error(`  ✗ FAIL: ${t.name}`);
+      console.error(err);
+    }
+  }
+
+  const total = testQueue.length;
   console.log("--------------------------------------------------");
   console.log(`REGRESSION RESULTS: ${passed}/${total} test suites passed.`);
   console.log("==================================================");
