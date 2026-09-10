@@ -55,18 +55,26 @@ function detectUnknownProduct(text: string, tools: Tool[]): string | undefined {
 
   // 1. Direct check against known external tools list
   for (const ext of COMMON_EXTERNAL_TOOLS) {
-    const extRegex = new RegExp(`\\b${ext.replace(/\s+/g, "\\s*")}\\b`, "i");
+    const extRegex = new RegExp(`\\b${ext.replace(/\\s+/g, "\\s*")}\\b`, "i");
     if (extRegex.test(norm)) {
       // Confirm this external tool isn't actually in our catalog
       const isCatalog = tools.some(t => {
         const base = extractBaseName(t.name);
-        return base.includes(ext) || (t.aliases || []).some(a => a.toLowerCase().includes(ext));
+        return base.includes(ext) ||
+               (t.aliases || []).some(a => a.toLowerCase().includes(ext)) ||
+               (t.keywords || []).some(k => k.toLowerCase().includes(ext));
       });
       if (!isCatalog) {
         // Capitalize nicely
         return ext.charAt(0).toUpperCase() + ext.slice(1);
       }
     }
+  }
+
+  // Domain guard: never treat core catalog problems/features as unknown products
+  const isCatalogDomain = /\b(?:copyright|claim|claims|bypass|voice|voices|voicedelta|clipshield|cloning|clone|tts|reframing|repurpose|youtube)\b/i.test(norm);
+  if (isCatalogDomain) {
+    return undefined;
   }
 
   // 2. Pattern matching: "<Token> tool/app/software/account/chahiye/hai"
@@ -81,10 +89,12 @@ function detectUnknownProduct(text: string, tools: Tool[]): string | undefined {
     if (match && match[1]) {
       const candidate = match[1].toLowerCase().trim();
       if (!COMMON_STOP_WORDS.has(candidate) && candidate.length >= 3) {
-        // Confirm it doesn't match any catalog tool or alias
+        // Confirm it doesn't match any catalog tool, alias, or keyword
         const isCatalog = tools.some(t => {
           const base = extractBaseName(t.name);
-          return base.includes(candidate) || (t.aliases || []).some(a => a.toLowerCase().includes(candidate));
+          return base.includes(candidate) ||
+                 (t.aliases || []).some(a => a.toLowerCase().includes(candidate)) ||
+                 (t.keywords || []).some(k => k.toLowerCase().includes(candidate));
         });
         if (!isCatalog) {
           return candidate.charAt(0).toUpperCase() + candidate.slice(1);
@@ -340,11 +350,41 @@ JSON format:
 
     if (parsed.isUnknownProduct && parsed.queryProduct) {
       const rawProd = String(parsed.queryProduct).trim();
+      const rawProdLower = rawProd.toLowerCase();
       const isCatalog = tools.some(t => {
         const base = extractBaseName(t.name);
-        return base.includes(rawProd.toLowerCase()) || (t.aliases || []).some(a => a.toLowerCase().includes(rawProd.toLowerCase()));
+        return base.includes(rawProdLower) ||
+               (t.aliases || []).some(a => a.toLowerCase().includes(rawProdLower)) ||
+               (t.keywords || []).some(k => k.toLowerCase().includes(rawProdLower));
       });
       if (!isCatalog) {
+        // Also check if rawProd or text matches any catalog tool's domain
+        const isDomain = /\b(?:copyright|claim|claims|bypass|voice|voices|voicedelta|clipshield|cloning|clone|tts|reframing|repurpose)\b/i.test(rawProdLower) ||
+                         /\b(?:copyright|claim|claims|bypass|voice|voices|voicedelta|clipshield|cloning|clone|tts|reframing|repurpose)\b/i.test(text);
+        if (isDomain) {
+          const domainTool = tools.find(t => {
+            const tText = `${t.name} ${(t.keywords || []).join(" ")} ${(t.aliases || []).join(" ")}`.toLowerCase();
+            return (rawProdLower.includes("copyright") && tText.includes("copyright")) ||
+                   (rawProdLower.includes("claim") && tText.includes("claim")) ||
+                   (rawProdLower.includes("voice") && tText.includes("voice")) ||
+                   (text.toLowerCase().includes("copyright") && tText.includes("copyright")) ||
+                   (text.toLowerCase().includes("voice") && tText.includes("voice"));
+          });
+          if (domainTool) {
+            return {
+              matched: [domainTool],
+              confidence: "semantic",
+              isUnknownProduct: false,
+              matchedDetails: [{
+                toolId: domainTool.id,
+                toolName: domainTool.name,
+                matchedOn: "semantic",
+                matchedToken: rawProd,
+              }],
+            };
+          }
+        }
+
         return {
           matched: [],
           confidence: "none",
@@ -368,38 +408,20 @@ JSON format:
 }
 
 /**
- * Synchronous deterministic rule-based matcher (exact, alias, keywords, history, unknown-brand regex).
- * Guaranteed 0ms offline execution for unit tests or fast fallbacks.
+ * Keyword-based matcher for catalog tools.
  */
-export function matchToolSync(
-  text: string,
-  tools: Tool[],
-  conversationHistory?: string[]
-): ToolMatchResult {
+export function matchToolKeywords(text: string, tools: Tool[]): ToolMatchResult | null {
   const normText = normalizeText(text);
   const matchedDetails: ToolMatchDetail[] = [];
   const matchedToolsSet = new Map<string, Tool>();
 
-  const historyText = conversationHistory && conversationHistory.length > 0
-    ? normalizeText(conversationHistory.slice(-3).join(" "))
-    : "";
-
-  // 1. Exact / Alias
-  const fast = matchToolExactOrAlias(text, tools);
-  if (fast) return fast;
-
-  // 2. Fuzzy / Typo Match (e.g. "clipshied" -> ClipShield)
-  const fuzzy = matchToolFuzzy(text, tools);
-  if (fuzzy) return fuzzy;
-
-  // 3. Keyword Match
   for (const tool of tools) {
     const keywords = (tool.keywords || []).slice().sort((a, b) => b.length - a.length);
     for (const kw of keywords) {
       const normKw = normalizeText(kw);
       if (!normKw || normKw.length < 3) continue;
 
-      const kwRegex = new RegExp(`\\b${normKw.replace(/\s+/g, "\\s*")}\\b`, "i");
+      const kwRegex = new RegExp(`\\b${normKw.replace(/\\s+/g, "\\s*")}\\b`, "i");
       if (kwRegex.test(normText)) {
         matchedToolsSet.set(tool.id, tool);
         matchedDetails.push({
@@ -422,33 +444,93 @@ export function matchToolSync(
     };
   }
 
-  // 3. Conversation History Match
-  if (historyText) {
+  return null;
+}
+
+/**
+ * Searches backwards through conversation history to find the active catalog tool under discussion.
+ */
+export function matchToolFromHistory(
+  conversationHistory: string[] | undefined,
+  tools: Tool[],
+  currentText = ""
+): ToolMatchResult | null {
+  if (!conversationHistory || conversationHistory.length === 0) return null;
+
+  for (let i = conversationHistory.length - 1; i >= 0; i--) {
+    const turnNorm = normalizeText(conversationHistory[i]);
     for (const tool of tools) {
       const baseNameNorm = extractBaseName(tool.name);
-      const baseRegex = new RegExp(`\\b${baseNameNorm.replace(/\s+/g, "\\s*")}\\b`, "i");
-      if (baseRegex.test(historyText)) {
-        matchedToolsSet.set(tool.id, tool);
-        matchedDetails.push({
-          toolId: tool.id,
-          toolName: tool.name,
-          matchedOn: "alias",
-          matchedToken: `history:${baseNameNorm}`,
-        });
-        break;
+      const fullNameNorm = normalizeText(tool.name);
+      const baseRegex = new RegExp(`\\b${baseNameNorm.replace(/\\s+/g, "\\s*")}\\b`, "i");
+      const fullRegex = new RegExp(`\\b${fullNameNorm.replace(/\\s+/g, "\\s*")}\\b`, "i");
+
+      if (baseRegex.test(turnNorm) || fullRegex.test(turnNorm)) {
+        return {
+          matched: [tool],
+          confidence: "alias",
+          isUnknownProduct: false,
+          matchedDetails: [{
+            toolId: tool.id,
+            toolName: tool.name,
+            matchedOn: "alias",
+            matchedToken: `history:${baseNameNorm}`,
+          }],
+        };
       }
-    }
-    if (matchedToolsSet.size > 0) {
-      return {
-        matched: Array.from(matchedToolsSet.values()),
-        confidence: "alias",
-        isUnknownProduct: false,
-        matchedDetails,
-      };
+
+      // Check tool aliases in this history turn
+      for (const alias of tool.aliases || []) {
+        const normAlias = normalizeText(alias);
+        if (normAlias.length >= 4) {
+          const aRegex = new RegExp(`\\b${normAlias.replace(/\\s+/g, "\\s*")}\\b`, "i");
+          if (aRegex.test(turnNorm)) {
+            return {
+              matched: [tool],
+              confidence: "alias",
+              isUnknownProduct: false,
+              matchedDetails: [{
+                toolId: tool.id,
+                toolName: tool.name,
+                matchedOn: "alias",
+                matchedToken: `history:${normAlias}`,
+              }],
+            };
+          }
+        }
+      }
     }
   }
 
-  // 4. Unknown External Product Detection
+  return null;
+}
+
+/**
+ * Synchronous deterministic rule-based matcher (exact, alias, keywords, history, unknown-brand regex).
+ * Guaranteed 0ms offline execution for unit tests or fast fallbacks.
+ */
+export function matchToolSync(
+  text: string,
+  tools: Tool[],
+  conversationHistory?: string[]
+): ToolMatchResult {
+  // 1. Exact / Base / Alias
+  const fast = matchToolExactOrAlias(text, tools);
+  if (fast) return fast;
+
+  // 2. Fuzzy / Typo Match (e.g. "clipshied" -> ClipShield, "voicedalta" -> VoiceDelta)
+  const fuzzy = matchToolFuzzy(text, tools);
+  if (fuzzy) return fuzzy;
+
+  // 3. Keyword Match (e.g. "copyright removal", "voice cloning", "bypass")
+  const kw = matchToolKeywords(text, tools);
+  if (kw) return kw;
+
+  // 4. Conversation History Continuation Match
+  const fromHistory = matchToolFromHistory(conversationHistory, tools, text);
+  if (fromHistory) return fromHistory;
+
+  // 5. Unknown External Product Detection
   const unknownProd = detectUnknownProduct(text, tools);
   if (unknownProd) {
     return {
@@ -471,9 +553,12 @@ export function matchToolSync(
 /**
  * Hybrid Tool Matcher:
  * 1. Deterministic Fast Path: Exact name & alias hits return instantly (0ms latency, zero API cost).
- * 2. Deterministic Known External Brand Check (Canva, CapCut, Photoshop, etc.).
- * 3. AI LLM Semantic Intent Classification: Understands Roman Urdu phrasing, slang, synonyms, and indirect problem descriptions.
- * 4. Fallback: Robust keyword & history matching if AI call is unavailable or times out.
+ * 2. Deterministic Fuzzy Typo Match ("clipshied", "voicedalta").
+ * 3. Deterministic Keyword Match ("copyright removal", "voice cloning").
+ * 4. Context Continuation Match ("details", "price", "demo", "link").
+ * 5. Deterministic Known External Brand Check (Canva, CapCut, Photoshop, etc.).
+ * 6. AI LLM Semantic Intent Classification: Understands ambiguous queries and complex requests.
+ * 7. Fallback to offline rule-based matcher.
  */
 export async function matchTool(
   text: string,
@@ -489,14 +574,27 @@ export async function matchTool(
   const fuzzy = matchToolFuzzy(text, tools);
   if (fuzzy) return fuzzy;
 
-  // 3. Fast-Path: Known external tools
+  // 3. Fast-Path: Keyword Match
+  const kw = matchToolKeywords(text, tools);
+  if (kw) return kw;
+
+  // 4. Context Continuation: If customer is following up on an ongoing tool discussion
   const norm = normalizeText(text);
+  const isContinuation = /\b(?:details|detail|info|information|kese|kaise|how|use|link|download|demo|trial|sample|price|rate|cost|kitne|kitna|kharidna|buy|payment|account|bhejo|haan|g|ji|theek|ok|okay)\b/i.test(norm) || norm.split(/\s+/).length <= 2;
+  if (isContinuation && conversationHistory && conversationHistory.length > 0) {
+    const historyMatch = matchToolFromHistory(conversationHistory, tools, text);
+    if (historyMatch) return historyMatch;
+  }
+
+  // 5. Fast-Path: Known external tools (CapCut, Canva, Netflix, etc.)
   for (const ext of COMMON_EXTERNAL_TOOLS) {
-    const extRegex = new RegExp(`\\b${ext.replace(/\s+/g, "\\s*")}\\b`, "i");
+    const extRegex = new RegExp(`\\b${ext.replace(/\\s+/g, "\\s*")}\\b`, "i");
     if (extRegex.test(norm)) {
       const isCatalog = tools.some(t => {
         const base = extractBaseName(t.name);
-        return base.includes(ext) || (t.aliases || []).some(a => a.toLowerCase().includes(ext));
+        return base.includes(ext) ||
+               (t.aliases || []).some(a => a.toLowerCase().includes(ext)) ||
+               (t.keywords || []).some(k => k.toLowerCase().includes(ext));
       });
       if (!isCatalog) {
         return {
@@ -510,7 +608,7 @@ export async function matchTool(
     }
   }
 
-  // 3. AI Semantic Classifier
+  // 6. AI Semantic Classifier for subtle or indirect natural queries
   const aiMatch = await classifyToolIntentWithLLM(text, tools, conversationHistory, userId);
   if (aiMatch) {
     if (aiMatch.matched.length > 0 || aiMatch.isUnknownProduct) {
@@ -518,7 +616,7 @@ export async function matchTool(
     }
   }
 
-  // 4. Fallback to keyword / rule-based matching
+  // 7. Fallback to deterministic matcher
   return matchToolSync(text, tools, conversationHistory);
 }
 

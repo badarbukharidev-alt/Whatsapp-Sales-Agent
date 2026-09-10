@@ -194,9 +194,10 @@ export async function callOpenAI(apiKey: string, prompt: string, systemPrompt?: 
 }
 
 /**
- * Builds a compact query for public GET fallbacks that preserves customer message and intent.
+ * Builds a compact query for public GET fallbacks that preserves customer message,
+ * matched tool details, conversation context, and strict anti-hallucination guardrails.
  */
-function buildCompactPublicQuery(prompt: string, systemPrompt?: string): string {
+export function buildCompactPublicQuery(prompt: string, systemPrompt?: string): string {
   const isClassification =
     Boolean(systemPrompt && /json|classif|match|categor/i.test(systemPrompt)) ||
     /json|classifier|categor|intent/i.test(prompt);
@@ -207,46 +208,99 @@ function buildCompactPublicQuery(prompt: string, systemPrompt?: string): string 
     return prompt.slice(0, 1000);
   }
 
-  // If conversational prompt is short, use as is
-  if (prompt.length <= 600) return prompt;
-
-  // Extract customer message section if present
+  // 1. Extract customer message section across all prompt variations
   let customerMsg = "";
-  const matchMsg = prompt.match(/CUSTOMER'S NEW MESSAGE\(S\):\s*["']?([\s\S]*?)["']?\s*(?:Provide your|$)/i);
+  const matchMsg = prompt.match(
+    /(?:CUSTOMER'S LATEST MESSAGE\(S\)|CUSTOMER'S NEW MESSAGE\(S\)):\s*["']?([\s\S]*?)["']?\s*(?:\nReply as|\nProvide your|\n[A-Z_]+:|$)/i
+  );
   if (matchMsg && matchMsg[1]) {
     customerMsg = matchMsg[1].trim();
-  }
-
-  // Determine active tool summary dynamically from prompt
-  let toolSummary = "";
-  const matchedToolMatch = prompt.match(/===\s*MATCHED TOOL:\s*([^\n=]+)\s*===/i);
-  if (matchedToolMatch && matchedToolMatch[1]) {
-    const matchedName = matchedToolMatch[1].trim();
-    const descMatch = prompt.match(/Description:\s*([^\n]+)/i);
-    const priceMatch = prompt.match(/(?:Regular Price|List Price):\s*([^\n]+)/i);
-    toolSummary = `Tool: ${matchedName} (${descMatch ? descMatch[1].slice(0, 100) : ""} ${priceMatch ? priceMatch[1] : ""}).`;
-  } else if (prompt.includes("[EXTERNAL PRODUCT INQUIRY")) {
-    const unkMatch = prompt.match(/\[EXTERNAL PRODUCT INQUIRY:\s*["']?([^\]"']+)["']?\]/i);
-    const unkName = unkMatch ? unkMatch[1] : "requested item";
-    toolSummary = `Inquiry: Customer asked for external product "${unkName}" which we do NOT carry. Honestly state we don't carry it and ask what they want to achieve.`;
-  } else if (prompt.includes("[STORE CATALOG OVERVIEW]")) {
-    const catalogMatch = prompt.match(/\[STORE CATALOG OVERVIEW\]\s*\n([\s\S]*?)(?=\n\[|INSTRUCTION:|$)/i);
-    toolSummary = catalogMatch && catalogMatch[1].trim()
-      ? `Store Catalog:\n${catalogMatch[1].trim().slice(0, 250)}`
-      : "Store Catalog: Digital tools. Greet naturally in Roman Urdu and ask how you can help.";
   } else {
-    toolSummary = "Store Catalog: Digital tools. Greet naturally in Roman Urdu and ask how you can help.";
+    const lastUserMatch = prompt.match(/(?:Customer|User):\s*["']?([^\n"']+)["']?/gi);
+    if (lastUserMatch && lastUserMatch.length > 0) {
+      customerMsg = lastUserMatch[lastUserMatch.length - 1]
+        .replace(/^(?:Customer|User):\s*["']?/i, "")
+        .replace(/["']?$/, "")
+        .trim();
+    }
   }
 
-  const roleRule = "Pakistani WhatsApp sales representative. Casual Roman Urdu only. Short, natural, human reply. NEVER say 'helpline me khushamdeed' or act like an IVR bot. NEVER offer tools outside our stored catalog.";
+  // 2. Extract matched tool(s) and structured knowledge
+  let toolSummary = "";
+  const toolMatch = prompt.match(
+    /(?:===\s*PRODUCT CATALOG:\s*([^\n=]+)\s*===|===\s*MATCHED TOOL:\s*([^\n=]+)\s*===)/i
+  );
+
+  if (toolMatch) {
+    const toolName = (toolMatch[1] || toolMatch[2]).trim();
+    const descMatch = prompt.match(/(?:Description & Problem Solved|Description):\s*([^\n]+)/i);
+    const priceMatch = prompt.match(/(?:Pricing|Regular Price|List Price):\s*([^\n]+)/i);
+    const featuresMatch = prompt.match(/Key Features & Capabilities:\s*\n([\s\S]*?)(?=\n[A-Z]|\n===|$)/i);
+    const linksMatch = prompt.match(/Official Direct Links & Resources:\s*\n([\s\S]*?)(?=\n[A-Z]|\n===|$)/i);
+    const sectionsMatch = prompt.match(/\[SECTION:[^\]]+\]\s*\n([\s\S]*?)(?=\n\[SECTION|\n===|\n[A-Z]|$)/i);
+
+    const desc = descMatch ? descMatch[1].slice(0, 140).trim() : "";
+    const price = priceMatch ? priceMatch[1].slice(0, 80).trim() : "";
+    const feat = featuresMatch
+      ? featuresMatch[1].split("\n").filter(Boolean).slice(0, 2).map(f => f.replace(/^-\s*/, "")).join("; ").slice(0, 160)
+      : "";
+    const link = linksMatch
+      ? linksMatch[1].split("\n").filter(Boolean).slice(0, 1).join(" ").slice(0, 130)
+      : "";
+    const sec = sectionsMatch ? sectionsMatch[1].slice(0, 120).trim() : "";
+
+    toolSummary = `ACTIVE TOOL: ${toolName}. ${desc ? `Desc: ${desc}. ` : ""}${price ? `Price: ${price}. ` : ""}${feat ? `Features: ${feat}. ` : ""}${link ? `Link: ${link}. ` : ""}${sec ? `Details: ${sec}. ` : ""}`;
+
+    if (/voice\s*delta|voicedelta/i.test(toolName)) {
+      toolSummary += " [Product is VoiceDelta. Includes ElevenLabs & OpenAI voice models. Do NOT rename or call product ElevenLabs.]";
+    }
+    if (/clip\s*shield|clipshield/i.test(toolName)) {
+      toolSummary += " [ClipShield is a Windows desktop tool for YouTube copyright bypass/removal. It is IN STOCK and AVAILABLE.]";
+    }
+  } else if (prompt.includes("EXTERNAL PRODUCT INQUIRY:") || prompt.includes("[EXTERNAL PRODUCT INQUIRY")) {
+    const unkMatch = prompt.match(
+      /(?:\[EXTERNAL PRODUCT INQUIRY:\s*["']?([^\]"']+)["']?\]|EXTERNAL PRODUCT INQUIRY:\s*["']?([^\n"']+)["']?)/i
+    );
+    const unkName = unkMatch ? (unkMatch[1] || unkMatch[2]).trim() : "requested software";
+    toolSummary = `EXTERNAL INQUIRY: Customer asked for uncataloged item "${unkName}". Honestly state we do not sell "${unkName}", and ask what content creation or editing task they want to solve.`;
+  } else if (prompt.includes("[AVAILABLE STORE TOOLS]") || prompt.includes("[STORE CATALOG OVERVIEW]")) {
+    const catalogMatch = prompt.match(
+      /(?:\[AVAILABLE STORE TOOLS\]|\[STORE CATALOG OVERVIEW\])\s*\n([\s\S]*?)(?=\n\[|INSTRUCTION:|$)/i
+    );
+    toolSummary = catalogMatch && catalogMatch[1].trim()
+      ? `Store Catalog:\n${catalogMatch[1].trim().slice(0, 260)}`
+      : "Store Catalog: 1. ClipShield (YouTube copyright removal/claims bypass, Rs 1500/mo). 2. VoiceDelta (AI voice generator and cloning with 3600+ voices, Rs 1199/mo).";
+  } else {
+    toolSummary = "Store Catalog: 1. ClipShield (YouTube copyright removal/claims bypass, Rs 1500/mo). 2. VoiceDelta (AI voice generator and cloning with 3600+ voices, Rs 1199/mo).";
+  }
+
+  // 3. Extract recent dialogue turns for conversational context
+  let recentContext = "";
+  const turnsMatch = prompt.match(
+    /\[RECENT CONVERSATION TURNS\]:\s*\n([\s\S]*?)(?=\nCUSTOMER'S LATEST MESSAGE|\nCUSTOMER'S NEW MESSAGE|$)/i
+  );
+  if (turnsMatch && turnsMatch[1]) {
+    const turns = turnsMatch[1].split("\n").filter(Boolean).slice(-3).join(" | ");
+    if (turns) {
+      recentContext = `Recent Chat: ${turns.slice(0, 200)}`;
+    }
+  }
+
+  // 4. Strict guardrails against fake personas, SEO hallucinations, and repeated greetings
+  const roleRules = [
+    "Role: Real human Pakistani software consultant chatting on WhatsApp. Natural Roman Urdu.",
+    "RULES: (1) NEVER invent a persona name like 'Aamir'. (2) NEVER offer SEO or web design. (3) ClipShield and VoiceDelta are ALWAYS available. (4) For VoiceDelta, always call it VoiceDelta (not ElevenLabs). (5) In ongoing chats, do NOT repeat 'AOA' or the customer's name on every message.",
+  ].join("\n");
+
   const parts = [
-    roleRule,
+    roleRules,
     toolSummary,
-    customerMsg ? `Customer said: "${customerMsg}"` : prompt.slice(-300),
-    "Reply in Roman Urdu:"
+    recentContext,
+    customerMsg ? `Customer message: "${customerMsg}"` : prompt.slice(-250),
+    "Reply naturally as a helpful Pakistani WhatsApp seller in Roman Urdu:"
   ].filter(Boolean);
 
-  return parts.join("\n");
+  return parts.join("\n\n");
 }
 
 /**

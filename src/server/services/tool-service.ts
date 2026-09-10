@@ -8,9 +8,11 @@ const toolStore = new JsonStore<Tool[]>(toolsFilePath, []);
 
 export class ToolService {
   private store: JsonStore<Tool[]>;
+  private isDefaultStore: boolean;
 
-  constructor(store: JsonStore<Tool[]>) {
+  constructor(store: JsonStore<Tool[]>, isDefaultStore = false) {
     this.store = store;
+    this.isDefaultStore = isDefaultStore;
   }
 
   /**
@@ -111,11 +113,13 @@ export class ToolService {
 
     await this.store.set(tools);
 
-    // Sync to data_defaults for Git & deployment integrity
-    try {
-      const defaultsStore = new JsonStore<Tool[]>(path.join(process.cwd(), "data_defaults", "tools.json"), []);
-      await defaultsStore.set(tools);
-    } catch {}
+    // Sync to data_defaults for Git & deployment integrity only when using the primary store
+    if (this.isDefaultStore && process.env.NODE_ENV !== "test") {
+      try {
+        const defaultsStore = new JsonStore<Tool[]>(path.join(process.cwd(), "data_defaults", "tools.json"), []);
+        await defaultsStore.set(tools);
+      } catch {}
+    }
 
     return savedTool;
   }
@@ -128,14 +132,16 @@ export class ToolService {
     const filtered = tools.filter((t) => t.id !== toolId);
     if (filtered.length !== tools.length) {
       await this.store.set(filtered);
-      try {
-        const defaultsStore = new JsonStore<Tool[]>(path.join(process.cwd(), "data_defaults", "tools.json"), []);
-        await defaultsStore.set(filtered);
-      } catch {}
+      if (this.isDefaultStore && process.env.NODE_ENV !== "test") {
+        try {
+          const defaultsStore = new JsonStore<Tool[]>(path.join(process.cwd(), "data_defaults", "tools.json"), []);
+          await defaultsStore.set(filtered);
+        } catch {}
+      }
       return true;
     }
     return false;
   }
 }
 
-export const toolService = new ToolService(toolStore);
+export const toolService = new ToolService(toolStore, true);

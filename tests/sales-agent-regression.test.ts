@@ -10,6 +10,8 @@ import {
   clampPriceFloors,
   extractMentionedFacts
 } from "../src/server/tool-matcher.js";
+import { synthesizeSalesPrompt } from "../src/server/services/prompt-service.js";
+import { buildCompactPublicQuery } from "../src/server/ai.js";
 
 const toolsData: Tool[] = JSON.parse(
   fs.readFileSync(path.resolve(process.cwd(), "data", "tools.json"), "utf-8")
@@ -191,6 +193,182 @@ async function runRegressionSuite() {
 
     assert.ok(hasPriceMention, "Must mention agreed floor price");
     assert.ok(hasCondition, "Discount concession must be explicitly conditional upon same-day payment or term");
+  });
+
+  // =========================================================================
+  // SCENARIO 5: LIVE PRODUCTION INQUIRIES & ANTI-HALLUCINATION
+  // Real customer queries: Copyright Removal, Clipshied, Voice Delta, Details.
+  // =========================================================================
+  test("5.1 'Copyright Removal' matches ClipShield and is NOT flagged as unknown product", async () => {
+    const query = "Copyright Removal";
+    const matchSync = matchToolSync(query, toolsData);
+    assert.strictEqual(matchSync.isUnknownProduct, false, "Copyright Removal must NOT be an unknown product");
+    assert.ok(matchSync.matched.length > 0, "Must match at least one tool");
+    assert.ok(
+      matchSync.matched[0].name.toLowerCase().includes("clipshield"),
+      `Expected ClipShield, got: ${matchSync.matched[0].name}`
+    );
+
+    const matchAsync = await matchTool(query, toolsData);
+    assert.strictEqual(matchAsync.isUnknownProduct, false);
+    assert.ok(matchAsync.matched.length > 0);
+    assert.ok(matchAsync.matched[0].name.toLowerCase().includes("clipshield"));
+  });
+
+  test("5.2 'Clipshied' typo matches ClipShield without failure", async () => {
+    const query = "Clipshied";
+    const matchSync = matchToolSync(query, toolsData);
+    assert.strictEqual(matchSync.isUnknownProduct, false);
+    assert.ok(matchSync.matched.length > 0);
+    assert.ok(matchSync.matched[0].name.toLowerCase().includes("clipshield"));
+
+    const matchAsync = await matchTool(query, toolsData);
+    assert.strictEqual(matchAsync.isUnknownProduct, false);
+    assert.ok(matchAsync.matched.length > 0);
+    assert.ok(matchAsync.matched[0].name.toLowerCase().includes("clipshield"));
+  });
+
+  test("5.3 Conversation context continuity: 'Details' preserves VoiceDelta without tool drift", async () => {
+    // Turn 1: customer asked about voice delta
+    const history = [
+      "Customer: Aur voice delta",
+      "Agent: Haan Voice Delta bhi mil jaye ga! Yeh AI voice generator aur cloning tool hai."
+    ];
+
+    // Turn 2: customer asks for details
+    const turn2 = "Details";
+    const matchTurn2 = await matchTool(turn2, toolsData, history);
+    assert.ok(matchTurn2.matched.length > 0, "Must maintain tool context on 'Details'");
+    assert.ok(
+      matchTurn2.matched[0].name.toLowerCase().includes("voicedelta"),
+      `Expected VoiceDelta, got: ${matchTurn2.matched[0].name}`
+    );
+
+    // Check synthesized prompt
+    const mockCustomer: Customer = {
+      phoneNumber: "923001234567",
+      name: "Customer",
+      status: "Interested",
+      messages: [
+        { role: "user", content: "Aur voice delta", timestamp: new Date().toISOString() },
+        { role: "agent", content: "Haan Voice Delta mil jayega!", timestamp: new Date().toISOString() },
+      ],
+      memorySummary: {
+        lastToolDiscussed: "VoiceDelta",
+        totalTurnsCount: 2,
+        stage: "discovery",
+      }
+    };
+
+    const mockSettings: any = {
+      aiAgentEnabled: true,
+      language: "Roman Urdu",
+      paymentMethods: []
+    };
+
+    const promptResult = synthesizeSalesPrompt({
+      customer: mockCustomer,
+      matchedTools: matchTurn2.matched,
+      allAccountToolsSummary: "- VoiceDelta: AI voice generator\n- ClipShield: YouTube bypass",
+      recentMessages: mockCustomer.messages,
+      latestCustomerText: turn2,
+      settings: mockSettings,
+    });
+
+    // Verify VoiceDelta is specified and ElevenLabs renaming is banned
+    assert.ok(promptResult.prompt.includes("VoiceDelta"), "Prompt must contain VoiceDelta");
+    assert.ok(
+      promptResult.prompt.includes("NEVER call this product 'ElevenLabs'") ||
+      promptResult.systemPrompt.includes("NEVER rename or call the product \"ElevenLabs\""),
+      "Must explicitly forbid renaming VoiceDelta to ElevenLabs"
+    );
+  });
+
+  test("5.4 System prompt forbids fake persona 'Aamir', SEO services, and repeated greetings", () => {
+    const mockCustomer: Customer = {
+      phoneNumber: "923001234567",
+      name: "Badar",
+      status: "Interested",
+      messages: [
+        { role: "user", content: "Hi", timestamp: new Date().toISOString() },
+        { role: "agent", content: "AOA! Kese hain?", timestamp: new Date().toISOString() },
+      ],
+      memorySummary: {
+        customerName: "Badar",
+        totalTurnsCount: 2,
+      }
+    };
+
+    const mockSettings: any = {
+      aiAgentEnabled: true,
+      language: "Roman Urdu",
+    };
+
+    const promptResult = synthesizeSalesPrompt({
+      customer: mockCustomer,
+      matchedTools: [],
+      allAccountToolsSummary: "- ClipShield\n- VoiceDelta",
+      recentMessages: mockCustomer.messages,
+      latestCustomerText: "Copyright Removal",
+      settings: mockSettings,
+    });
+
+    // Verify system prompt bans Aamir and SEO
+    assert.ok(promptResult.systemPrompt.includes("Aamir"), "Must explicitly ban persona name Aamir");
+    assert.ok(promptResult.systemPrompt.includes("SEO"), "Must explicitly ban SEO services");
+    assert.ok(
+      promptResult.systemPrompt.includes("ClipShield and VoiceDelta are ALWAYS IN STOCK"),
+      "Must explicitly state ClipShield and VoiceDelta are always in stock"
+    );
+    assert.ok(
+      promptResult.prompt.includes("Do NOT repeatedly say customer's name") ||
+      promptResult.systemPrompt.includes("DO NOT repeat the customer's name on every message"),
+      "Must forbid repeating customer name on every message"
+    );
+  });
+
+  test("5.5 buildCompactPublicQuery preserves tool details and injects anti-hallucination rules", () => {
+    const voiceTool = toolsData.find(t => t.name.toLowerCase().includes("voice"))!;
+    const mockCustomer: Customer = {
+      phoneNumber: "923001234567",
+      name: "Customer",
+      status: "Interested",
+      messages: [
+        { role: "user", content: "Aur voice delta", timestamp: new Date().toISOString() },
+        { role: "agent", content: "Haan Voice Delta bhi mil jaye ga!", timestamp: new Date().toISOString() },
+      ],
+      memorySummary: {
+        lastToolDiscussed: "VoiceDelta",
+        totalTurnsCount: 2,
+      }
+    };
+
+    const promptResult = synthesizeSalesPrompt({
+      customer: mockCustomer,
+      matchedTools: [voiceTool],
+      allAccountToolsSummary: "- VoiceDelta: AI voice generator\n- ClipShield: YouTube bypass",
+      recentMessages: mockCustomer.messages,
+      latestCustomerText: "Details",
+      settings: { aiAgentEnabled: true, language: "Roman Urdu" } as any,
+    });
+
+    const compactQuery = buildCompactPublicQuery(promptResult.prompt, promptResult.systemPrompt);
+
+    // Verify compact query contains the real tool name and not generic digital tools
+    assert.ok(compactQuery.includes("VoiceDelta"), "Compact fallback query must preserve VoiceDelta");
+    assert.ok(compactQuery.includes("Details"), "Compact fallback query must include customer text 'Details'");
+    assert.ok(
+      compactQuery.includes("NEVER invent a persona name like 'Aamir'") || compactQuery.includes("Aamir"),
+      "Compact fallback query must forbid persona Aamir"
+    );
+    assert.ok(
+      compactQuery.includes("NEVER offer SEO") || compactQuery.includes("SEO"),
+      "Compact fallback query must forbid SEO"
+    );
+    assert.ok(
+      compactQuery.includes("always call it VoiceDelta") || compactQuery.includes("Do NOT rename or call product ElevenLabs"),
+      "Compact fallback query must instruct not to rename VoiceDelta to ElevenLabs"
+    );
   });
 
   for (const t of testQueue) {

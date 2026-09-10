@@ -1149,38 +1149,78 @@ function buildCompactPublicQuery(prompt, systemPrompt) {
     if (prompt.length <= 1e3) return prompt;
     return prompt.slice(0, 1e3);
   }
-  if (prompt.length <= 600) return prompt;
   let customerMsg = "";
-  const matchMsg = prompt.match(/CUSTOMER'S NEW MESSAGE\(S\):\s*["']?([\s\S]*?)["']?\s*(?:Provide your|$)/i);
+  const matchMsg = prompt.match(
+    /(?:CUSTOMER'S LATEST MESSAGE\(S\)|CUSTOMER'S NEW MESSAGE\(S\)):\s*["']?([\s\S]*?)["']?\s*(?:\nReply as|\nProvide your|\n[A-Z_]+:|$)/i
+  );
   if (matchMsg && matchMsg[1]) {
     customerMsg = matchMsg[1].trim();
+  } else {
+    const lastUserMatch = prompt.match(/(?:Customer|User):\s*["']?([^\n"']+)["']?/gi);
+    if (lastUserMatch && lastUserMatch.length > 0) {
+      customerMsg = lastUserMatch[lastUserMatch.length - 1].replace(/^(?:Customer|User):\s*["']?/i, "").replace(/["']?$/, "").trim();
+    }
   }
   let toolSummary = "";
-  const matchedToolMatch = prompt.match(/===\s*MATCHED TOOL:\s*([^\n=]+)\s*===/i);
-  if (matchedToolMatch && matchedToolMatch[1]) {
-    const matchedName = matchedToolMatch[1].trim();
-    const descMatch = prompt.match(/Description:\s*([^\n]+)/i);
-    const priceMatch = prompt.match(/(?:Regular Price|List Price):\s*([^\n]+)/i);
-    toolSummary = `Tool: ${matchedName} (${descMatch ? descMatch[1].slice(0, 100) : ""} ${priceMatch ? priceMatch[1] : ""}).`;
-  } else if (prompt.includes("[EXTERNAL PRODUCT INQUIRY")) {
-    const unkMatch = prompt.match(/\[EXTERNAL PRODUCT INQUIRY:\s*["']?([^\]"']+)["']?\]/i);
-    const unkName = unkMatch ? unkMatch[1] : "requested item";
-    toolSummary = `Inquiry: Customer asked for external product "${unkName}" which we do NOT carry. Honestly state we don't carry it and ask what they want to achieve.`;
-  } else if (prompt.includes("[STORE CATALOG OVERVIEW]")) {
-    const catalogMatch = prompt.match(/\[STORE CATALOG OVERVIEW\]\s*\n([\s\S]*?)(?=\n\[|INSTRUCTION:|$)/i);
+  const toolMatch = prompt.match(
+    /(?:===\s*PRODUCT CATALOG:\s*([^\n=]+)\s*===|===\s*MATCHED TOOL:\s*([^\n=]+)\s*===)/i
+  );
+  if (toolMatch) {
+    const toolName = (toolMatch[1] || toolMatch[2]).trim();
+    const descMatch = prompt.match(/(?:Description & Problem Solved|Description):\s*([^\n]+)/i);
+    const priceMatch = prompt.match(/(?:Pricing|Regular Price|List Price):\s*([^\n]+)/i);
+    const featuresMatch = prompt.match(/Key Features & Capabilities:\s*\n([\s\S]*?)(?=\n[A-Z]|\n===|$)/i);
+    const linksMatch = prompt.match(/Official Direct Links & Resources:\s*\n([\s\S]*?)(?=\n[A-Z]|\n===|$)/i);
+    const sectionsMatch = prompt.match(/\[SECTION:[^\]]+\]\s*\n([\s\S]*?)(?=\n\[SECTION|\n===|\n[A-Z]|$)/i);
+    const desc = descMatch ? descMatch[1].slice(0, 140).trim() : "";
+    const price = priceMatch ? priceMatch[1].slice(0, 80).trim() : "";
+    const feat = featuresMatch ? featuresMatch[1].split("\n").filter(Boolean).slice(0, 2).map((f) => f.replace(/^-\s*/, "")).join("; ").slice(0, 160) : "";
+    const link = linksMatch ? linksMatch[1].split("\n").filter(Boolean).slice(0, 1).join(" ").slice(0, 130) : "";
+    const sec = sectionsMatch ? sectionsMatch[1].slice(0, 120).trim() : "";
+    toolSummary = `ACTIVE TOOL: ${toolName}. ${desc ? `Desc: ${desc}. ` : ""}${price ? `Price: ${price}. ` : ""}${feat ? `Features: ${feat}. ` : ""}${link ? `Link: ${link}. ` : ""}${sec ? `Details: ${sec}. ` : ""}`;
+    if (/voice\s*delta|voicedelta/i.test(toolName)) {
+      toolSummary += " [Product is VoiceDelta. Includes ElevenLabs & OpenAI voice models. Do NOT rename or call product ElevenLabs.]";
+    }
+    if (/clip\s*shield|clipshield/i.test(toolName)) {
+      toolSummary += " [ClipShield is a Windows desktop tool for YouTube copyright bypass/removal. It is IN STOCK and AVAILABLE.]";
+    }
+  } else if (prompt.includes("EXTERNAL PRODUCT INQUIRY:") || prompt.includes("[EXTERNAL PRODUCT INQUIRY")) {
+    const unkMatch = prompt.match(
+      /(?:\[EXTERNAL PRODUCT INQUIRY:\s*["']?([^\]"']+)["']?\]|EXTERNAL PRODUCT INQUIRY:\s*["']?([^\n"']+)["']?)/i
+    );
+    const unkName = unkMatch ? (unkMatch[1] || unkMatch[2]).trim() : "requested software";
+    toolSummary = `EXTERNAL INQUIRY: Customer asked for uncataloged item "${unkName}". Honestly state we do not sell "${unkName}", and ask what content creation or editing task they want to solve.`;
+  } else if (prompt.includes("[AVAILABLE STORE TOOLS]") || prompt.includes("[STORE CATALOG OVERVIEW]")) {
+    const catalogMatch = prompt.match(
+      /(?:\[AVAILABLE STORE TOOLS\]|\[STORE CATALOG OVERVIEW\])\s*\n([\s\S]*?)(?=\n\[|INSTRUCTION:|$)/i
+    );
     toolSummary = catalogMatch && catalogMatch[1].trim() ? `Store Catalog:
-${catalogMatch[1].trim().slice(0, 250)}` : "Store Catalog: Digital tools. Greet naturally in Roman Urdu and ask how you can help.";
+${catalogMatch[1].trim().slice(0, 260)}` : "Store Catalog: 1. ClipShield (YouTube copyright removal/claims bypass, Rs 1500/mo). 2. VoiceDelta (AI voice generator and cloning with 3600+ voices, Rs 1199/mo).";
   } else {
-    toolSummary = "Store Catalog: Digital tools. Greet naturally in Roman Urdu and ask how you can help.";
+    toolSummary = "Store Catalog: 1. ClipShield (YouTube copyright removal/claims bypass, Rs 1500/mo). 2. VoiceDelta (AI voice generator and cloning with 3600+ voices, Rs 1199/mo).";
   }
-  const roleRule = "Pakistani WhatsApp sales representative. Casual Roman Urdu only. Short, natural, human reply. NEVER say 'helpline me khushamdeed' or act like an IVR bot. NEVER offer tools outside our stored catalog.";
+  let recentContext = "";
+  const turnsMatch = prompt.match(
+    /\[RECENT CONVERSATION TURNS\]:\s*\n([\s\S]*?)(?=\nCUSTOMER'S LATEST MESSAGE|\nCUSTOMER'S NEW MESSAGE|$)/i
+  );
+  if (turnsMatch && turnsMatch[1]) {
+    const turns = turnsMatch[1].split("\n").filter(Boolean).slice(-3).join(" | ");
+    if (turns) {
+      recentContext = `Recent Chat: ${turns.slice(0, 200)}`;
+    }
+  }
+  const roleRules = [
+    "Role: Real human Pakistani software consultant chatting on WhatsApp. Natural Roman Urdu.",
+    "RULES: (1) NEVER invent a persona name like 'Aamir'. (2) NEVER offer SEO or web design. (3) ClipShield and VoiceDelta are ALWAYS available. (4) For VoiceDelta, always call it VoiceDelta (not ElevenLabs). (5) In ongoing chats, do NOT repeat 'AOA' or the customer's name on every message."
+  ].join("\n");
   const parts = [
-    roleRule,
+    roleRules,
     toolSummary,
-    customerMsg ? `Customer said: "${customerMsg}"` : prompt.slice(-300),
-    "Reply in Roman Urdu:"
+    recentContext,
+    customerMsg ? `Customer message: "${customerMsg}"` : prompt.slice(-250),
+    "Reply naturally as a helpful Pakistani WhatsApp seller in Roman Urdu:"
   ].filter(Boolean);
-  return parts.join("\n");
+  return parts.join("\n\n");
 }
 async function callPublicFallback(provider, prompt, systemPrompt) {
   const compactQuery = buildCompactPublicQuery(prompt, systemPrompt);
@@ -2429,16 +2469,20 @@ function extractBaseName(name) {
 function detectUnknownProduct(text, tools) {
   const norm = normalizeText(text);
   for (const ext of COMMON_EXTERNAL_TOOLS) {
-    const extRegex = new RegExp(`\\b${ext.replace(/\s+/g, "\\s*")}\\b`, "i");
+    const extRegex = new RegExp(`\\b${ext.replace(/\\s+/g, "\\s*")}\\b`, "i");
     if (extRegex.test(norm)) {
       const isCatalog = tools.some((t) => {
         const base = extractBaseName(t.name);
-        return base.includes(ext) || (t.aliases || []).some((a) => a.toLowerCase().includes(ext));
+        return base.includes(ext) || (t.aliases || []).some((a) => a.toLowerCase().includes(ext)) || (t.keywords || []).some((k) => k.toLowerCase().includes(ext));
       });
       if (!isCatalog) {
         return ext.charAt(0).toUpperCase() + ext.slice(1);
       }
     }
+  }
+  const isCatalogDomain = /\b(?:copyright|claim|claims|bypass|voice|voices|voicedelta|clipshield|cloning|clone|tts|reframing|repurpose|youtube)\b/i.test(norm);
+  if (isCatalogDomain) {
+    return void 0;
   }
   const patterns = [
     /(?:kya\s+)?([a-z0-9\-\_]{3,20})\s+(?:tool|app|software|account|subscription|bot|chahiye|available|mil\s*jayega)/i,
@@ -2452,7 +2496,7 @@ function detectUnknownProduct(text, tools) {
       if (!COMMON_STOP_WORDS.has(candidate) && candidate.length >= 3) {
         const isCatalog = tools.some((t) => {
           const base = extractBaseName(t.name);
-          return base.includes(candidate) || (t.aliases || []).some((a) => a.toLowerCase().includes(candidate));
+          return base.includes(candidate) || (t.aliases || []).some((a) => a.toLowerCase().includes(candidate)) || (t.keywords || []).some((k) => k.toLowerCase().includes(candidate));
         });
         if (!isCatalog) {
           return candidate.charAt(0).toUpperCase() + candidate.slice(1);
@@ -2650,11 +2694,32 @@ JSON format:
     }
     if (parsed.isUnknownProduct && parsed.queryProduct) {
       const rawProd = String(parsed.queryProduct).trim();
+      const rawProdLower = rawProd.toLowerCase();
       const isCatalog = tools.some((t) => {
         const base = extractBaseName(t.name);
-        return base.includes(rawProd.toLowerCase()) || (t.aliases || []).some((a) => a.toLowerCase().includes(rawProd.toLowerCase()));
+        return base.includes(rawProdLower) || (t.aliases || []).some((a) => a.toLowerCase().includes(rawProdLower)) || (t.keywords || []).some((k) => k.toLowerCase().includes(rawProdLower));
       });
       if (!isCatalog) {
+        const isDomain = /\b(?:copyright|claim|claims|bypass|voice|voices|voicedelta|clipshield|cloning|clone|tts|reframing|repurpose)\b/i.test(rawProdLower) || /\b(?:copyright|claim|claims|bypass|voice|voices|voicedelta|clipshield|cloning|clone|tts|reframing|repurpose)\b/i.test(text);
+        if (isDomain) {
+          const domainTool = tools.find((t) => {
+            const tText = `${t.name} ${(t.keywords || []).join(" ")} ${(t.aliases || []).join(" ")}`.toLowerCase();
+            return rawProdLower.includes("copyright") && tText.includes("copyright") || rawProdLower.includes("claim") && tText.includes("claim") || rawProdLower.includes("voice") && tText.includes("voice") || text.toLowerCase().includes("copyright") && tText.includes("copyright") || text.toLowerCase().includes("voice") && tText.includes("voice");
+          });
+          if (domainTool) {
+            return {
+              matched: [domainTool],
+              confidence: "semantic",
+              isUnknownProduct: false,
+              matchedDetails: [{
+                toolId: domainTool.id,
+                toolName: domainTool.name,
+                matchedOn: "semantic",
+                matchedToken: rawProd
+              }]
+            };
+          }
+        }
         return {
           matched: [],
           confidence: "none",
@@ -2675,21 +2740,16 @@ JSON format:
     return null;
   }
 }
-function matchToolSync(text, tools, conversationHistory) {
+function matchToolKeywords(text, tools) {
   const normText = normalizeText(text);
   const matchedDetails = [];
   const matchedToolsSet = /* @__PURE__ */ new Map();
-  const historyText = conversationHistory && conversationHistory.length > 0 ? normalizeText(conversationHistory.slice(-3).join(" ")) : "";
-  const fast = matchToolExactOrAlias(text, tools);
-  if (fast) return fast;
-  const fuzzy = matchToolFuzzy(text, tools);
-  if (fuzzy) return fuzzy;
   for (const tool of tools) {
     const keywords = (tool.keywords || []).slice().sort((a, b) => b.length - a.length);
     for (const kw of keywords) {
       const normKw = normalizeText(kw);
       if (!normKw || normKw.length < 3) continue;
-      const kwRegex = new RegExp(`\\b${normKw.replace(/\s+/g, "\\s*")}\\b`, "i");
+      const kwRegex = new RegExp(`\\b${normKw.replace(/\\s+/g, "\\s*")}\\b`, "i");
       if (kwRegex.test(normText)) {
         matchedToolsSet.set(tool.id, tool);
         matchedDetails.push({
@@ -2710,30 +2770,62 @@ function matchToolSync(text, tools, conversationHistory) {
       matchedDetails
     };
   }
-  if (historyText) {
+  return null;
+}
+function matchToolFromHistory(conversationHistory, tools, currentText = "") {
+  if (!conversationHistory || conversationHistory.length === 0) return null;
+  for (let i = conversationHistory.length - 1; i >= 0; i--) {
+    const turnNorm = normalizeText(conversationHistory[i]);
     for (const tool of tools) {
       const baseNameNorm = extractBaseName(tool.name);
-      const baseRegex = new RegExp(`\\b${baseNameNorm.replace(/\s+/g, "\\s*")}\\b`, "i");
-      if (baseRegex.test(historyText)) {
-        matchedToolsSet.set(tool.id, tool);
-        matchedDetails.push({
-          toolId: tool.id,
-          toolName: tool.name,
-          matchedOn: "alias",
-          matchedToken: `history:${baseNameNorm}`
-        });
-        break;
+      const fullNameNorm = normalizeText(tool.name);
+      const baseRegex = new RegExp(`\\b${baseNameNorm.replace(/\\s+/g, "\\s*")}\\b`, "i");
+      const fullRegex = new RegExp(`\\b${fullNameNorm.replace(/\\s+/g, "\\s*")}\\b`, "i");
+      if (baseRegex.test(turnNorm) || fullRegex.test(turnNorm)) {
+        return {
+          matched: [tool],
+          confidence: "alias",
+          isUnknownProduct: false,
+          matchedDetails: [{
+            toolId: tool.id,
+            toolName: tool.name,
+            matchedOn: "alias",
+            matchedToken: `history:${baseNameNorm}`
+          }]
+        };
+      }
+      for (const alias of tool.aliases || []) {
+        const normAlias = normalizeText(alias);
+        if (normAlias.length >= 4) {
+          const aRegex = new RegExp(`\\b${normAlias.replace(/\\s+/g, "\\s*")}\\b`, "i");
+          if (aRegex.test(turnNorm)) {
+            return {
+              matched: [tool],
+              confidence: "alias",
+              isUnknownProduct: false,
+              matchedDetails: [{
+                toolId: tool.id,
+                toolName: tool.name,
+                matchedOn: "alias",
+                matchedToken: `history:${normAlias}`
+              }]
+            };
+          }
+        }
       }
     }
-    if (matchedToolsSet.size > 0) {
-      return {
-        matched: Array.from(matchedToolsSet.values()),
-        confidence: "alias",
-        isUnknownProduct: false,
-        matchedDetails
-      };
-    }
   }
+  return null;
+}
+function matchToolSync(text, tools, conversationHistory) {
+  const fast = matchToolExactOrAlias(text, tools);
+  if (fast) return fast;
+  const fuzzy = matchToolFuzzy(text, tools);
+  if (fuzzy) return fuzzy;
+  const kw = matchToolKeywords(text, tools);
+  if (kw) return kw;
+  const fromHistory = matchToolFromHistory(conversationHistory, tools, text);
+  if (fromHistory) return fromHistory;
   const unknownProd = detectUnknownProduct(text, tools);
   if (unknownProd) {
     return {
@@ -2756,13 +2848,20 @@ async function matchTool(text, tools, conversationHistory, userId) {
   if (fast) return fast;
   const fuzzy = matchToolFuzzy(text, tools);
   if (fuzzy) return fuzzy;
+  const kw = matchToolKeywords(text, tools);
+  if (kw) return kw;
   const norm = normalizeText(text);
+  const isContinuation = /\b(?:details|detail|info|information|kese|kaise|how|use|link|download|demo|trial|sample|price|rate|cost|kitne|kitna|kharidna|buy|payment|account|bhejo|haan|g|ji|theek|ok|okay)\b/i.test(norm) || norm.split(/\s+/).length <= 2;
+  if (isContinuation && conversationHistory && conversationHistory.length > 0) {
+    const historyMatch = matchToolFromHistory(conversationHistory, tools, text);
+    if (historyMatch) return historyMatch;
+  }
   for (const ext of COMMON_EXTERNAL_TOOLS) {
-    const extRegex = new RegExp(`\\b${ext.replace(/\s+/g, "\\s*")}\\b`, "i");
+    const extRegex = new RegExp(`\\b${ext.replace(/\\s+/g, "\\s*")}\\b`, "i");
     if (extRegex.test(norm)) {
       const isCatalog = tools.some((t) => {
         const base = extractBaseName(t.name);
-        return base.includes(ext) || (t.aliases || []).some((a) => a.toLowerCase().includes(ext));
+        return base.includes(ext) || (t.aliases || []).some((a) => a.toLowerCase().includes(ext)) || (t.keywords || []).some((k) => k.toLowerCase().includes(ext));
       });
       if (!isCatalog) {
         return {
@@ -2995,8 +3094,9 @@ var init_tool_service = __esm({
     toolsFilePath = import_path8.default.join(process.cwd(), "data", "tools.json");
     toolStore = new JsonStore(toolsFilePath, []);
     ToolService = class {
-      constructor(store) {
+      constructor(store, isDefaultStore = false) {
         this.store = store;
+        this.isDefaultStore = isDefaultStore;
       }
       /**
        * Retrieves tools belonging to the specified account.
@@ -3081,10 +3181,12 @@ var init_tool_service = __esm({
           tools.push(savedTool);
         }
         await this.store.set(tools);
-        try {
-          const defaultsStore = new JsonStore(import_path8.default.join(process.cwd(), "data_defaults", "tools.json"), []);
-          await defaultsStore.set(tools);
-        } catch {
+        if (this.isDefaultStore && process.env.NODE_ENV !== "test") {
+          try {
+            const defaultsStore = new JsonStore(import_path8.default.join(process.cwd(), "data_defaults", "tools.json"), []);
+            await defaultsStore.set(tools);
+          } catch {
+          }
         }
         return savedTool;
       }
@@ -3096,17 +3198,19 @@ var init_tool_service = __esm({
         const filtered = tools.filter((t) => t.id !== toolId);
         if (filtered.length !== tools.length) {
           await this.store.set(filtered);
-          try {
-            const defaultsStore = new JsonStore(import_path8.default.join(process.cwd(), "data_defaults", "tools.json"), []);
-            await defaultsStore.set(filtered);
-          } catch {
+          if (this.isDefaultStore && process.env.NODE_ENV !== "test") {
+            try {
+              const defaultsStore = new JsonStore(import_path8.default.join(process.cwd(), "data_defaults", "tools.json"), []);
+              await defaultsStore.set(filtered);
+            } catch {
+            }
           }
           return true;
         }
         return false;
       }
     };
-    toolService = new ToolService(toolStore);
+    toolService = new ToolService(toolStore, true);
   }
 });
 
@@ -3133,23 +3237,27 @@ TONE & PERSONALITY:
 - Warm, respectful, confident, and persuasive. You are a tech brother advising the customer on the best software for their needs.
 - Keep replies natural for WhatsApp: 2 to 3 concise, punchy messages separated by "---MSG---". Never send an overwhelming wall of text, but NEVER be dry or unhelpful.
 
-CRITICAL RULES (ABSOLUTELY NO ROBOTIC BOT BEHAVIOR):
-1. BANNED BOT PHRASES:
+CRITICAL RULES (ABSOLUTELY NO ROBOTIC BOT BEHAVIOR & ZERO HALLUCINATIONS):
+1. BANNED BOT PHRASES & FAKE PERSONAS:
    - NEVER say: "Main aap ki kya madad kar sakta hoon", "Kis cheez ke baaray mein pochna hai", "Bataen kis cheez mein help chahiye", "Helpline me khushamdeed", "Customer support me welcome".
-   - NEVER sound like a call-center bot or automated helpline.
-   - NEVER repeatedly push "Bolo kab tak set kar dein?" or "subscription activate kar doon?" prematurely before building value.
-2. VALUE SELLING & REAL PERSUASION:
-   - When a customer shows interest in a tool (e.g., "Clipshied tool lena ha", "voice over tool"), do NOT give a cold 1-line reply. Enthusiastically validate their choice! Explain WHY it is the best tool, its standout features (e.g., bypasses YouTube Content ID with 9-layer protection, instant voice cloning, local speed), how it helps them make money or save time, state the price clearly, and ask a relevant question about their use case (e.g., YouTube automation, TikTok shorts, drama recap).
-3. RICH DETAILS ON DEMAND:
+   - NEVER introduce yourself with a persona name like "Aamir", "Ali", "Hamza", or "Agent". You represent the digital tools store directly.
+   - NEVER mention, offer, or discuss SEO, web design, social media marketing, or agency services. Our store exclusively sells content creator software tools (ClipShield & VoiceDelta).
+2. PRODUCT AVAILABILITY & BRAND INTEGRITY:
+   - ClipShield and VoiceDelta are ALWAYS IN STOCK and AVAILABLE for immediate setup. NEVER say "yeh filhal available nahi hai".
+   - When discussing VoiceDelta, ALWAYS refer to the product as VoiceDelta. NEVER rename or call the product "ElevenLabs". You can explain that VoiceDelta includes access to official ElevenLabs and OpenAI voice models, but the product is VoiceDelta.
+3. GREETING CADENCE & NATURAL DIALOGUE:
+   - Only greet (e.g. "AOA" or "Walaikum Assalam") ONCE at the very beginning of a conversation.
+   - In an ongoing conversation (turns 2, 3, 4, etc.), DO NOT repeat greetings, and DO NOT repeat the customer's name on every message (e.g. do not say "Badar bhai" on every turn). Reply directly and conversationally to their question.
+4. VALUE SELLING & REAL PERSUASION:
+   - When a customer shows interest in a tool (e.g., "Clipshied tool lena ha", "voice over tool", "Copyright Removal"), enthusiastically validate their choice! Explain WHY it is the best tool, its standout features (e.g., bypasses YouTube Content ID with 9-layer protection, instant voice cloning, local PC speed), state the price clearly, and ask a relevant question about their use case.
+5. RICH DETAILS ON DEMAND:
    - When the customer asks for "Details" or "How to use": Share comprehensive, structured, attractive details from the tool specifications, dynamic sections, and features. Make them realize the immense value of the software.
-4. SHARE LINKS FREELY:
-   - When the customer asks for "Link" or trial/download: Share the direct download/trial link or documentation link provided in the tool knowledge! Guide them warmly on how to test 1 video or sample audio and share their Hardware ID or details.
-5. CONTEXT CONTINUITY:
-   - If the customer gives a short confirmation or reply like "G", "haan", "theek", "ok", "yes", NEVER reset the conversation or ask generic questions. Seamlessly connect to what was just discussed (e.g., if you asked if they need it for content creation and they said "G", immediately explain how the tool supercharges their content creation).
-6. CONTINUOUS CONVERSATION:
-   - If the conversation is already ongoing, do NOT greet again or re-introduce yourself. Pick up the conversation naturally.
-7. STRICT SOURCE OF TRUTH:
-   - Only discuss products, features, dynamic sections, and rates stored in our catalog. NEVER invent external tools or fabricate features.`;
+6. SHARE LINKS FREELY:
+   - When the customer asks for "Link" or trial/download: Share the direct download/trial link or documentation link provided in the tool knowledge! Guide them warmly on how to test 1 video or sample audio.
+7. CONTEXT CONTINUITY:
+   - If the customer gives a short confirmation or reply like "G", "haan", "theek", "ok", "yes", "Details", NEVER reset the conversation or ask generic questions. Seamlessly connect to the tool currently under discussion.
+8. STRICT SOURCE OF TRUTH:
+   - Only discuss products, features, dynamic sections, and rates stored in our catalog. NEVER invent uncarried tools or fabricate features.`;
   const memoryLines = [];
   memoryLines.push(`[CUSTOMER CONTEXT & PROFILE]`);
   if (customer.name || memory?.customerName) {
@@ -3170,7 +3278,7 @@ CRITICAL RULES (ABSOLUTELY NO ROBOTIC BOT BEHAVIOR):
     memoryLines.push(`Previously Quoted Rates: ${quotes}`);
   }
   if (isReturningCustomer) {
-    memoryLines.push(`DIRECTIVE: Conversation is active. Do NOT greet with "AOA" or reset context. Reply directly to customer's message.`);
+    memoryLines.push(`DIRECTIVE: Conversation is active. Do NOT greet with "AOA" or reset context. Do NOT repeatedly say customer's name. Reply directly to customer's message.`);
   }
   const toolLines = [];
   let matchedToolName = void 0;
@@ -3182,6 +3290,12 @@ CRITICAL RULES (ABSOLUTELY NO ROBOTIC BOT BEHAVIOR):
     matchedToolName = matchedTools[0].name;
     for (const t of matchedTools) {
       toolLines.push(`=== PRODUCT CATALOG: ${t.name} ===`);
+      if (t.name.toLowerCase().includes("voice")) {
+        toolLines.push(`[NOTE: Product name is VoiceDelta. NEVER call this product 'ElevenLabs'. You can mention that VoiceDelta includes access to ElevenLabs voices.]`);
+      }
+      if (t.name.toLowerCase().includes("clip")) {
+        toolLines.push(`[NOTE: ClipShield is ALWAYS IN STOCK and AVAILABLE for YouTube copyright removal and Content ID bypass.]`);
+      }
       toolLines.push(`Description & Problem Solved: ${t.description}`);
       const minFloor = t.pricing?.min_negotiable_pkr || t.pricePkr || "N/A";
       toolLines.push(`Pricing: Rs. ${t.pricePkr || "N/A"}/mo ${t.priceUsd ? `($${t.priceUsd}/mo)` : ""} | Min Floor Rate: Rs. ${minFloor}`);
@@ -3232,7 +3346,7 @@ ${sec.content}`);
   } else {
     toolLines.push(`[AVAILABLE STORE TOOLS]`);
     toolLines.push(allAccountToolsSummary);
-    toolLines.push(`INSTRUCTION: Greet naturally and casually as a human tech seller (e.g. "Walaikum Assalam bhai! Kya haal hain? Bataen kon sa software ya tool dekh rahe hain aap?"). NEVER use robotic bot phrases like "main kya madad kar sakta hoon".`);
+    toolLines.push(`INSTRUCTION: Greet naturally and casually as a human tech seller (e.g. "Walaikum Assalam bhai! Kya haal hain? Bataen kon sa software ya tool dekh rahe hain aap?"). NEVER use robotic bot phrases like "main kya madad kar sakta hoon". NEVER invent a persona name like 'Aamir'. NEVER mention SEO or unrelated services.`);
   }
   const isPaymentRelevant = latestCustomerText.match(/(?:pay|payment|jazzcash|easypaisa|bank|raast|account|bhejo|transfer|kese\s+loon|kharidna|buy)/i) || memory?.stage === "payment_pending";
   const paymentLines = [];
