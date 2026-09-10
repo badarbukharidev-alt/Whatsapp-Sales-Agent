@@ -264,6 +264,12 @@
     "related_tools": [
       "VoiceDelta"
     ],
-    "priority": 2
+    "priority": 2,
+    "templateMessage": {
+      "enabled": true,
+      "sendOnce": true,
+      "variablesEnabled": false,
+      "content": "💯Copyright Removal Tool Full Working\nRemove YouTube Video Copyright also Convert YouTube Video into Shorts Using Ai\n\nHere is 🔰Copyright Removal Tool Link with tutorial\n\n1️⃣  Download Software 👇👇👇\nhttps://docs.google.com/document/d/1Y4dAxV-JO_scOKUW_2gXk5Mv4c59nQQvOBETKpCALF0/edit?usp=sharing\n\n2️⃣ See Tutorial Video https://youtu.be/9tmoZPbgD84\n3️⃣It Gives only 1 Trial then you need to Buy License Key\n4️⃣1 Month Key 1200 Pkr Just\n5️⃣LifeTime Key 3500 Pkr\n\n\nFollow the BU Labs💻 channel on WhatsApp: https://whatsapp.com/channel/0029VbD0TwiFy72GJkpVaA20"
+    }
   }
 ]

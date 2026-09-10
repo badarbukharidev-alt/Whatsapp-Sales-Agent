@@ -1214,8 +1214,8 @@ ${catalogMatch[1].trim().slice(0, 260)}` : "Store Catalog: 1. ClipShield (YouTub
     }
   }
   const roleRules = [
-    "Role: Real human Pakistani software consultant chatting on WhatsApp. Natural Roman Urdu.",
-    "RULES: (1) NEVER invent a persona name like 'Aamir'. (2) NEVER offer SEO or web design. (3) ClipShield and VoiceDelta are ALWAYS available. (4) For VoiceDelta, always call it VoiceDelta (not ElevenLabs). (5) In ongoing chats, do NOT repeat 'AOA' or the customer's name on every message."
+    "Role: Real human Pakistani software consultant chatting on WhatsApp. MUST reply in Roman Urdu only (Urdu words written in English letters, like 'bhai', 'kitna', 'Walaikum Assalam'). NEVER reply in English.",
+    "RULES: (1) NEVER invent a persona name like 'Aamir'. (2) NEVER offer SEO or web design. (3) ClipShield and VoiceDelta are ALWAYS available. (4) For VoiceDelta, always call it VoiceDelta (not ElevenLabs). (5) In ongoing chats, do NOT repeat 'AOA' or the customer's name on every message. (6) NEVER use markdown link syntax [text](url) \u2014 always write URLs as plain text. (7) NEVER fabricate account numbers, payment details, or bank info \u2014 only use what is given."
   ].join("\n");
   const bodyParts = [
     roleRules,
@@ -3482,6 +3482,10 @@ function stripFabricatedCustomerTurns(raw) {
   }
   return kept.join("\n").trim();
 }
+function stripMarkdownLinks(text) {
+  if (!text) return text;
+  return text.replace(/\[([^\]]*)\]\(([^)]+)\)/g, (_m, _label, url) => url.trim()).replace(/`([^`]+)`/g, "$1");
+}
 function startAgent() {
   console.log("[Agent] Persistent Multi-Tenant WhatsApp Sales Closer Engine initialized.");
 }
@@ -3649,6 +3653,28 @@ async function generateResponse(cleanJid, latestCustomerText, name, batch, userI
   const explicitPaymentRequest = EXPLICIT_PAYMENT_REGEX.test(latestCustomerText);
   const explicitLinkRequest = EXPLICIT_LINK_REGEX.test(latestCustomerText);
   const agentRecentlyClaimedFixed = recentMessages.filter((m) => m.role === "agent").slice(-2).some((m) => /(?:fixed|kam nahi|rate final|final price|discount nahi)/i.test(m.content));
+  if (explicitPaymentRequest) {
+    const activePayments = (settings.paymentMethods || []).filter((p) => p.isActive !== false);
+    if (activePayments.length > 0) {
+      const productLine = lockedTool ? `Rs. ${lockedTool.pricePkr || "1500"}/month ke liye payment karein:` : "Payment karein:";
+      const lines = [productLine];
+      for (const p of activePayments) {
+        lines.push(`
+\u{1F4F1} *${p.provider}*
+Account: ${p.accountNumber}
+Title: ${p.accountTitle}${p.instructions ? `
+(${p.instructions})` : ""}`);
+      }
+      lines.push("\nPayment ke baad screenshot + apna email / Hardware ID yahan share karein. Main activate kar deta hoon. \u2705");
+      const paymentReply = lines.join("\n");
+      await evaluateAndApplyCustomerStatus(cleanJid, customer, latestCustomerText, null, userId, buyingIntent);
+      return {
+        textMessages: [paymentReply],
+        imageToSend: null,
+        templateMessage
+      };
+    }
+  }
   const { prompt, systemPrompt } = synthesizeSalesPrompt({
     customer,
     matchedTools: match.matched,
@@ -3683,6 +3709,7 @@ async function generateResponse(cleanJid, latestCustomerText, name, batch, userI
   }
   await evaluateAndApplyCustomerStatus(cleanJid, customer, latestCustomerText, extractedAiStatus, userId, buyingIntent);
   text = stripFabricatedCustomerTurns(text).replace(/^["']|["']$/g, "").trim();
+  text = stripMarkdownLinks(text);
   if (match.matched.length > 0) {
     for (const tool of match.matched) {
       const newlyStated = extractMentionedFacts(text, tool);

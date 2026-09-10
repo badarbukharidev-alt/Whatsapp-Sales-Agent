@@ -67,6 +67,20 @@ function stripFabricatedCustomerTurns(raw: string): string {
   return kept.join("\n").trim();
 }
 
+/**
+ * Converts markdown-style links [text](url) to plain URLs, because WhatsApp
+ * does NOT support markdown link syntax and renders them broken.
+ * Also strips stray single-backtick wrapping and asterisk/star formatting.
+ */
+function stripMarkdownLinks(text: string): string {
+  if (!text) return text;
+  // [label](url) → url  (WhatsApp doesn't render markdown links)
+  return text
+    .replace(/\[([^\]]*)\]\(([^)]+)\)/g, (_m, _label, url) => url.trim())
+    // Remove leftover single backtick-wrapping (e.g. `Rs. 1500`)
+    .replace(/`([^`]+)`/g, "$1");
+}
+
 interface QueuedIncomingMessage {
   seq: number;
   text: string;
@@ -346,6 +360,30 @@ async function generateResponse(
     .slice(-2)
     .some((m) => /(?:fixed|kam nahi|rate final|final price|discount nahi)/i.test(m.content));
 
+  // ── HARDCODED PAYMENT BYPASS ─────────────────────────────────────────────
+  // When the customer explicitly asks for payment/account details, skip the AI
+  // entirely and send ONLY the real configured payment accounts. This guarantees
+  // the agent NEVER fabricates account numbers (XXXX-XXXXXX, etc.).
+  if (explicitPaymentRequest) {
+    const activePayments = (settings.paymentMethods || []).filter((p: any) => p.isActive !== false);
+    if (activePayments.length > 0) {
+      const productLine = lockedTool ? `Rs. ${lockedTool.pricePkr || "1500"}/month ke liye payment karein:` : "Payment karein:";
+      const lines = [productLine];
+      for (const p of activePayments) {
+        lines.push(`\n📱 *${p.provider}*\nAccount: ${p.accountNumber}\nTitle: ${p.accountTitle}${p.instructions ? `\n(${p.instructions})` : ""}`);
+      }
+      lines.push("\nPayment ke baad screenshot + apna email / Hardware ID yahan share karein. Main activate kar deta hoon. ✅");
+      const paymentReply = lines.join("\n");
+      await evaluateAndApplyCustomerStatus(cleanJid, customer, latestCustomerText, null, userId, buyingIntent);
+      return {
+        textMessages: [paymentReply],
+        imageToSend: null,
+        templateMessage,
+      };
+    }
+  }
+  // ── END HARDCODED PAYMENT BYPASS ─────────────────────────────────────────
+
   // 8. Synthesize lean, controlled sales prompt (ONLY the locked product's data).
   const { prompt, systemPrompt } = synthesizeSalesPrompt({
     customer,
@@ -393,6 +431,9 @@ async function generateResponse(
   text = stripFabricatedCustomerTurns(text)
     .replace(/^["']|["']$/g, "")
     .trim();
+
+  // STRIP MARKDOWN LINKS: WhatsApp doesn't render [text](url) — convert to plain URLs.
+  text = stripMarkdownLinks(text);
 
   // 8. Track stated facts for anti-repetition
   if (match.matched.length > 0) {
