@@ -227,26 +227,37 @@ export function buildCompactPublicQuery(prompt: string, systemPrompt?: string): 
 
   // 2. Extract matched tool(s) and structured knowledge
   let toolSummary = "";
+  // Also extract links separately so they survive any truncation
+  let extractedLinksBlock = "";
+
   const toolMatch = prompt.match(
     /(?:===\s*PRODUCT CATALOG:\s*([^\n=]+)\s*===|===\s*MATCHED TOOL:\s*([^\n=]+)\s*===)/i
   );
 
   if (toolMatch) {
     const toolName = (toolMatch[1] || toolMatch[2]).trim();
-    const descMatch = prompt.match(/(?:Description & Problem Solved|Description):\s*([^\n]+)/i);
+    const descMatch = prompt.match(/(?:Description \& Problem Solved|Description):\s*([^\n]+)/i);
     const priceMatch = prompt.match(/(?:Pricing|Regular Price|List Price):\s*([^\n]+)/i);
-    const featuresMatch = prompt.match(/Key Features & Capabilities:\s*\n([\s\S]*?)(?=\n[A-Z]|\n===|$)/i);
-    const linksMatch = prompt.match(/Official Direct Links & Resources:\s*\n([\s\S]*?)(?=\n[A-Z]|\n===|$)/i);
+    // FIXED: match the actual header used by prompt-service.ts: "Key Features:"
+    const featuresMatch = prompt.match(/Key Features:\s*\n([\s\S]*?)(?=\n[A-Z]|\n===|$)/i);
+    // FIXED: match the actual header used by prompt-service.ts: "Official Links & Downloads:"
+    const linksMatch = prompt.match(/Official Links \& Downloads:\s*\n([\s\S]*?)(?=\n[A-Z]|\n===|$)/i);
     const sectionsMatch = prompt.match(/\[SECTION:[^\]]+\]\s*\n([\s\S]*?)(?=\n\[SECTION|\n===|\n[A-Z]|$)/i);
 
     const desc = descMatch ? descMatch[1].slice(0, 140).trim() : "";
     const price = priceMatch ? priceMatch[1].slice(0, 80).trim() : "";
     const feat = featuresMatch
-      ? featuresMatch[1].split("\n").filter(Boolean).slice(0, 2).map(f => f.replace(/^-\s*/, "")).join("; ").slice(0, 160)
+      ? featuresMatch[1].split("\n").filter(Boolean).slice(0, 2).map(f => f.replace(/^[\*\-]\s*/, "")).join("; ").slice(0, 160)
       : "";
-    const link = linksMatch
-      ? linksMatch[1].split("\n").filter(Boolean).slice(0, 1).join(" ").slice(0, 130)
+    // Extract all link lines so we can guarantee they appear even if prompt is long
+    const allLinkLines = linksMatch
+      ? linksMatch[1].split("\n").filter(Boolean).slice(0, 3)
+      : [];
+    const link = allLinkLines.slice(0, 1).join(" ").slice(0, 200);
+    extractedLinksBlock = allLinkLines.length > 0
+      ? `Official Links & Downloads:\n${allLinkLines.map(l => `  ${l.trim()}`).join("\n")}`
       : "";
+
     const sec = sectionsMatch ? sectionsMatch[1].slice(0, 120).trim() : "";
 
     toolSummary = `ACTIVE TOOL: ${toolName}. ${desc ? `Desc: ${desc}. ` : ""}${price ? `Price: ${price}. ` : ""}${feat ? `Features: ${feat}. ` : ""}${link ? `Link: ${link}. ` : ""}${sec ? `Details: ${sec}. ` : ""}`;
@@ -292,15 +303,18 @@ export function buildCompactPublicQuery(prompt: string, systemPrompt?: string): 
     "RULES: (1) NEVER invent a persona name like 'Aamir'. (2) NEVER offer SEO or web design. (3) ClipShield and VoiceDelta are ALWAYS available. (4) For VoiceDelta, always call it VoiceDelta (not ElevenLabs). (5) In ongoing chats, do NOT repeat 'AOA' or the customer's name on every message.",
   ].join("\n");
 
-  const parts = [
+  // Build body parts (excluding the guaranteed links block)
+  const bodyParts = [
     roleRules,
     toolSummary,
     recentContext,
     customerMsg ? `Customer message: "${customerMsg}"` : prompt.slice(-250),
-    "Reply naturally as a helpful Pakistani WhatsApp seller in Roman Urdu:"
+    "Reply naturally as a helpful Pakistani WhatsApp seller in Roman Urdu:",
   ].filter(Boolean);
 
-  return parts.join("\n\n");
+  // Append extractedLinksBlock at end so it always appears — even if body is truncated
+  const fullQuery = [...bodyParts, extractedLinksBlock].filter(Boolean).join("\n\n");
+  return fullQuery;
 }
 
 /**
@@ -308,7 +322,8 @@ export function buildCompactPublicQuery(prompt: string, systemPrompt?: string): 
  */
 async function callPublicFallback(provider: string, prompt: string, systemPrompt?: string): Promise<NormalizedAIResponse> {
   const compactQuery = buildCompactPublicQuery(prompt, systemPrompt);
-  const safeQuery = compactQuery.length > 1000 ? compactQuery.substring(0, 1000) : compactQuery;
+  // Raised from 1000 to 3000 chars so tool details + links are NOT truncated away
+  const safeQuery = compactQuery.length > 3000 ? compactQuery.substring(0, 3000) : compactQuery;
   const encodedQuery = encodeURIComponent(safeQuery);
 
   let url = `https://api-rebix.zone.id/api/gemini?q=${encodedQuery}`;

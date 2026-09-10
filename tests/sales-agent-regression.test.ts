@@ -475,6 +475,73 @@ async function runRegressionSuite() {
     assert.ok(/NEVER write the customer's messages/i.test(systemPrompt), "Must forbid speaking as the customer");
   });
 
+  // =========================================================================
+  // SCENARIO 7: buildCompactPublicQuery — Link extraction & truncation safety
+  // Verifies the two live bugs observed Sep-11 are gone:
+  //   7.1 Real ClipShield docs link must appear in compact query (was: regex mismatch → link dropped)
+  //   7.2 Compact query must NOT start mid-sentence (was: 1000-char truncation cut first word off)
+  // =========================================================================
+  test("7.1 buildCompactPublicQuery includes real ClipShield docs.google.com link", () => {
+    // Simulate the exact prompt format synthesizeSalesPrompt produces
+    const fakePrompt = [
+      "Customer: Badar",
+      "=== PRODUCT CATALOG: ClipShield ===",
+      "[NOTE: ClipShield is ALWAYS IN STOCK and AVAILABLE for YouTube copyright removal and Content ID bypass.]",
+      "Description & Problem Solved: ClipShield bypasses YouTube Content ID copyright claims.",
+      "Pricing: Rs. 1500/mo | Min Floor Rate: Rs. 1200",
+      "Key Features:",
+      "  * Bypass Content ID algorithm",
+      "  * One-click video processing",
+      "Official Links & Downloads:",
+      "  - Download Doc: https://docs.google.com/document/d/1Y4dAxV-JO_scOKUW_2gXk5Mv4c59nQQvOBETKpCALF0/edit?usp=sharing (Setup Guide)",
+      "[RECENT CONVERSATION TURNS]:",
+      "Customer: Link bhjo",
+      "You (Agent): Zaroor, abhi bhejta hoon",
+      `CUSTOMER'S LATEST MESSAGE(S): "G"`,
+      "Reply ONLY as the seller..."
+    ].join("\n");
+
+    const compact = buildCompactPublicQuery(fakePrompt);
+    assert.ok(
+      compact.includes("docs.google.com/document/d/1Y4dAxV-JO_scOKUW_2gXk5Mv4c59nQQvOBETKpCALF0"),
+      `Compact query must contain real ClipShield Google Docs link. Got:\n${compact}`
+    );
+    assert.ok(
+      !compact.includes("example.com"),
+      "Compact query must NOT contain placeholder example.com link"
+    );
+  });
+
+  test("7.2 buildCompactPublicQuery output starts with a complete sentence (not mid-word)", () => {
+    // Generate a very long prompt that would have been truncated by the old 1000-char limit
+    const longSection = "X".repeat(1200); // pad to exceed old limit
+    const fakePrompt = [
+      "=== PRODUCT CATALOG: ClipShield ===",
+      `Description & Problem Solved: ${longSection}`,
+      "Pricing: Rs. 1500/mo",
+      "Key Features:",
+      "  * Feature one",
+      "Official Links & Downloads:",
+      "  - Download Doc: https://docs.google.com/document/d/1Y4dAxV-JO_scOKUW_2gXk5Mv4c59nQQvOBETKpCALF0/edit?usp=sharing",
+      "[RECENT CONVERSATION TURNS]:",
+      "Customer: details",
+      `CUSTOMER'S LATEST MESSAGE(S): "Link bhjo"`,
+      "Reply ONLY as the seller..."
+    ].join("\n");
+
+    const compact = buildCompactPublicQuery(fakePrompt);
+    // The compact query should start with "Role:" (the roleRules block) — not a mid-word
+    assert.ok(
+      /^Role:/i.test(compact.trim()),
+      `Compact query must start with "Role:" guardrail block, not mid-sentence. Started with: "${compact.trim().slice(0, 60)}"`
+    );
+    // Also verify the link still appears despite the long prompt
+    assert.ok(
+      compact.includes("docs.google.com"),
+      "Compact query must still contain the real link even with a long prompt body"
+    );
+  });
+
   for (const t of testQueue) {
     try {
       await t.fn();

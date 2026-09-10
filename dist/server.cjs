@@ -1162,20 +1162,24 @@ function buildCompactPublicQuery(prompt, systemPrompt) {
     }
   }
   let toolSummary = "";
+  let extractedLinksBlock = "";
   const toolMatch = prompt.match(
     /(?:===\s*PRODUCT CATALOG:\s*([^\n=]+)\s*===|===\s*MATCHED TOOL:\s*([^\n=]+)\s*===)/i
   );
   if (toolMatch) {
     const toolName = (toolMatch[1] || toolMatch[2]).trim();
-    const descMatch = prompt.match(/(?:Description & Problem Solved|Description):\s*([^\n]+)/i);
+    const descMatch = prompt.match(/(?:Description \& Problem Solved|Description):\s*([^\n]+)/i);
     const priceMatch = prompt.match(/(?:Pricing|Regular Price|List Price):\s*([^\n]+)/i);
-    const featuresMatch = prompt.match(/Key Features & Capabilities:\s*\n([\s\S]*?)(?=\n[A-Z]|\n===|$)/i);
-    const linksMatch = prompt.match(/Official Direct Links & Resources:\s*\n([\s\S]*?)(?=\n[A-Z]|\n===|$)/i);
+    const featuresMatch = prompt.match(/Key Features:\s*\n([\s\S]*?)(?=\n[A-Z]|\n===|$)/i);
+    const linksMatch = prompt.match(/Official Links \& Downloads:\s*\n([\s\S]*?)(?=\n[A-Z]|\n===|$)/i);
     const sectionsMatch = prompt.match(/\[SECTION:[^\]]+\]\s*\n([\s\S]*?)(?=\n\[SECTION|\n===|\n[A-Z]|$)/i);
     const desc = descMatch ? descMatch[1].slice(0, 140).trim() : "";
     const price = priceMatch ? priceMatch[1].slice(0, 80).trim() : "";
-    const feat = featuresMatch ? featuresMatch[1].split("\n").filter(Boolean).slice(0, 2).map((f) => f.replace(/^-\s*/, "")).join("; ").slice(0, 160) : "";
-    const link = linksMatch ? linksMatch[1].split("\n").filter(Boolean).slice(0, 1).join(" ").slice(0, 130) : "";
+    const feat = featuresMatch ? featuresMatch[1].split("\n").filter(Boolean).slice(0, 2).map((f) => f.replace(/^[\*\-]\s*/, "")).join("; ").slice(0, 160) : "";
+    const allLinkLines = linksMatch ? linksMatch[1].split("\n").filter(Boolean).slice(0, 3) : [];
+    const link = allLinkLines.slice(0, 1).join(" ").slice(0, 200);
+    extractedLinksBlock = allLinkLines.length > 0 ? `Official Links & Downloads:
+${allLinkLines.map((l) => `  ${l.trim()}`).join("\n")}` : "";
     const sec = sectionsMatch ? sectionsMatch[1].slice(0, 120).trim() : "";
     toolSummary = `ACTIVE TOOL: ${toolName}. ${desc ? `Desc: ${desc}. ` : ""}${price ? `Price: ${price}. ` : ""}${feat ? `Features: ${feat}. ` : ""}${link ? `Link: ${link}. ` : ""}${sec ? `Details: ${sec}. ` : ""}`;
     if (/voice\s*delta|voicedelta/i.test(toolName)) {
@@ -1213,18 +1217,19 @@ ${catalogMatch[1].trim().slice(0, 260)}` : "Store Catalog: 1. ClipShield (YouTub
     "Role: Real human Pakistani software consultant chatting on WhatsApp. Natural Roman Urdu.",
     "RULES: (1) NEVER invent a persona name like 'Aamir'. (2) NEVER offer SEO or web design. (3) ClipShield and VoiceDelta are ALWAYS available. (4) For VoiceDelta, always call it VoiceDelta (not ElevenLabs). (5) In ongoing chats, do NOT repeat 'AOA' or the customer's name on every message."
   ].join("\n");
-  const parts = [
+  const bodyParts = [
     roleRules,
     toolSummary,
     recentContext,
     customerMsg ? `Customer message: "${customerMsg}"` : prompt.slice(-250),
     "Reply naturally as a helpful Pakistani WhatsApp seller in Roman Urdu:"
   ].filter(Boolean);
-  return parts.join("\n\n");
+  const fullQuery = [...bodyParts, extractedLinksBlock].filter(Boolean).join("\n\n");
+  return fullQuery;
 }
 async function callPublicFallback(provider, prompt, systemPrompt) {
   const compactQuery = buildCompactPublicQuery(prompt, systemPrompt);
-  const safeQuery = compactQuery.length > 1e3 ? compactQuery.substring(0, 1e3) : compactQuery;
+  const safeQuery = compactQuery.length > 3e3 ? compactQuery.substring(0, 3e3) : compactQuery;
   const encodedQuery = encodeURIComponent(safeQuery);
   let url = `https://api-rebix.zone.id/api/gemini?q=${encodedQuery}`;
   if (provider === "DeepSeek") url = `https://api-rebix.zone.id/api/deepseek-v3?q=${encodedQuery}`;
