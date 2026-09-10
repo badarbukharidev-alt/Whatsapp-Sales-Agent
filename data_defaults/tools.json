@@ -1,198 +1,108 @@
 [
   {
+    "id": "tool_user1_voicedelta",
     "name": "VoiceDelta",
-    "description": "VoiceDelta is an AI voice generation platform designed for content creators, YouTubers, faceless YouTube channels, and anyone who needs realistic AI voiceovers.",
-    "features": [
-      "3,600+ distinct AI voices",
-      "Access to official ElevenLabs, ChatGPT/OpenAI, Gemini, and Microsoft voice models",
-      "Instant AI voice cloning with advertised 99%+ fidelity using a clean 1-minute audio recording",
-      "Text-to-speech generation powered by multiple engines including ElevenLabs and HeyGen",
-      "Advanced voice controls for speed, pitch variation, and pacing",
-      "Pro plan benefits: unlimited daily voice generation, unlimited custom voice clones, and priority GPU processing queue"
-    ],
-    "use_cases": [
-      "YouTube content creation and faceless YouTube channels",
-      "Generating realistic AI voiceovers",
-      "Voice cloning for personalized audio",
-      "Accessing multiple top AI voice providers in a single platform"
-    ],
-    "requirements": [
-      "Clean 1-minute audio recording for high-fidelity voice cloning"
-    ],
-    "limitations": [
-      "Free Plan: Maximum 1,000 characters per generation",
-      "Free Plan: Maximum 1,000 characters per day",
-      "Free Plan: Limited to 1 voice clone slot",
-      "Pro Plan: Up to 30,000 characters per generation"
-    ],
-    "how_to_use": "Sign up on the platform, select from over 3,600 AI voice models or upload a clean 1-minute audio sample to clone a custom voice, input your text, adjust speed/pitch settings, and generate the text-to-speech voiceover.",
+    "userId": "user_tenant_1",
+    "description": "AI voice generator with 3600+ voices and cloning.",
     "pricePkr": "1199",
-    "priceUsd": "5",
-    "sales_points": [
-      "Offers a low-cost Pro plan at $5/month (or Rs. 1,199/month local manual payment) with unlimited voice generation and cloning",
-      "Consolidates multiple premium voice models (ElevenLabs, OpenAI, Gemini, Microsoft) into one platform",
-      "Provides a free tier for users to test generation and voice cloning capabilities before upgrading",
-      "Over 99% voice cloning fidelity from just 1 minute of clear audio"
-    ],
-    "faq": [
-      {
-        "question": "How accurate is VoiceDelta's voice cloning?",
-        "answer": "With a clean 1-minute audio recording, VoiceDelta advertises over 99% cloning fidelity."
-      },
-      {
-        "question": "How many voices are available?",
-        "answer": "VoiceDelta provides access to 3,600+ AI voices from multiple voice providers."
-      },
-      {
-        "question": "What voice providers are available?",
-        "answer": "VoiceDelta includes ElevenLabs, ChatGPT/OpenAI, Gemini, and Microsoft voice models."
-      },
-      {
-        "question": "Is there a free plan?",
-        "answer": "Yes. The Free plan allows up to 1,000 characters per generation and 1,000 characters per day, with 1 voice clone slot."
-      },
-      {
-        "question": "Is Pro unlimited?",
-        "answer": "Yes. Pro users have unlimited daily voice generation."
-      },
-      {
-        "question": "How much is Pro?",
-        "answer": "Pro is $5/month with USD billing or Rs. 1,199/month through the local manual payment option."
-      },
-      {
-        "question": "Can I clone my own voice?",
-        "answer": "Yes. VoiceDelta supports instant AI voice cloning from a short audio recording."
-      },
-      {
-        "question": "Can I control the voice speed and pitch?",
-        "answer": "Yes. Pro users get advanced speed and pitch controls."
-      }
-    ],
-    "id": "1788274681354",
-    "images": [],
-    "category": "AI Tools",
-    "status": "active",
     "aliases": [
       "voicedelta",
-      "voice delta",
-      "voice-delta",
-      "voicedalta",
-      "voicedelata",
-      "voisdelta",
-      "vois delta"
+      "voice delta"
     ],
     "keywords": [
       "voice",
-      "voices",
-      "voiceover",
-      "voice over",
-      "ai voice",
-      "voice cloning",
-      "clone",
-      "tts",
-      "text to speech",
-      "elevenlabs",
-      "realistic voice",
-      "audio generation"
+      "cloning",
+      "tts"
     ],
     "pricing": {
-      "min_negotiable_pkr": 1000,
-      "min_negotiable_usd": 4,
-      "negotiation_notes": "Can offer min_negotiable_pkr only in exchange for immediate payment today or 2+ month plan."
+      "min_negotiable_pkr": 1000
     },
-    "objection_responses": {
-      "too_expensive": "Explain Rs. 1,199/month comes down to just Rs. 40/day for 3,600+ AI voices & cloning vs $22+ on ElevenLabs.",
-      "need_time": "Offer to answer specific questions or share sample audio demos.",
-      "comparing_competitor": "Highlight all top models (ElevenLabs, OpenAI, Gemini) in one place with instant local PKR activation."
-    },
-    "related_tools": [
-      "ClipShield"
+    "features": [
+      "Voice cloning in 1 min",
+      "3600+ voices"
     ],
-    "priority": 1
+    "status": "active"
   },
   {
-    "name": "ClipShield – YouTube Copyright Claim Remover",
-    "description": "ClipShield is a local desktop application designed for content creators to download, edit, and repurpose YouTube videos without triggering copyright claims. It downloads HD video streams, uses AI to find viral moments, reframes videos to vertical formats, and applies 9 layers of protection to make videos unique and undetectable by Content ID.",
-    "features": [
-      "Download Any Video: Paste a YouTube URL and download HD video directly without IP bans.",
-      "AI Hook Finder: AI scans the video to identify the most viral and engaging moments.",
-      "Smart Reframing: Converts 16:9 videos to 9:16 (vertical) while keeping faces centered.",
-      "9-Layer Protection: Applies multiple filters (audio pitch, color shift, crop, metadata spoofing) to bypass Content ID.",
-      "Super Fast Processing: All processing happens locally on your computer, eliminating server uploads.",
-      "99.8% Success Rate: Proven track record in avoiding copyright claims."
-    ],
-    "use_cases": [
-      "Downloading, editing, and repurposing YouTube videos without triggering copyright claims.",
-      "Finding viral moments in long-form content using AI.",
-      "Reframing landscape videos (16:9) to vertical format (9:16) for short-form video platforms.",
-      "Repurposing dramas and movies (avoiding official channel uploads) safely using 9-layer anti-Content ID protection."
-    ],
-    "requirements": [
-      "Hardware ID (HWID) from the application settings for activation.",
-      "Contacting support via WhatsApp to acquire a valid license key.",
-      "Valid license (Monthly or Lifetime) for full and unlimited usage."
-    ],
-    "limitations": [
-      "Requires a license for full, unlimited access (monthly or lifetime).",
-      "Free version limited to 1 trial video for testing niche compatibility.",
-      "Users should not use official channel movies and dramas."
-    ],
-    "how_to_use": "1. Download the app (free trial included) via [https://docs.google.com/document/d/1](https://docs.google.com/document/d/1)docs.google.com/document/d/1Y4dAxV-JO_scOKUW_2gXk5Mv4c59n)1Y4dAxV-JO_scOKUW_2gXk5Mv4c59nQQvOBETKpCALF0/edit?usp=sharing).\n2. Open settings and copy your Hardware ID (HWID).\n3. Contact support on WhatsApp to purchase your license.\n4. Paste the license key into the app and start removing claims.",
-    "sales_points": [
-      "Local & Private: No uploading to third-party servers, ensuring privacy.",
-      "AI-powered: Automatically finds viral moments.",
-      "Unlimited videos: Once licensed, use it as much as you want.",
-      "Lifetime updates: Get new features without extra cost (with lifetime license).",
-      "Minimal to no quality loss.",
-      "Easy to use, no technical skills required.",
-      "Flexible Pricing: Monthly License at Rs. 1,500/month (negotiable down to Rs. 1,200 or Rs. 1,000) and Lifetime License at Rs. 3,500 one-time (negotiable down to Rs. 3,000 or Rs. 2,800).",
-      "Risk-Free Testing: Includes 1 trial video to test for copyright claims before purchasing."
-    ],
-    "faq": [],
-    "id": "1788311665125",
-    "images": [],
+    "id": "tool_user1_clipshield",
+    "name": "ClipShield",
+    "userId": "user_tenant_1",
+    "description": "YouTube copyright bypass and video reframer.",
+    "pricePkr": "1500",
     "aliases": [
-      "clipshield – youtube copyright claim remover",
       "clipshield",
-      "clipshieldyoutubecopyrightclaimremover",
-      "clipshield youtube copyright claim remover",
       "clip shield",
-      "clip-shield",
-      "clipshied",
-      "clipsheild",
-      "clip sheild",
-      "clip sheeld",
-      "clipsheeld",
-      "copyright claim remover"
+      "clipshied"
     ],
     "keywords": [
       "copyright",
-      "claim",
-      "copyright claim",
       "bypass",
-      "video downloader",
-      "repurpose",
-      "content id",
-      "viral hooks",
-      "reframing",
-      "youtube videos",
-      "claims remover"
+      "video"
     ],
     "pricing": {
-      "min_negotiable_pkr": 1000,
-      "min_negotiable_usd": 5,
-      "negotiation_notes": "Can offer min_negotiable_pkr only in exchange for immediate payment today or 2+ month plan."
+      "min_negotiable_pkr": 1200
     },
-    "objection_responses": {
-      "too_expensive": "Highlight avoiding 1 copyright strike or wasted editing hours saves far more than the license price.",
-      "need_time": "Remind them they can test with 1 trial video first to verify compatibility.",
-      "comparing_competitor": "Emphasize 9-layer anti-Content ID protection with local offline processing."
-    },
-    "related_tools": [
-      "VoiceDelta"
+    "features": [
+      "9-layer anti-content ID",
+      "AI hook finder"
     ],
-    "priority": 2,
+    "status": "active"
+  },
+  {
+    "id": "tool_user2_customsaas",
+    "name": "AutoReel Pro",
+    "userId": "user_tenant_2",
+    "description": "Automated Instagram Reels maker for eCommerce.",
+    "pricePkr": "2500",
+    "aliases": [
+      "autoreel",
+      "autoreel pro"
+    ],
+    "keywords": [
+      "reels",
+      "instagram",
+      "ecommerce"
+    ],
+    "pricing": {
+      "min_negotiable_pkr": 2000
+    },
+    "features": [
+      "Auto captions",
+      "Product video render"
+    ],
+    "status": "active"
+  },
+  {
+    "id": "tool_test_sections",
+    "name": "ClipShield Pro",
+    "userId": "user_tenant_1",
+    "status": "active",
+    "category": "AI Tools",
+    "description": "Desktop YouTube Content ID bypass.",
+    "aliases": [],
+    "keywords": [],
+    "pricing": {},
     "pricePkr": "1500",
-    "priceUsd": "6"
+    "objection_responses": {},
+    "features": [],
+    "sales_points": [],
+    "images": [],
+    "links": [
+      {
+        "title": "Download Doc",
+        "url": "https://docs.google.com/test",
+        "note": "Free trial doc"
+      }
+    ],
+    "sections": [
+      {
+        "title": "9-Layer Protection Details",
+        "content": "Layer 1 audio shift, Layer 2 color grade, Layer 3 smart crop..."
+      },
+      {
+        "title": "Pricing & Licenses",
+        "content": "Monthly: Rs. 1500, Lifetime: Rs. 3500."
+      }
+    ]
   }
 ]

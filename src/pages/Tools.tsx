@@ -19,9 +19,11 @@ import {
   BookOpen,
   Settings,
   HelpCircle,
-  FileText
+  FileText,
+  Link as LinkIcon,
+  ExternalLink
 } from "lucide-react";
-import { Tool, ToolImage, Customer } from "../types";
+import { Tool, ToolImage, Customer, ToolSection, ToolLink } from "../types";
 import ConfirmModal from "../components/ConfirmModal";
 
 export default function Tools() {
@@ -40,7 +42,7 @@ export default function Tools() {
 
   // Edit Modal State
   const [editingTool, setEditingTool] = useState<Tool | null>(null);
-  const [activeTab, setActiveTab] = useState<"general" | "ai" | "images" | "settings">("general");
+  const [activeTab, setActiveTab] = useState<"general" | "ai" | "sections" | "images" | "settings">("general");
 
   // Edit Form Fields
   const [editName, setEditName] = useState("");
@@ -62,6 +64,9 @@ export default function Tools() {
   const [editObjectionTooExpensive, setEditObjectionTooExpensive] = useState("");
   const [editObjectionNeedTime, setEditObjectionNeedTime] = useState("");
   const [editObjectionCompetitor, setEditObjectionCompetitor] = useState("");
+  const [editSections, setEditSections] = useState<ToolSection[]>([]);
+  const [editLinks, setEditLinks] = useState<ToolLink[]>([]);
+  const [editRawDraft, setEditRawDraft] = useState("");
   const [isSavingEdit, setIsSavingEdit] = useState(false);
 
   // Image Upload in Modal
@@ -191,10 +196,45 @@ export default function Tools() {
     setEditHowToUse(tool.how_to_use || "");
     setEditLimitations((tool.limitations || []).join("\n"));
     setEditImages(tool.images || []);
+    setEditSections(tool.sections ? JSON.parse(JSON.stringify(tool.sections)) : []);
+    setEditLinks(tool.links ? JSON.parse(JSON.stringify(tool.links)) : []);
+    setEditRawDraft(tool.rawDraft || "");
     setSelectedFile(null);
     setPreviewUrl(null);
     setImageTitle("");
     setImageDescription("");
+  };
+
+  const handleAddSection = () => {
+    setEditSections(prev => [...prev, { title: "New Dynamic Section", content: "" }]);
+  };
+
+  const handleUpdateSection = (index: number, field: "title" | "content", value: string) => {
+    setEditSections(prev => {
+      const updated = [...prev];
+      updated[index] = { ...updated[index], [field]: value };
+      return updated;
+    });
+  };
+
+  const handleDeleteSection = (index: number) => {
+    setEditSections(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleAddLink = () => {
+    setEditLinks(prev => [...prev, { title: "Direct Link / Download", url: "https://", note: "" }]);
+  };
+
+  const handleUpdateLink = (index: number, field: "title" | "url" | "note", value: string) => {
+    setEditLinks(prev => {
+      const updated = [...prev];
+      updated[index] = { ...updated[index], [field]: value };
+      return updated;
+    });
+  };
+
+  const handleDeleteLink = (index: number) => {
+    setEditLinks(prev => prev.filter((_, i) => i !== index));
   };
 
   const handleToggleToolStatus = async (tool: Tool) => {
@@ -298,6 +338,9 @@ export default function Tools() {
         how_to_use: editHowToUse.trim(),
         limitations: editLimitations.split("\n").map(l => l.trim()).filter(Boolean),
         images: editImages,
+        sections: editSections,
+        links: editLinks,
+        rawDraft: editRawDraft,
       };
 
       await axios.put(`/api/tools/${editingTool.id}`, updatedTool);
@@ -377,8 +420,8 @@ export default function Tools() {
                 <Sparkles className="w-4 h-4" />
               </div>
               <div>
-                <h3 className="text-sm font-bold text-slate-900">Add Tool with AI Extraction</h3>
-                <p className="text-[11px] text-slate-500">Paste raw text or documentation. The AI will extract features, sales points, and specifications.</p>
+                <h3 className="text-sm font-bold text-slate-900">Add Tool with Dynamic AI Extraction</h3>
+                <p className="text-[11px] text-slate-500">Paste your complete draft (links, pricing, setup steps, technical notes). The AI will generate vast dynamic sections without losing any information.</p>
               </div>
             </div>
 
@@ -400,7 +443,7 @@ export default function Tools() {
                   type="text"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  placeholder="e.g. VoiceDelta AI"
+                  placeholder="e.g. VoiceDelta AI or ClipShield"
                   required
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-800 outline-none focus:border-emerald-500 focus:bg-white transition-colors"
                 />
@@ -414,7 +457,7 @@ export default function Tools() {
                   type="text"
                   value={category}
                   onChange={(e) => setCategory(e.target.value)}
-                  placeholder="e.g. Voice Cloning / Video / Copywriting"
+                  placeholder="e.g. Voice AI / Video Tools / Automation"
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-800 outline-none focus:border-emerald-500 focus:bg-white transition-colors"
                 />
               </div>
@@ -422,14 +465,14 @@ export default function Tools() {
 
             <div>
               <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                Raw Tool Description & Pricing Information
+                Complete Tool Information, Draft, Links & Instructions
               </label>
               <textarea
                 value={rawInfo}
                 onChange={(e) => setRawInfo(e.target.value)}
-                placeholder="e.g. VoiceDelta is an AI voice cloning tool that supports 40+ languages. It costs 1500 PKR/month for basic and 3000 PKR for pro. YouTube creators love it because it beats ElevenLabs on speed..."
+                placeholder="Paste the entire product draft here including:&#10;- Description & what makes it the best tool&#10;- Direct download links or tutorial links (e.g. https://...)&#10;- Step-by-step setup and activation instructions&#10;- Pricing packages (monthly, lifetime, discount policies)&#10;- Key features and creator use cases&#10;&#10;Dynamic sections will be generated automatically for every topic!"
                 required
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-800 h-28 resize-none outline-none focus:border-emerald-500 focus:bg-white transition-colors"
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-800 h-36 resize-y outline-none focus:border-emerald-500 focus:bg-white transition-colors"
               />
             </div>
 
@@ -544,6 +587,24 @@ export default function Tools() {
                         {tool.priceUsd && `$${tool.priceUsd}`}
                         <span className="text-[10px] font-normal text-emerald-600">/mo</span>
                       </span>
+                    </div>
+                  )}
+
+                  {/* Dynamic Sections & Links Badges */}
+                  {((tool.sections && tool.sections.length > 0) || (tool.links && tool.links.length > 0)) && (
+                    <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                      {tool.sections && tool.sections.length > 0 && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200/80 rounded-md text-[10px] font-bold">
+                          <Layers className="w-3 h-3 text-emerald-600" />
+                          {tool.sections.length} dynamic {tool.sections.length === 1 ? "section" : "sections"}
+                        </span>
+                      )}
+                      {tool.links && tool.links.length > 0 && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-sky-50 text-sky-700 border border-sky-200/80 rounded-md text-[10px] font-bold">
+                          <LinkIcon className="w-3 h-3 text-sky-600" />
+                          {tool.links.length} {tool.links.length === 1 ? "link" : "links"}
+                        </span>
+                      )}
                     </div>
                   )}
 
@@ -692,6 +753,19 @@ export default function Tools() {
               >
                 <Sparkles className="w-3.5 h-3.5" />
                 AI Knowledge & Sales
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveTab("sections")}
+                className={`py-3 text-xs font-bold border-b-2 transition-all flex items-center gap-1.5 ${
+                  activeTab === "sections"
+                    ? "border-emerald-600 text-emerald-700"
+                    : "border-transparent text-slate-500 hover:text-slate-800"
+                }`}
+              >
+                <Layers className="w-3.5 h-3.5" />
+                Dynamic Sections ({editSections.length})
               </button>
 
               <button
@@ -982,6 +1056,156 @@ export default function Tools() {
                       className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-800 outline-none focus:border-emerald-500 focus:bg-white"
                     />
                   </div>
+                </div>
+              )}
+
+              {/* TAB: DYNAMIC SECTIONS & KNOWLEDGE */}
+              {activeTab === "sections" && (
+                <div className="space-y-6">
+                  {/* Informational Banner */}
+                  <div className="p-3.5 bg-emerald-50/70 border border-emerald-200/80 rounded-xl text-xs text-emerald-900 leading-relaxed">
+                    <strong>Dynamic Product Sections:</strong> Flexible knowledge blocks extracted automatically by AI from your complete drafts (e.g. Setup Guides, Protection Details, License Tiers, Download Links). The AI sales agent uses these sections to answer customer inquiries with full authority without losing any information.
+                  </div>
+
+                  {/* Direct Links Section */}
+                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <span className="text-xs font-bold text-slate-800 uppercase tracking-wider block">
+                          Direct Links & Downloads ({editLinks.length})
+                        </span>
+                        <p className="text-[11px] text-slate-500">
+                          App download links, Google Docs setup guides, or web portals shared with customers on request.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleAddLink}
+                        className="px-2.5 py-1 bg-white hover:bg-slate-100 text-emerald-700 border border-emerald-300 rounded-lg text-xs font-bold transition-colors flex items-center gap-1 shadow-2xs"
+                      >
+                        <Plus className="w-3 h-3" />
+                        Add Link
+                      </button>
+                    </div>
+
+                    {editLinks.length === 0 ? (
+                      <p className="text-xs text-slate-400 italic py-2.5 text-center bg-white rounded-lg border border-dashed border-slate-200">
+                        No links configured yet. Click "Add Link" to attach a download or documentation URL.
+                      </p>
+                    ) : (
+                      <div className="space-y-2.5">
+                        {editLinks.map((link, idx) => (
+                          <div key={idx} className="bg-white p-3 rounded-xl border border-slate-200 space-y-2 relative group">
+                            <div className="flex items-center justify-between gap-2">
+                              <input
+                                type="text"
+                                value={link.title}
+                                onChange={(e) => handleUpdateLink(idx, "title", e.target.value)}
+                                placeholder="Link Title (e.g. Official App Download & Free Trial Doc)"
+                                className="font-bold text-xs text-slate-800 bg-transparent border-b border-transparent focus:border-emerald-500 outline-none w-full"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteLink(idx)}
+                                className="p-1 text-slate-400 hover:text-red-600 rounded-md transition-colors shrink-0"
+                                title="Delete link"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              <input
+                                type="text"
+                                value={link.url}
+                                onChange={(e) => handleUpdateLink(idx, "url", e.target.value)}
+                                placeholder="https://..."
+                                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1 text-xs text-slate-700 font-mono outline-none focus:border-emerald-500"
+                              />
+                              <input
+                                type="text"
+                                value={link.note || ""}
+                                onChange={(e) => handleUpdateLink(idx, "note", e.target.value)}
+                                placeholder="Note (e.g. Includes 1 free trial video test)"
+                                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1 text-xs text-slate-600 outline-none focus:border-emerald-500"
+                              />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Dynamic Sections Section */}
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <span className="text-xs font-bold text-slate-800 uppercase tracking-wider block">
+                          Knowledge Sections ({editSections.length})
+                        </span>
+                        <p className="text-[11px] text-slate-500">
+                          Comprehensive topics and detailed guides specific to this tool.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleAddSection}
+                        className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-all shadow-2xs flex items-center gap-1.5"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        Add Section
+                      </button>
+                    </div>
+
+                    {editSections.length === 0 ? (
+                      <div className="p-6 text-center bg-slate-50 rounded-xl border border-dashed border-slate-300 text-slate-400">
+                        <p className="text-xs">No dynamic sections created yet. Click "Add Section" to create one.</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        {editSections.map((sec, idx) => (
+                          <div key={idx} className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <input
+                                type="text"
+                                value={sec.title}
+                                onChange={(e) => handleUpdateSection(idx, "title", e.target.value)}
+                                placeholder="Section Title (e.g. 9-Layer Anti-Content ID System)"
+                                className="w-full font-bold text-xs text-slate-900 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-emerald-500"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteSection(idx)}
+                                className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors shrink-0"
+                                title="Delete section"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+
+                            <textarea
+                              value={sec.content}
+                              onChange={(e) => handleUpdateSection(idx, "content", e.target.value)}
+                              rows={4}
+                              placeholder="Full detailed information, steps, policies, or technical specifications..."
+                              className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs text-slate-800 outline-none focus:border-emerald-500 font-sans resize-y"
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Raw Draft Preservation Accordion */}
+                  {editRawDraft && (
+                    <details className="bg-slate-50 rounded-xl border border-slate-200 p-3 text-xs text-slate-600">
+                      <summary className="font-bold text-slate-700 cursor-pointer select-none hover:text-emerald-700">
+                        View Original Ingested Draft ({editRawDraft.length} characters)
+                      </summary>
+                      <pre className="mt-2 p-3 bg-white border border-slate-200 rounded-lg text-[11px] text-slate-700 font-mono whitespace-pre-wrap max-h-48 overflow-y-auto">
+                        {editRawDraft}
+                      </pre>
+                    </details>
+                  )}
                 </div>
               )}
 

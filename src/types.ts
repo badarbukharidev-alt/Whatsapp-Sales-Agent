@@ -68,6 +68,18 @@ export interface ToolObjectionResponses {
   [key: string]: any;
 }
 
+export interface ToolSection {
+  id?: string;
+  title: string;
+  content: string;
+}
+
+export interface ToolLink {
+  title: string;
+  url: string;
+  note?: string;
+}
+
 export interface Tool {
   id: string;
   name: string;
@@ -92,6 +104,9 @@ export interface Tool {
   faq?: Array<{ question: string; answer: string }>;
   images?: ToolImage[];
   conversationCount?: number;
+  sections?: ToolSection[];
+  links?: ToolLink[];
+  rawDraft?: string;
 }
 
 export interface ChatMessage {

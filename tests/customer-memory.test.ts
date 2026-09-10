@@ -193,6 +193,79 @@ async function runCustomerMemoryTests() {
     assert.ok(!tenant2Customers.some(c => c.phoneNumber.includes("923001112233")));
   });
 
+  // TEST 8: Dynamic sections and links are preserved and synthesized into prompt
+  test("8. Dynamic sections and direct links are preserved and synthesized into prompt", async () => {
+    const toolWithSections: Tool = {
+      id: "tool_test_sections",
+      name: "ClipShield Pro",
+      userId: "user_tenant_1",
+      description: "Desktop YouTube Content ID bypass.",
+      pricePkr: "1500",
+      status: "active",
+      links: [
+        {
+          title: "Download Doc",
+          url: "https://docs.google.com/test",
+          note: "Free trial doc"
+        }
+      ],
+      sections: [
+        {
+          title: "9-Layer Protection Details",
+          content: "Layer 1 audio shift, Layer 2 color grade, Layer 3 smart crop..."
+        },
+        {
+          title: "Pricing & Licenses",
+          content: "Monthly: Rs. 1500, Lifetime: Rs. 3500."
+        }
+      ]
+    };
+
+    await testToolService.saveTool(toolWithSections, "user_tenant_1");
+    const retrieved = await testToolService.getToolDetails("tool_test_sections", "user_tenant_1");
+    assert.ok(retrieved);
+    assert.strictEqual(retrieved?.sections?.length, 2);
+    assert.strictEqual(retrieved?.links?.length, 1);
+
+    const customer = await testCustomerService.getCustomerByJid("923001112233@s.whatsapp.net", "user_tenant_1");
+    const synth = synthesizeSalesPrompt({
+      customer,
+      matchedTools: [retrieved!],
+      allAccountToolsSummary: "ClipShield Pro: available",
+      recentMessages: [],
+      latestCustomerText: "Details bhejo",
+      settings: { aiAgentEnabled: true } as any
+    });
+
+    assert.ok(synth.prompt.includes("[SECTION: 9-Layer Protection Details]"));
+    assert.ok(synth.prompt.includes("Layer 1 audio shift"));
+    assert.ok(synth.prompt.includes("Download Doc: https://docs.google.com/test"));
+  });
+
+  // TEST 9: Persona rules prohibit robotic phrases and mandate authentic human experience
+  test("9. System prompt enforces authentic human seller persona and bans robotic bot phrases", () => {
+    const customer: Customer = {
+      phoneNumber: "923005555555@s.whatsapp.net",
+      status: "New Customer",
+      messages: []
+    };
+
+    const synth = synthesizeSalesPrompt({
+      customer,
+      matchedTools: [],
+      allAccountToolsSummary: "VoiceDelta, ClipShield",
+      recentMessages: [],
+      latestCustomerText: "Hi",
+      settings: { aiAgentEnabled: true } as any
+    });
+
+    assert.ok(synth.systemPrompt.includes("100% REAL HUMAN WhatsApp seller experience"));
+    assert.ok(synth.systemPrompt.includes("BANNED BOT PHRASES"));
+    assert.ok(synth.systemPrompt.includes("Main aap ki kya madad kar sakta hoon"));
+    assert.ok(synth.systemPrompt.includes("VALUE SELLING & REAL PERSUASION"));
+    assert.ok(synth.systemPrompt.includes("SHARE LINKS FREELY"));
+  });
+
   // Run all tests
   for (const t of testQueue) {
     try {

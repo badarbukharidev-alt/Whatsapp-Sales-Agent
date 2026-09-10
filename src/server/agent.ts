@@ -173,16 +173,48 @@ async function generateResponse(
   const customer = await customerService.getCustomerByJid(cleanJid, userId, name);
   const recentMessages = await customerService.getConversationHistory(cleanJid, userId, 8);
 
-  // 2. Dynamic Tool Retrieval for this specific account
+  // 2. Dynamic Tool Retrieval for this specific account with dialogue context
   const accountTools = await toolService.getAccountTools(userId);
   const catalogSummary = await toolService.getAccountToolSummary(userId);
 
-  const recentUserHistory = recentMessages
-    .filter((m) => m.role === "user")
-    .slice(-3)
-    .map((m) => m.content);
+  // Pass recent dialogue history (both customer and agent turns) so context is preserved
+  const recentDialogue = recentMessages
+    .slice(-6)
+    .map((m) => `${m.role === "user" ? "Customer" : "Agent"}: ${m.content}`);
 
-  const match = await toolService.searchRelevantTools(latestCustomerText, userId, recentUserHistory);
+  let match = await toolService.searchRelevantTools(latestCustomerText, userId, recentDialogue);
+
+  // Contextual continuity: If no new tool matched and not an unknown external product,
+  // check if this is a follow-up ("G", "details", "link", "budget", "kam", etc.)
+  // and keep discussing the active tool in this conversation
+  if (match.matched.length === 0 && !match.isUnknownProduct) {
+    const isContextualFollowUp =
+      latestCustomerText.trim().length <= 35 ||
+      /^(?:g|jee|ji|han|haan|theek|thik|ok|okay|yes|sahi|bilkul|details|link|demo|batao|bhejo|kam|discount|price|budget|lekin|aur|yeh|kese|how|why|kb|kab)\b/i.test(latestCustomerText.trim());
+
+    const activeToolName = customer.memorySummary?.lastToolDiscussed;
+    if (activeToolName || isContextualFollowUp) {
+      const activeTool = accountTools.find(
+        (t) =>
+          (activeToolName && (t.name.toLowerCase().includes(activeToolName.toLowerCase()) || activeToolName.toLowerCase().includes(t.name.toLowerCase()))) ||
+          recentMessages.some((m) => m.content.toLowerCase().includes(t.name.toLowerCase().split(/[\–\-\:\|]/)[0].trim()))
+      );
+
+      if (activeTool) {
+        match = {
+          matched: [activeTool],
+          confidence: "alias",
+          isUnknownProduct: false,
+          matchedDetails: [{
+            toolId: activeTool.id,
+            toolName: activeTool.name,
+            matchedOn: "alias",
+            matchedToken: "active-conversation-context"
+          }]
+        };
+      }
+    }
+  }
 
   // 3. Check if agent recently claimed rate is fixed for negotiation consistency
   const agentRecentlyClaimedFixed = recentMessages

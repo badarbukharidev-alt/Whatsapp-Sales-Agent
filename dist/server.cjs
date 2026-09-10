@@ -1394,16 +1394,16 @@ function extractStructuredMemory(existingSummary, messages, customerNameHint) {
           summary.objectionsRaised.push(obj.tag);
         }
       }
-      const lower = msg.content.toLowerCase();
-      if (lower.includes("clipshield") || lower.includes("clip shield") || lower.includes("copyright")) {
-        if (!summary.interestedTools.includes("ClipShield")) summary.interestedTools.push("ClipShield");
-        summary.lastToolDiscussed = "ClipShield";
-      }
-      if (lower.includes("voicedelta") || lower.includes("voice delta") || lower.includes("cloning") || lower.includes("voices")) {
-        if (!summary.interestedTools.includes("VoiceDelta")) summary.interestedTools.push("VoiceDelta");
-        summary.lastToolDiscussed = "VoiceDelta";
-      }
-    } else if (msg.role === "agent") {
+    }
+    const lower = msg.content.toLowerCase();
+    if (lower.includes("clipshield") || lower.includes("clip shield") || lower.includes("clipshied") || lower.includes("copyright")) {
+      if (!summary.interestedTools.includes("ClipShield")) summary.interestedTools.push("ClipShield");
+      summary.lastToolDiscussed = "ClipShield";
+    } else if (lower.includes("voicedelta") || lower.includes("voice delta") || lower.includes("voicedalta") || lower.includes("voiceover") || lower.includes("voice over") || lower.includes("cloning")) {
+      if (!summary.interestedTools.includes("VoiceDelta")) summary.interestedTools.push("VoiceDelta");
+      summary.lastToolDiscussed = "VoiceDelta";
+    }
+    if (msg.role === "agent") {
       for (const pat of PRICE_QUOTED_PATTERNS) {
         const priceMatch = msg.content.match(pat);
         if (priceMatch && priceMatch[1] && summary.lastToolDiscussed) {
@@ -2783,50 +2783,6 @@ async function matchTool(text, tools, conversationHistory, userId) {
   }
   return matchToolSync(text, tools, conversationHistory);
 }
-function extractFactKeyTokens(fact) {
-  const clean = fact.replace(/(\d+),(\d+)/g, "$1$2").toLowerCase().replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
-  return clean.split(/\s+/).filter((t) => {
-    if (!t) return false;
-    if (/^\d+$/.test(t)) return true;
-    if (COMMON_STOP_WORDS.has(t)) return false;
-    return t.length >= 3;
-  });
-}
-function getUnstatedFacts(allFacts, statedFacts = []) {
-  if (!statedFacts || statedFacts.length === 0) {
-    return [...allFacts];
-  }
-  const normalizedStated = statedFacts.map((s) => {
-    const clean = s.replace(/(\d+),(\d+)/g, "$1$2").toLowerCase();
-    return {
-      raw: normalizeText(s),
-      clean,
-      tokens: new Set(extractFactKeyTokens(s))
-    };
-  });
-  return allFacts.filter((candidate) => {
-    const candidateNorm = normalizeText(candidate);
-    const candidateClean = candidate.replace(/(\d+),(\d+)/g, "$1$2").toLowerCase();
-    if (!candidateNorm) return false;
-    const directHit = normalizedStated.some(
-      (stated) => stated.raw.includes(candidateNorm) || stated.clean.includes(candidateClean) || candidateNorm.includes(stated.raw)
-    );
-    if (directHit) return false;
-    const candidateTokens = extractFactKeyTokens(candidate);
-    if (candidateTokens.length === 0) return true;
-    const isCovered = normalizedStated.some((stated) => {
-      let matchedCount = 0;
-      for (const tok of candidateTokens) {
-        if (stated.tokens.has(tok) || stated.clean.includes(tok)) {
-          matchedCount++;
-        }
-      }
-      const ratio = matchedCount / candidateTokens.length;
-      return ratio >= 0.5 || candidateTokens.length >= 3 && matchedCount >= 2 && ratio >= 0.4;
-    });
-    return !isCovered;
-  });
-}
 function recordStatedFacts(customer, toolId, newFacts) {
   if (!customer.factsStated) {
     customer.factsStated = {};
@@ -3171,93 +3127,139 @@ function synthesizeSalesPrompt(params) {
   const isReturningCustomer = Boolean(
     customer.messages && customer.messages.length > 2 || memory && memory.totalTurnsCount && memory.totalTurnsCount > 1 || customer.status !== "New Customer"
   );
-  const systemPrompt = `You are a real Pakistani WhatsApp sales representative for our software store.
-TONE: Casual Roman Urdu, warm, helpful, completely human. 1-3 short sentences.
-RULES:
-1. NEVER act like an automated bot or helpline (NEVER say "helpline me khushamdeed" or "customer support me welcome").
-2. CONTINUOUS CONVERSATION: If customer is returning or conversation is ongoing, DO NOT greet again or re-introduce yourself. Pick up the conversation naturally.
-3. STRICT SOURCE OF TRUTH: Only discuss products, features, and rates stored in our catalog. NEVER invent external tools (e.g. Canva, ElevenLabs, CapCut) or fabricate capabilities.
-4. ANTI-REPETITION: Do not repeat already stated points or identical pricing lines across consecutive replies.`;
+  const systemPrompt = `You are an authentic, highly knowledgeable, and friendly Pakistani software sales consultant chatting with customers on WhatsApp.
+TONE & PERSONALITY:
+- 100% REAL HUMAN WhatsApp seller experience. Speak in natural, conversational Roman Urdu (e.g. "Walaikum Assalam bhai!", "Ji bhai bilkul", "zabardast tool hai", "scene ye hai", "bhai tension na lo").
+- Warm, respectful, confident, and persuasive. You are a tech brother advising the customer on the best software for their needs.
+- Keep replies natural for WhatsApp: 2 to 3 concise, punchy messages separated by "---MSG---". Never send an overwhelming wall of text, but NEVER be dry or unhelpful.
+
+CRITICAL RULES (ABSOLUTELY NO ROBOTIC BOT BEHAVIOR):
+1. BANNED BOT PHRASES:
+   - NEVER say: "Main aap ki kya madad kar sakta hoon", "Kis cheez ke baaray mein pochna hai", "Bataen kis cheez mein help chahiye", "Helpline me khushamdeed", "Customer support me welcome".
+   - NEVER sound like a call-center bot or automated helpline.
+   - NEVER repeatedly push "Bolo kab tak set kar dein?" or "subscription activate kar doon?" prematurely before building value.
+2. VALUE SELLING & REAL PERSUASION:
+   - When a customer shows interest in a tool (e.g., "Clipshied tool lena ha", "voice over tool"), do NOT give a cold 1-line reply. Enthusiastically validate their choice! Explain WHY it is the best tool, its standout features (e.g., bypasses YouTube Content ID with 9-layer protection, instant voice cloning, local speed), how it helps them make money or save time, state the price clearly, and ask a relevant question about their use case (e.g., YouTube automation, TikTok shorts, drama recap).
+3. RICH DETAILS ON DEMAND:
+   - When the customer asks for "Details" or "How to use": Share comprehensive, structured, attractive details from the tool specifications, dynamic sections, and features. Make them realize the immense value of the software.
+4. SHARE LINKS FREELY:
+   - When the customer asks for "Link" or trial/download: Share the direct download/trial link or documentation link provided in the tool knowledge! Guide them warmly on how to test 1 video or sample audio and share their Hardware ID or details.
+5. CONTEXT CONTINUITY:
+   - If the customer gives a short confirmation or reply like "G", "haan", "theek", "ok", "yes", NEVER reset the conversation or ask generic questions. Seamlessly connect to what was just discussed (e.g., if you asked if they need it for content creation and they said "G", immediately explain how the tool supercharges their content creation).
+6. CONTINUOUS CONVERSATION:
+   - If the conversation is already ongoing, do NOT greet again or re-introduce yourself. Pick up the conversation naturally.
+7. STRICT SOURCE OF TRUTH:
+   - Only discuss products, features, dynamic sections, and rates stored in our catalog. NEVER invent external tools or fabricate features.`;
   const memoryLines = [];
-  memoryLines.push(`[CUSTOMER PROFILE & MEMORY]`);
+  memoryLines.push(`[CUSTOMER CONTEXT & PROFILE]`);
   if (customer.name || memory?.customerName) {
-    memoryLines.push(`Name: ${customer.name || memory?.customerName}`);
+    memoryLines.push(`Customer Name: ${customer.name || memory?.customerName}`);
   }
-  memoryLines.push(`Relationship: ${isReturningCustomer ? "Returning Customer (CONVERSATION IS ONGOING)" : "New Lead"}`);
+  memoryLines.push(`Relationship: ${isReturningCustomer ? "Returning Customer (CONVERSATION IS ONGOING)" : "New Lead (First Greeting)"}`);
   if (memory?.stage) {
-    memoryLines.push(`Current Stage: ${memory.stage}`);
+    memoryLines.push(`Sales Stage: ${memory.stage}`);
+  }
+  if (memory?.lastToolDiscussed) {
+    memoryLines.push(`Active Tool in Discussion: ${memory.lastToolDiscussed}`);
   }
   if (memory?.summaryText) {
-    memoryLines.push(`Previous Memory: ${memory.summaryText}`);
+    memoryLines.push(`Memory Summary: ${memory.summaryText}`);
   }
   if (memory?.quotedPrices && Object.keys(memory.quotedPrices).length > 0) {
     const quotes = Object.entries(memory.quotedPrices).map(([t, p]) => `${t}: ${p}`).join(", ");
     memoryLines.push(`Previously Quoted Rates: ${quotes}`);
   }
   if (isReturningCustomer) {
-    memoryLines.push(`DIRECTIVE: Do NOT greet with "AOA" or "kya haal hain". Answer their message directly.`);
+    memoryLines.push(`DIRECTIVE: Conversation is active. Do NOT greet with "AOA" or reset context. Reply directly to customer's message.`);
   }
   const toolLines = [];
   let matchedToolName = void 0;
   if (isUnknownProduct && queryProduct) {
     toolLines.push(`[EXTERNAL PRODUCT INQUIRY: "${queryProduct}"]`);
-    toolLines.push(`We DO NOT sell or carry "${queryProduct}".`);
-    toolLines.push(`INSTRUCTION: Honestly state we don't have "${queryProduct}". Politely ask what workflow or problem they are looking to solve, without bashing the product.`);
+    toolLines.push(`We DO NOT carry or sell "${queryProduct}".`);
+    toolLines.push(`INSTRUCTION: Honestly and politely state we don't have "${queryProduct}". Ask what specific workflow or problem they are trying to solve (e.g. video editing, voice cloning, shorts creation), without talking down on that tool.`);
   } else if (matchedTools.length > 0) {
     matchedToolName = matchedTools[0].name;
     for (const t of matchedTools) {
-      toolLines.push(`=== MATCHED TOOL: ${t.name} ===`);
-      toolLines.push(`Description: ${t.description}`);
+      toolLines.push(`=== PRODUCT CATALOG: ${t.name} ===`);
+      toolLines.push(`Description & Problem Solved: ${t.description}`);
       const minFloor = t.pricing?.min_negotiable_pkr || t.pricePkr || "N/A";
-      toolLines.push(`Regular Price: Rs. ${t.pricePkr || "N/A"}/mo | Min Negotiable Floor: Rs. ${minFloor}`);
+      toolLines.push(`Pricing: Rs. ${t.pricePkr || "N/A"}/mo ${t.priceUsd ? `($${t.priceUsd}/mo)` : ""} | Min Floor Rate: Rs. ${minFloor}`);
       if (t.pricing?.negotiation_notes) {
         toolLines.push(`Negotiation Policy: ${t.pricing.negotiation_notes}`);
       }
-      const candidateFacts = [...t.features || [], ...t.sales_points || []];
-      const statedFacts = customer.factsStated && customer.factsStated[t.id] || [];
-      const unstatedFacts = getUnstatedFacts(candidateFacts, statedFacts);
-      if (unstatedFacts.length > 0) {
-        toolLines.push(`Fresh Features to mention (pick 1 if needed):`);
-        unstatedFacts.slice(0, 3).forEach((f) => toolLines.push(`  - ${f}`));
+      if (t.features && t.features.length > 0) {
+        toolLines.push(`Key Features:`);
+        t.features.forEach((f) => toolLines.push(`  * ${f}`));
+      }
+      if (t.sales_points && t.sales_points.length > 0) {
+        toolLines.push(`Standout Sales Angles & Creator Benefits:`);
+        t.sales_points.forEach((s) => toolLines.push(`  * ${s}`));
+      }
+      if (t.how_to_use) {
+        toolLines.push(`How To Use & Setup Instructions:
+${t.how_to_use}`);
+      }
+      if (t.requirements && t.requirements.length > 0) {
+        toolLines.push(`Requirements: ${t.requirements.join(", ")}`);
+      }
+      if (t.limitations && t.limitations.length > 0) {
+        toolLines.push(`Limitations / Quotas: ${t.limitations.join(", ")}`);
+      }
+      if (t.links && t.links.length > 0) {
+        toolLines.push(`Official Links & Downloads:`);
+        t.links.forEach((l) => toolLines.push(`  - ${l.title}: ${l.url} ${l.note ? `(${l.note})` : ""}`));
+      }
+      if (t.sections && t.sections.length > 0) {
+        toolLines.push(`Detailed Dynamic Sections:`);
+        for (const sec of t.sections) {
+          toolLines.push(`[SECTION: ${sec.title}]
+${sec.content}`);
+        }
+      }
+      if (t.faq && t.faq.length > 0) {
+        toolLines.push(`Common Customer Questions:`);
+        t.faq.slice(0, 4).forEach((q) => toolLines.push(`  Q: ${q.question} -> A: ${q.answer}`));
       }
       if (t.objection_responses) {
-        if (latestCustomerText.match(/(?:mehnga|expensive|discount|kam)/i) && t.objection_responses.too_expensive) {
-          toolLines.push(`Objection Guide (Price): ${t.objection_responses.too_expensive}`);
+        if (latestCustomerText.match(/(?:mehnga|expensive|discount|kam|budget|high)/i) && t.objection_responses.too_expensive) {
+          toolLines.push(`Objection Guide (Price Resistance): ${t.objection_responses.too_expensive}`);
         } else if (latestCustomerText.match(/(?:soch|time|baad)/i) && t.objection_responses.need_time) {
           toolLines.push(`Objection Guide (Needs Time): ${t.objection_responses.need_time}`);
         }
       }
     }
   } else {
-    toolLines.push(`[STORE CATALOG OVERVIEW]`);
+    toolLines.push(`[AVAILABLE STORE TOOLS]`);
     toolLines.push(allAccountToolsSummary);
-    toolLines.push(`INSTRUCTION: Do NOT pitch or force any specific tool until the customer asks or explains what they need. Ask how you can help.`);
+    toolLines.push(`INSTRUCTION: Greet naturally and casually as a human tech seller (e.g. "Walaikum Assalam bhai! Kya haal hain? Bataen kon sa software ya tool dekh rahe hain aap?"). NEVER use robotic bot phrases like "main kya madad kar sakta hoon".`);
   }
-  const isPaymentRelevant = latestCustomerText.match(/(?:pay|payment|jazzcash|easypaisa|bank|raast|account|bhejo|transfer|kese\s+loon)/i) || memory?.stage === "payment_pending";
+  const isPaymentRelevant = latestCustomerText.match(/(?:pay|payment|jazzcash|easypaisa|bank|raast|account|bhejo|transfer|kese\s+loon|kharidna|buy)/i) || memory?.stage === "payment_pending";
   const paymentLines = [];
   if (isPaymentRelevant) {
     const activePayments = (settings.paymentMethods || []).filter((p) => p.isActive !== false);
     if (activePayments.length > 0) {
-      paymentLines.push(`[PAYMENT ACCOUNTS]`);
+      paymentLines.push(`[OFFICIAL PAYMENT ACCOUNTS]`);
       activePayments.forEach((p) => {
         paymentLines.push(`- ${p.provider}: ${p.accountTitle} | Number: ${p.accountNumber}${p.bankName ? ` (${p.bankName})` : ""}`);
       });
+      paymentLines.push(`Closing Directive: Send payment account details clearly and ask the customer to share payment screenshot + email / Hardware ID once done.`);
     }
   }
-  const turns = recentMessages.slice(-6).map((m) => {
+  const turns = recentMessages.slice(-8).map((m) => {
     const speaker = m.role === "user" ? customer.name || "Customer" : "You (Agent)";
     return `${speaker}: ${m.content}`;
   });
-  const negotiationGuard = agentRecentlyClaimedFixed ? `CONSISTENCY RULE: You recently stated rate is fixed. Do not immediately drop the price in this turn.` : "";
+  const negotiationGuard = agentRecentlyClaimedFixed ? `CONSISTENCY RULE: You recently stated rate is fixed. Do not immediately drop the price in this turn without value justification.` : "";
   const promptParts = [
     memoryLines.join("\n"),
-    toolLines.join("\n"),
+    toolLines.join("\n\n"),
     paymentLines.length > 0 ? paymentLines.join("\n") : "",
     negotiationGuard,
     turns.length > 0 ? `[RECENT CONVERSATION TURNS]:
 ${turns.join("\n")}` : "",
-    `CUSTOMER'S NEW MESSAGE(S): "${latestCustomerText}"`,
-    `Reply in natural Roman Urdu (1-3 sentences):`
+    `CUSTOMER'S LATEST MESSAGE(S): "${latestCustomerText}"`,
+    `Reply as a real Pakistani sales consultant in natural Roman Urdu (split multiple thoughts with "---MSG---"):`
   ].filter(Boolean);
   return {
     prompt: promptParts.join("\n\n"),
@@ -3267,7 +3269,6 @@ ${turns.join("\n")}` : "",
 }
 var init_prompt_service = __esm({
   "src/server/services/prompt-service.ts"() {
-    init_tool_matcher();
   }
 });
 
@@ -3366,8 +3367,30 @@ async function generateResponse(cleanJid, latestCustomerText, name, batch, userI
   const recentMessages = await customerService.getConversationHistory(cleanJid, userId, 8);
   const accountTools = await toolService.getAccountTools(userId);
   const catalogSummary = await toolService.getAccountToolSummary(userId);
-  const recentUserHistory = recentMessages.filter((m) => m.role === "user").slice(-3).map((m) => m.content);
-  const match = await toolService.searchRelevantTools(latestCustomerText, userId, recentUserHistory);
+  const recentDialogue = recentMessages.slice(-6).map((m) => `${m.role === "user" ? "Customer" : "Agent"}: ${m.content}`);
+  let match = await toolService.searchRelevantTools(latestCustomerText, userId, recentDialogue);
+  if (match.matched.length === 0 && !match.isUnknownProduct) {
+    const isContextualFollowUp = latestCustomerText.trim().length <= 35 || /^(?:g|jee|ji|han|haan|theek|thik|ok|okay|yes|sahi|bilkul|details|link|demo|batao|bhejo|kam|discount|price|budget|lekin|aur|yeh|kese|how|why|kb|kab)\b/i.test(latestCustomerText.trim());
+    const activeToolName = customer.memorySummary?.lastToolDiscussed;
+    if (activeToolName || isContextualFollowUp) {
+      const activeTool = accountTools.find(
+        (t) => activeToolName && (t.name.toLowerCase().includes(activeToolName.toLowerCase()) || activeToolName.toLowerCase().includes(t.name.toLowerCase())) || recentMessages.some((m) => m.content.toLowerCase().includes(t.name.toLowerCase().split(/[\–\-\:\|]/)[0].trim()))
+      );
+      if (activeTool) {
+        match = {
+          matched: [activeTool],
+          confidence: "alias",
+          isUnknownProduct: false,
+          matchedDetails: [{
+            toolId: activeTool.id,
+            toolName: activeTool.name,
+            matchedOn: "alias",
+            matchedToken: "active-conversation-context"
+          }]
+        };
+      }
+    }
+  }
   const agentRecentlyClaimedFixed = recentMessages.filter((m) => m.role === "agent").slice(-2).some((m) => /(?:fixed|kam nahi|rate final|final price|discount nahi)/i.test(m.content));
   const { prompt, systemPrompt } = synthesizeSalesPrompt({
     customer,
@@ -3570,14 +3593,25 @@ function setupToolsRoutes(app) {
     try {
       const user = await getUserByToken(req.headers.authorization);
       const { name, rawInfo, category, images } = req.body;
-      const prompt = `Convert the following raw tool information into a clean structured JSON format for our software sales catalog. 
-DO NOT OUTPUT ANY TEXT EXCEPT THE RAW JSON.
+      const prompt = `You are an expert software product catalog architect and AI knowledge engineer.
+Convert the following raw tool information into a clean, comprehensive, highly-structured JSON object for our software sales catalog.
+
+CRITICAL EXTRACTION REQUIREMENTS:
+1. ZERO DATA LOSS: DO NOT discard, truncate, or summarize away any links, pricing options, download URLs, setup instructions, hardware requirements, credentials, tips, or special notes.
+2. DYNAMIC SECTIONS (VAST & FLEXIBLE): Analyze the raw text and automatically extract ALL distinct topics, guides, technical details, links, credentials, rules, or packages into the "sections" array. Create as many dynamic sections as needed according to the content (e.g., "Download & Trial Instructions", "License Tiers & Pricing", "9-Layer Anti-Detection Engine", "Direct Links & Resources", "Account Activation", "Monetization Guidelines", "Important Warnings", etc.). Each section must have:
+   - "title": A clear descriptive title
+   - "content": Complete, detailed text/markdown preserving all steps, URLs, bullet points, and specifics.
+3. EXTRACT ALL LINKS: If any URLs or links are in the text, extract them into the "links" array with title, url, and note.
+4. EXTRACT COMPREHENSIVE FEATURES & VALUE: Extract all real features into "features", all key selling arguments into "sales_points", use cases into "use_cases", requirements into "requirements", and step-by-step usage into "how_to_use".
+5. EXTRACT PRICING: Extract standard PKR and USD prices, plus the minimum negotiable price floors.
+6. RETURN RAW JSON ONLY. No conversational text, no markdown outside json.
+
 Format required:
 {
   "name": "${name}",
   "category": "${category || "AI Tools"}",
   "status": "active",
-  "description": "2-sentence summary of what the tool does and what problem it solves.",
+  "description": "Thorough summary of what the tool does, the core problem it solves, and why it is the best solution on the market.",
   "pricePkr": "1500",
   "priceUsd": "6",
   "aliases": ["${name.toLowerCase()}", "${name.toLowerCase().replace(/[^a-z0-9]/g, "")}"],
@@ -3592,13 +3626,21 @@ Format required:
     "need_time": "Offer a sample or trial test.",
     "comparing_competitor": "Highlight local instant setup or distinct advantages."
   },
-  "features": ["Feature 1", "Feature 2"],
+  "features": ["Feature 1 with full explanation", "Feature 2 with full explanation"],
   "sales_points": ["Sales point 1", "Sales point 2"],
   "use_cases": ["Use case 1", "Use case 2"],
   "requirements": ["Requirement 1"],
   "limitations": ["Limitation 1"],
   "how_to_use": "Step by step usage instructions",
-  "faq": []
+  "faq": [
+    { "question": "Question?", "answer": "Detailed answer." }
+  ],
+  "links": [
+    { "title": "Link Title", "url": "https://...", "note": "Description of link" }
+  ],
+  "sections": [
+    { "title": "Dynamic Section Title", "content": "Full, unabridged content for this section..." }
+  ]
 }
 
 Raw Information:
@@ -3612,11 +3654,17 @@ ${rawInfo}
         parsedTool = jsonMatch ? JSON.parse(jsonMatch[0]) : JSON.parse(cleanedResponse);
       } catch (e) {
         console.error("Failed to parse LLM structured tool:", aiResponse);
+        const urlMatches = rawInfo.match(/https?:\/\/[^\s\)\"\'\<\>]+/g) || [];
+        const fallbackLinks = urlMatches.map((u) => ({
+          title: "Extracted Link",
+          url: u,
+          note: "Direct link extracted from tool information"
+        }));
         parsedTool = {
           name,
           category: category || "AI Tools",
           status: "active",
-          description: rawInfo,
+          description: rawInfo.split("\n")[0] || rawInfo,
           pricePkr: "1200",
           priceUsd: "5",
           aliases: [name.toLowerCase(), name.toLowerCase().replace(/[^a-z0-9]/g, "")],
@@ -3637,7 +3685,14 @@ ${rawInfo}
           requirements: [],
           limitations: [],
           how_to_use: "",
-          faq: []
+          faq: [],
+          links: fallbackLinks,
+          sections: [
+            {
+              title: "Complete Tool Information & Draft",
+              content: rawInfo
+            }
+          ]
         };
       }
       parsedTool.id = Date.now().toString();
@@ -3645,6 +3700,15 @@ ${rawInfo}
       parsedTool.images = Array.isArray(images) ? images : [];
       parsedTool.category = parsedTool.category || category || "AI Tools";
       parsedTool.status = parsedTool.status || "active";
+      parsedTool.rawDraft = rawInfo;
+      parsedTool.sections = Array.isArray(parsedTool.sections) ? parsedTool.sections : [];
+      parsedTool.links = Array.isArray(parsedTool.links) ? parsedTool.links : [];
+      if (parsedTool.sections.length === 0 && rawInfo.trim().length > 0) {
+        parsedTool.sections.push({
+          title: "Detailed Tool Notes & Guide",
+          content: rawInfo.trim()
+        });
+      }
       if (!Array.isArray(parsedTool.aliases) || parsedTool.aliases.length === 0) {
         parsedTool.aliases = [name.toLowerCase(), name.toLowerCase().replace(/[^a-z0-9]/g, "")];
       }

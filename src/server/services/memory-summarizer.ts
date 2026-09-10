@@ -77,18 +77,21 @@ export function extractStructuredMemory(
           summary.objectionsRaised.push(obj.tag);
         }
       }
+    }
 
-      // 3. Scan tool interests
-      const lower = msg.content.toLowerCase();
-      if (lower.includes("clipshield") || lower.includes("clip shield") || lower.includes("copyright")) {
-        if (!summary.interestedTools.includes("ClipShield")) summary.interestedTools.push("ClipShield");
-        summary.lastToolDiscussed = "ClipShield";
-      }
-      if (lower.includes("voicedelta") || lower.includes("voice delta") || lower.includes("cloning") || lower.includes("voices")) {
-        if (!summary.interestedTools.includes("VoiceDelta")) summary.interestedTools.push("VoiceDelta");
-        summary.lastToolDiscussed = "VoiceDelta";
-      }
-    } else if (msg.role === "agent") {
+    // 3. Scan tool interests across both user and agent dialogue
+    const lower = msg.content.toLowerCase();
+    
+    // Check known catalog tools
+    if (lower.includes("clipshield") || lower.includes("clip shield") || lower.includes("clipshied") || lower.includes("copyright")) {
+      if (!summary.interestedTools.includes("ClipShield")) summary.interestedTools.push("ClipShield");
+      summary.lastToolDiscussed = "ClipShield";
+    } else if (lower.includes("voicedelta") || lower.includes("voice delta") || lower.includes("voicedalta") || lower.includes("voiceover") || lower.includes("voice over") || lower.includes("cloning")) {
+      if (!summary.interestedTools.includes("VoiceDelta")) summary.interestedTools.push("VoiceDelta");
+      summary.lastToolDiscussed = "VoiceDelta";
+    }
+
+    if (msg.role === "agent") {
       // Check agent quoted prices
       for (const pat of PRICE_QUOTED_PATTERNS) {
         const priceMatch = msg.content.match(pat);

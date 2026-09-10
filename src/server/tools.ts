@@ -110,14 +110,25 @@ export function setupToolsRoutes(app: Express) {
       const user = await getUserByToken(req.headers.authorization);
       const { name, rawInfo, category, images } = req.body;
       
-      const prompt = `Convert the following raw tool information into a clean structured JSON format for our software sales catalog. 
-DO NOT OUTPUT ANY TEXT EXCEPT THE RAW JSON.
+      const prompt = `You are an expert software product catalog architect and AI knowledge engineer.
+Convert the following raw tool information into a clean, comprehensive, highly-structured JSON object for our software sales catalog.
+
+CRITICAL EXTRACTION REQUIREMENTS:
+1. ZERO DATA LOSS: DO NOT discard, truncate, or summarize away any links, pricing options, download URLs, setup instructions, hardware requirements, credentials, tips, or special notes.
+2. DYNAMIC SECTIONS (VAST & FLEXIBLE): Analyze the raw text and automatically extract ALL distinct topics, guides, technical details, links, credentials, rules, or packages into the "sections" array. Create as many dynamic sections as needed according to the content (e.g., "Download & Trial Instructions", "License Tiers & Pricing", "9-Layer Anti-Detection Engine", "Direct Links & Resources", "Account Activation", "Monetization Guidelines", "Important Warnings", etc.). Each section must have:
+   - "title": A clear descriptive title
+   - "content": Complete, detailed text/markdown preserving all steps, URLs, bullet points, and specifics.
+3. EXTRACT ALL LINKS: If any URLs or links are in the text, extract them into the "links" array with title, url, and note.
+4. EXTRACT COMPREHENSIVE FEATURES & VALUE: Extract all real features into "features", all key selling arguments into "sales_points", use cases into "use_cases", requirements into "requirements", and step-by-step usage into "how_to_use".
+5. EXTRACT PRICING: Extract standard PKR and USD prices, plus the minimum negotiable price floors.
+6. RETURN RAW JSON ONLY. No conversational text, no markdown outside json.
+
 Format required:
 {
   "name": "${name}",
   "category": "${category || 'AI Tools'}",
   "status": "active",
-  "description": "2-sentence summary of what the tool does and what problem it solves.",
+  "description": "Thorough summary of what the tool does, the core problem it solves, and why it is the best solution on the market.",
   "pricePkr": "1500",
   "priceUsd": "6",
   "aliases": ["${name.toLowerCase()}", "${name.toLowerCase().replace(/[^a-z0-9]/g, '')}"],
@@ -132,13 +143,21 @@ Format required:
     "need_time": "Offer a sample or trial test.",
     "comparing_competitor": "Highlight local instant setup or distinct advantages."
   },
-  "features": ["Feature 1", "Feature 2"],
+  "features": ["Feature 1 with full explanation", "Feature 2 with full explanation"],
   "sales_points": ["Sales point 1", "Sales point 2"],
   "use_cases": ["Use case 1", "Use case 2"],
   "requirements": ["Requirement 1"],
   "limitations": ["Limitation 1"],
   "how_to_use": "Step by step usage instructions",
-  "faq": []
+  "faq": [
+    { "question": "Question?", "answer": "Detailed answer." }
+  ],
+  "links": [
+    { "title": "Link Title", "url": "https://...", "note": "Description of link" }
+  ],
+  "sections": [
+    { "title": "Dynamic Section Title", "content": "Full, unabridged content for this section..." }
+  ]
 }
 
 Raw Information:
@@ -154,11 +173,19 @@ ${rawInfo}
         parsedTool = jsonMatch ? JSON.parse(jsonMatch[0]) : JSON.parse(cleanedResponse);
       } catch (e) {
         console.error("Failed to parse LLM structured tool:", aiResponse);
+        // Extract any URLs present in rawInfo
+        const urlMatches = rawInfo.match(/https?:\/\/[^\s\)\"\'\<\>]+/g) || [];
+        const fallbackLinks = urlMatches.map((u: string) => ({
+          title: "Extracted Link",
+          url: u,
+          note: "Direct link extracted from tool information"
+        }));
+
         parsedTool = {
           name,
           category: category || "AI Tools",
           status: "active",
-          description: rawInfo,
+          description: rawInfo.split("\n")[0] || rawInfo,
           pricePkr: "1200",
           priceUsd: "5",
           aliases: [name.toLowerCase(), name.toLowerCase().replace(/[^a-z0-9]/g, "")],
@@ -179,7 +206,14 @@ ${rawInfo}
           requirements: [],
           limitations: [],
           how_to_use: "",
-          faq: []
+          faq: [],
+          links: fallbackLinks,
+          sections: [
+            {
+              title: "Complete Tool Information & Draft",
+              content: rawInfo
+            }
+          ]
         };
       }
       
@@ -188,6 +222,20 @@ ${rawInfo}
       parsedTool.images = Array.isArray(images) ? images : [];
       parsedTool.category = parsedTool.category || category || "AI Tools";
       parsedTool.status = parsedTool.status || "active";
+      parsedTool.rawDraft = rawInfo;
+
+      // Ensure dynamic sections and links arrays are preserved
+      parsedTool.sections = Array.isArray(parsedTool.sections) ? parsedTool.sections : [];
+      parsedTool.links = Array.isArray(parsedTool.links) ? parsedTool.links : [];
+
+      // If sections is empty but rawInfo has substantial text, create a default comprehensive section
+      if (parsedTool.sections.length === 0 && rawInfo.trim().length > 0) {
+        parsedTool.sections.push({
+          title: "Detailed Tool Notes & Guide",
+          content: rawInfo.trim()
+        });
+      }
+
       if (!Array.isArray(parsedTool.aliases) || parsedTool.aliases.length === 0) {
         parsedTool.aliases = [name.toLowerCase(), name.toLowerCase().replace(/[^a-z0-9]/g, "")];
       }
