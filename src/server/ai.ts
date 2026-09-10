@@ -297,16 +297,29 @@ export function buildCompactPublicQuery(prompt: string, systemPrompt?: string): 
     }
   }
 
+  // 3b. Extract sales control directives (templateJustSent, PAYMENT MODE, LINK MODE, etc.)
+  let salesDirectives = "";
+  const ctrlMatch = prompt.match(/\[SALES CONTROL DIRECTIVES\]\s*\n([\s\S]*?)(?=\n\[RECENT|\nCUSTOMER'S|$)/i);
+  if (ctrlMatch && ctrlMatch[1]) {
+    salesDirectives = `DIRECTIVE: ${ctrlMatch[1].trim().replace(/\n+/g, " | ")}`;
+  }
+
   // 4. Strict guardrails against fake personas, SEO hallucinations, and repeated greetings
   const roleRules = [
     "Role: Real human Pakistani software consultant chatting on WhatsApp. MUST reply in Roman Urdu only (Urdu words written in English letters, like 'bhai', 'kitna', 'Walaikum Assalam'). NEVER reply in English.",
     "RULES: (1) NEVER invent a persona name like 'Aamir'. (2) NEVER offer SEO or web design. (3) ClipShield and VoiceDelta are ALWAYS available. (4) For VoiceDelta, always call it VoiceDelta (not ElevenLabs). (5) In ongoing chats, do NOT repeat 'AOA' or the customer's name on every message. (6) NEVER use markdown link syntax [text](url) — always write URLs as plain text. (7) NEVER fabricate account numbers, payment details, or bank info — only use what is given.",
   ].join("\n");
 
+  // If template was JUST sent, do not append extractedLinksBlock to prevent duplicate links
+  if (salesDirectives.includes("template message was JUST sent")) {
+    extractedLinksBlock = "";
+  }
+
   // Build body parts (excluding the guaranteed links block)
   const bodyParts = [
     roleRules,
     toolSummary,
+    salesDirectives,
     recentContext,
     customerMsg ? `Customer message: "${customerMsg}"` : prompt.slice(-250),
     "Reply naturally as a helpful Pakistani WhatsApp seller in Roman Urdu:",

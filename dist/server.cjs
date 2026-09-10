@@ -1213,13 +1213,22 @@ ${catalogMatch[1].trim().slice(0, 260)}` : "Store Catalog: 1. ClipShield (YouTub
       recentContext = `Recent Chat: ${turns.slice(0, 200)}`;
     }
   }
+  let salesDirectives = "";
+  const ctrlMatch = prompt.match(/\[SALES CONTROL DIRECTIVES\]\s*\n([\s\S]*?)(?=\n\[RECENT|\nCUSTOMER'S|$)/i);
+  if (ctrlMatch && ctrlMatch[1]) {
+    salesDirectives = `DIRECTIVE: ${ctrlMatch[1].trim().replace(/\n+/g, " | ")}`;
+  }
   const roleRules = [
     "Role: Real human Pakistani software consultant chatting on WhatsApp. MUST reply in Roman Urdu only (Urdu words written in English letters, like 'bhai', 'kitna', 'Walaikum Assalam'). NEVER reply in English.",
     "RULES: (1) NEVER invent a persona name like 'Aamir'. (2) NEVER offer SEO or web design. (3) ClipShield and VoiceDelta are ALWAYS available. (4) For VoiceDelta, always call it VoiceDelta (not ElevenLabs). (5) In ongoing chats, do NOT repeat 'AOA' or the customer's name on every message. (6) NEVER use markdown link syntax [text](url) \u2014 always write URLs as plain text. (7) NEVER fabricate account numbers, payment details, or bank info \u2014 only use what is given."
   ].join("\n");
+  if (salesDirectives.includes("template message was JUST sent")) {
+    extractedLinksBlock = "";
+  }
   const bodyParts = [
     roleRules,
     toolSummary,
+    salesDirectives,
     recentContext,
     customerMsg ? `Customer message: "${customerMsg}"` : prompt.slice(-250),
     "Reply naturally as a helpful Pakistani WhatsApp seller in Roman Urdu:"
@@ -3482,9 +3491,42 @@ function stripFabricatedCustomerTurns(raw) {
   }
   return kept.join("\n").trim();
 }
-function stripMarkdownLinks(text) {
+function cleanAndFixUrls(text, templateJustSent = false) {
   if (!text) return text;
-  return text.replace(/\[([^\]]*)\]\(([^)]+)\)/g, (_m, _label, url) => url.trim()).replace(/`([^`]+)`/g, "$1");
+  if (templateJustSent) {
+    let noUrls = text.replace(/\[([^\]]*)\]\(([^)]+)\)/g, "").replace(/https?:\/\/[^\s)]+/g, "").replace(/`([^`]+)`/g, "$1").replace(/\s{2,}/g, " ").trim();
+    noUrls = noUrls.replace(/(?:Aap\s+)?is\s+link\s+se\s+app\s+download[^\.]*[\.:]?/gi, "").trim();
+    return noUrls;
+  }
+  let result = text.replace(
+    /\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)/g,
+    (_m, _label, url) => url.trim()
+  );
+  result = result.replace(/\[([^\]]*)\]\(([^)]+)\)/g, (_m, _label, target) => {
+    if (target.startsWith("http")) return target.trim();
+    return _label.trim();
+  });
+  const clipShieldRealUrl = "https://docs.google.com/document/d/1Y4dAxV-JO_scOKUW_2gXk5Mv4c59nQQvOBETKpCALF0/edit?usp=sharing";
+  if (/(?:docs\.google\.com|1Y4dAxV)/i.test(result)) {
+    result = result.replace(/(?:https?:\/\/[^\s)]*?)?(?:docs\.google\.com|1Y4dAxV)[^\s)]*/gi, clipShieldRealUrl);
+    const escapedUrl = clipShieldRealUrl.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const regexDup = new RegExp(`(?:${escapedUrl}\\s*)+`, "g");
+    result = result.replace(regexDup, clipShieldRealUrl);
+  }
+  const voiceDeltaRealUrl = "https://voicedelta.ai";
+  if (/voicedelta\.ai/i.test(result)) {
+    result = result.replace(/(?:https?:\/\/[^\s)]*?)?voicedelta\.ai[^\s)]*/gi, voiceDeltaRealUrl);
+  }
+  result = result.replace(/(https?:\/\/[^\s)]+)\)/g, "$1");
+  result = result.replace(/`([^`]+)`/g, "$1");
+  return result;
+}
+function isEnglishHallucination(text) {
+  if (!text || text.length < 30) return false;
+  const urduSignals = /\b(bhai|aap|hai|hain|kar|karo|karein|ke|liye|se|mein|ko|ne|nahi|ho|tha|thi|gy|ga|gi|gea|gya|gyi|hun|hoon|abhi|yeh|woh|toh|tab|kab|phir|aur|ya|lekin|magar|agar|chunke|kyun|kyunke|bilkul|zaroor|theek|sahi|accha|bolta|bolen|bhejo|bhejun|batao|bataen|paise|rupees|pkr|rs|month|mahina|subscription|tool|link|download|setup|payment|jazzcash|easypaisa)\b/i;
+  if (urduSignals.test(text)) return false;
+  const englishHallucination = /\b(the order is|your account|has been activated|please find|kindly note|dear customer|we are pleased|thank you for|your request|has been processed|attached herewith|your subscription|license key|activation code|credentials|registered under|quick-start|next steps|setup assistance)\b/i;
+  return englishHallucination.test(text);
 }
 function startAgent() {
   console.log("[Agent] Persistent Multi-Tenant WhatsApp Sales Closer Engine initialized.");
@@ -3709,7 +3751,20 @@ Title: ${p.accountTitle}${p.instructions ? `
   }
   await evaluateAndApplyCustomerStatus(cleanJid, customer, latestCustomerText, extractedAiStatus, userId, buyingIntent);
   text = stripFabricatedCustomerTurns(text).replace(/^["']|["']$/g, "").trim();
-  text = stripMarkdownLinks(text);
+  if (isEnglishHallucination(text)) {
+    console.log(`[Agent:${userId}] Intercepted English AI hallucination ("${text.slice(0, 40)}..."). Replacing with Roman Urdu response.`);
+    if (templateMessage) {
+      text = "Aap pehle test kar lein, jab satisfied hon toh batayega payment details share kar doonga.";
+    } else if (lockedTool) {
+      text = `ClipShield ka monthly price Rs. ${lockedTool.pricePkr || 1500} hai. Agar 1000 Pkr finalize karna hai toh bataen, main abhi link aur account details bhej deta hoon.`;
+    } else {
+      text = "Walaikum Assalam bhai! Kaise hain aap? Bataen konsa software ya tool dekh rahe hain aap?";
+    }
+  }
+  text = cleanAndFixUrls(text, Boolean(templateMessage));
+  if (templateMessage && (!text || text.length < 5)) {
+    text = "Aap pehle test kar lein, jab satisfied hon toh batayega payment details share kar doonga.";
+  }
   if (match.matched.length > 0) {
     for (const tool of match.matched) {
       const newlyStated = extractMentionedFacts(text, tool);

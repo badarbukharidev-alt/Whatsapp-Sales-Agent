@@ -68,17 +68,78 @@ function stripFabricatedCustomerTurns(raw: string): string {
 }
 
 /**
- * Converts markdown-style links [text](url) to plain URLs, because WhatsApp
- * does NOT support markdown link syntax and renders them broken.
- * Also strips stray single-backtick wrapping and asterisk/star formatting.
+ * Converts markdown-style links [text](url) to plain URLs, repairs corrupted/mangled
+ * URLs (e.g. concatenated or truncated Google Docs links from fallback AI), and strips
+ * URLs entirely when templateJustSent is true to avoid redundant link duplication.
  */
-function stripMarkdownLinks(text: string): string {
+function cleanAndFixUrls(text: string, templateJustSent = false): string {
   if (!text) return text;
-  // [label](url) → url  (WhatsApp doesn't render markdown links)
-  return text
-    .replace(/\[([^\]]*)\]\(([^)]+)\)/g, (_m, _label, url) => url.trim())
-    // Remove leftover single backtick-wrapping (e.g. `Rs. 1500`)
-    .replace(/`([^`]+)`/g, "$1");
+
+  // Step 1: If template was JUST sent in this turn, strip ALL URLs from the AI follow-up
+  // to avoid redundant/broken link duplication right after the template.
+  if (templateJustSent) {
+    let noUrls = text
+      .replace(/\[([^\]]*)\]\(([^)]+)\)/g, '')
+      .replace(/https?:\/\/[^\s)]+/g, '')
+      .replace(/`([^`]+)`/g, '$1')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+    // Clean up empty lead-in phrases like "Aap is link se app download karke setup guide check kar sakte hain:"
+    noUrls = noUrls.replace(/(?:Aap\s+)?is\s+link\s+se\s+app\s+download[^\.]*[\.:]?/gi, '').trim();
+    return noUrls;
+  }
+
+  // Step 2: Extract/repair markdown links [label](url)
+  // If label itself starts with http, replace the whole [label](url) with just url
+  let result = text.replace(
+    /\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)/g,
+    (_m, _label, url) => url.trim()
+  );
+
+  // Catch remaining markdown links
+  result = result.replace(/\[([^\]]*)\]\(([^)]+)\)/g, (_m, _label, target) => {
+    if (target.startsWith("http")) return target.trim();
+    return _label.trim();
+  });
+
+  // Step 3: FIX CORRUPTED GOOGLE DOCS URLS FOR CLIPSHIELD
+  // Replaces any mangled, partial, or duplicated Google Docs / 1Y4dAxV URL fragments
+  // with the exact clean official link.
+  const clipShieldRealUrl = "https://docs.google.com/document/d/1Y4dAxV-JO_scOKUW_2gXk5Mv4c59nQQvOBETKpCALF0/edit?usp=sharing";
+  if (/(?:docs\.google\.com|1Y4dAxV)/i.test(result)) {
+    result = result.replace(/(?:https?:\/\/[^\s)]*?)?(?:docs\.google\.com|1Y4dAxV)[^\s)]*/gi, clipShieldRealUrl);
+    // Deduplicate if replaced multiple times back to back
+    const escapedUrl = clipShieldRealUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regexDup = new RegExp(`(?:${escapedUrl}\\s*)+`, 'g');
+    result = result.replace(regexDup, clipShieldRealUrl);
+  }
+
+  // Step 4: FIX VOICE DELTA URLS IF MANGLED
+  const voiceDeltaRealUrl = "https://voicedelta.ai";
+  if (/voicedelta\.ai/i.test(result)) {
+    result = result.replace(/(?:https?:\/\/[^\s)]*?)?voicedelta\.ai[^\s)]*/gi, voiceDeltaRealUrl);
+  }
+
+  // Step 5: Clean trailing stray parentheses after URLs (e.g. "https://...sharing)")
+  result = result.replace(/(https?:\/\/[^\s)]+)\)/g, '$1');
+  // Remove backtick wrapping
+  result = result.replace(/`([^`]+)`/g, '$1');
+
+  return result;
+}
+
+/**
+ * Detects if an AI reply is predominantly English (hallucination from fallback AI).
+ */
+function isEnglishHallucination(text: string): boolean {
+  if (!text || text.length < 30) return false;
+  // Common Roman Urdu words that signal authentic reply
+  const urduSignals = /\b(bhai|aap|hai|hain|kar|karo|karein|ke|liye|se|mein|ko|ne|nahi|ho|tha|thi|gy|ga|gi|gea|gya|gyi|hun|hoon|abhi|yeh|woh|toh|tab|kab|phir|aur|ya|lekin|magar|agar|chunke|kyun|kyunke|bilkul|zaroor|theek|sahi|accha|bolta|bolen|bhejo|bhejun|batao|bataen|paise|rupees|pkr|rs|month|mahina|subscription|tool|link|download|setup|payment|jazzcash|easypaisa)\b/i;
+  if (urduSignals.test(text)) return false; // Has Urdu signals — keep it
+
+  // English-only business phrases that indicate full English reply
+  const englishHallucination = /\b(the order is|your account|has been activated|please find|kindly note|dear customer|we are pleased|thank you for|your request|has been processed|attached herewith|your subscription|license key|activation code|credentials|registered under|quick-start|next steps|setup assistance)\b/i;
+  return englishHallucination.test(text);
 }
 
 interface QueuedIncomingMessage {
@@ -432,8 +493,25 @@ async function generateResponse(
     .replace(/^["']|["']$/g, "")
     .trim();
 
-  // STRIP MARKDOWN LINKS: WhatsApp doesn't render [text](url) — convert to plain URLs.
-  text = stripMarkdownLinks(text);
+  // ENGLISH HALLUCINATION INTERCEPTOR:
+  if (isEnglishHallucination(text)) {
+    console.log(`[Agent:${userId}] Intercepted English AI hallucination ("${text.slice(0, 40)}..."). Replacing with Roman Urdu response.`);
+    if (templateMessage) {
+      text = "Aap pehle test kar lein, jab satisfied hon toh batayega payment details share kar doonga.";
+    } else if (lockedTool) {
+      text = `ClipShield ka monthly price Rs. ${lockedTool.pricePkr || 1500} hai. Agar 1000 Pkr finalize karna hai toh bataen, main abhi link aur account details bhej deta hoon.`;
+    } else {
+      text = "Walaikum Assalam bhai! Kaise hain aap? Bataen konsa software ya tool dekh rahe hain aap?";
+    }
+  }
+
+  // CLEAN & FIX URLS: Repair mangled links, convert markdown links to plain URLs, and strip URLs if template was sent
+  text = cleanAndFixUrls(text, Boolean(templateMessage));
+
+  // If template was sent and AI reply became empty or trivial after URL stripping, provide clean short follow-up
+  if (templateMessage && (!text || text.length < 5)) {
+    text = "Aap pehle test kar lein, jab satisfied hon toh batayega payment details share kar doonga.";
+  }
 
   // 8. Track stated facts for anti-repetition
   if (match.matched.length > 0) {
