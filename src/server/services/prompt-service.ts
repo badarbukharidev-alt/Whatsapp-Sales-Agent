@@ -11,6 +11,18 @@ export interface PromptSynthesisParams {
   isUnknownProduct?: boolean;
   queryProduct?: string;
   agentRecentlyClaimedFixed?: boolean;
+  /** Product the conversation is locked to (single-product context). */
+  lockedProductName?: string;
+  /** Customer is showing strong buying intent this turn. */
+  buyingIntent?: boolean;
+  /** Customer explicitly asked for payment details this turn. */
+  explicitPaymentRequest?: boolean;
+  /** Customer explicitly asked for the link/download this turn. */
+  explicitLinkRequest?: boolean;
+  /** The saved product template was already sent first in this same turn. */
+  templateJustSent?: boolean;
+  /** Customer explicitly asked for an alternative / comparison. */
+  wantsAlternative?: boolean;
 }
 
 export interface SynthesizedPrompt {
@@ -36,6 +48,12 @@ export function synthesizeSalesPrompt(params: PromptSynthesisParams): Synthesize
     isUnknownProduct,
     queryProduct,
     agentRecentlyClaimedFixed,
+    lockedProductName,
+    buyingIntent,
+    explicitPaymentRequest,
+    explicitLinkRequest,
+    templateJustSent,
+    wantsAlternative,
   } = params;
 
   const memory = customer.memorySummary;
@@ -72,7 +90,24 @@ CRITICAL RULES (ABSOLUTELY NO ROBOTIC BOT BEHAVIOR & ZERO HALLUCINATIONS):
 7. CONTEXT CONTINUITY:
    - If the customer gives a short confirmation or reply like "G", "haan", "theek", "ok", "yes", "Details", NEVER reset the conversation or ask generic questions. Seamlessly connect to the tool currently under discussion.
 8. STRICT SOURCE OF TRUTH:
-   - Only discuss products, features, dynamic sections, and rates stored in our catalog. NEVER invent uncarried tools or fabricate features.`;
+   - Only discuss products, features, dynamic sections, and rates stored in our catalog. NEVER invent uncarried tools or fabricate features.
+9. MESSAGE LENGTH (CONCISE BY DEFAULT):
+   - Default reply length is 1 to 3 SHORT sentences. Do NOT send long marketing paragraphs unless the customer explicitly asks for full "details".
+   - Every message must have ONE clear purpose: answer, clarify, recommend, handle an objection, negotiate, close, or give payment info. Never repeat information already shared.
+10. STAY ON THE LOCKED PRODUCT (NO DRIFT):
+   - Discuss ONLY the product the customer is currently asking about. NEVER switch to or pitch another product on your own.
+   - Mention a different product ONLY if the customer explicitly asks for it, asks for an alternative/comparison, or the current product genuinely cannot meet their need.
+11. ZERO FABRICATION (NEVER INVENT):
+   - Never invent features, prices, discounts, promotions, technical capabilities, availability, account limits, customer results, testimonials, or payment confirmation. If something is not in the provided product data, say you'll confirm — do not make it up.
+   - NEVER tell the customer their payment is received/verified. Only a human admin verifies payments.
+12. BUYING INTENT — KNOW WHEN TO STOP SELLING:
+   - If the customer is ready ("le lunga", "link bhejo", "price?", "payment details", "Pro chahiye"), STOP pitching. Reduce discovery, answer directly, and move to the requested action (link / payment / activation steps).
+   - If they ask a direct question, answer it directly. If they ask for the link, send the link. If they ask for payment details, send the configured payment details.
+13. OBJECTION HANDLING (DON'T DUMP DISCOUNTS):
+   - On "mehnga hai / budget kam / soch ke bataunga / X me de do / dusra sasta / pehle test", first diagnose the REAL objection (price, value, trust, risk, timing, feature, competitor, indecision). Then: Acknowledge -> Diagnose -> Reframe (value) -> Resolve -> Next step.
+   - Only ever offer a discount or lower price that actually exists in the product's negotiation rules / allowed discounts, and tie any concession to a condition (pay today / longer term). Never fabricate urgency or scarcity.
+14. STRICT ROLE SEPARATION:
+   - You are ONLY the seller. NEVER write the customer's messages or reply on their behalf (e.g. never output "haan bhej do" or "payment kaise karni hai?" as if the customer said it). Output only your own seller reply.`;
 
   // 2. CUSTOMER MEMORY & CONTEXT BLOCK
   const memoryLines: string[] = [];
@@ -176,6 +211,26 @@ CRITICAL RULES (ABSOLUTELY NO ROBOTIC BOT BEHAVIOR & ZERO HALLUCINATIONS):
           toolLines.push(`Objection Guide (Needs Time): ${t.objection_responses.need_time}`);
         }
       }
+
+      // EXTENDED PRODUCT-SPECIFIC SALES INTELLIGENCE (used dynamically for THIS product only)
+      const s = t.sales;
+      if (s) {
+        if (s.primary_selling_point) toolLines.push(`Primary Selling Point: ${s.primary_selling_point}`);
+        if (s.secondary_selling_points?.length) toolLines.push(`Secondary Selling Points: ${s.secondary_selling_points.join("; ")}`);
+        if (s.value_arguments?.length) toolLines.push(`Value Arguments: ${s.value_arguments.join("; ")}`);
+        if (s.ideal_customer) toolLines.push(`Ideal Customer: ${s.ideal_customer}`);
+        if (s.pain_points?.length) toolLines.push(`Customer Pain Points: ${s.pain_points.join("; ")}`);
+        if (s.discovery_questions?.length) toolLines.push(`Discovery Questions (ask ONE at a time when needed): ${s.discovery_questions.join(" | ")}`);
+        if (s.common_objections?.length) toolLines.push(`Common Objections: ${s.common_objections.join("; ")}`);
+        if (s.objection_strategy) toolLines.push(`Objection Handling Strategy: ${s.objection_strategy}`);
+        if (s.negotiation_rules) toolLines.push(`Negotiation Rules: ${s.negotiation_rules}`);
+        if (s.allowed_discounts) toolLines.push(`Allowed Discounts (ONLY these are permitted): ${s.allowed_discounts}`);
+        if (s.urgency_rules) toolLines.push(`Urgency / Scarcity Rules (use ONLY when real / verified): ${s.urgency_rules}`);
+        if (s.buying_signals?.length) toolLines.push(`Buying Signals to watch for: ${s.buying_signals.join("; ")}`);
+        if (s.closing_strategy) toolLines.push(`Closing Strategy: ${s.closing_strategy}`);
+        if (s.cross_sell_rules) toolLines.push(`Cross-Sell Rules: ${s.cross_sell_rules}`);
+        if (s.support_notes) toolLines.push(`Support Notes: ${s.support_notes}`);
+      }
     }
   } else {
     // General chat or inquiry across all tools
@@ -186,6 +241,7 @@ CRITICAL RULES (ABSOLUTELY NO ROBOTIC BOT BEHAVIOR & ZERO HALLUCINATIONS):
 
   // 4. PAYMENT METHODS (Injected when payment is mentioned)
   const isPaymentRelevant =
+    explicitPaymentRequest ||
     latestCustomerText.match(/(?:pay|payment|jazzcash|easypaisa|bank|raast|account|bhejo|transfer|kese\s+loon|kharidna|buy)/i) ||
     memory?.stage === "payment_pending";
 
@@ -212,15 +268,36 @@ CRITICAL RULES (ABSOLUTELY NO ROBOTIC BOT BEHAVIOR & ZERO HALLUCINATIONS):
     ? `CONSISTENCY RULE: You recently stated rate is fixed. Do not immediately drop the price in this turn without value justification.`
     : "";
 
+  // 7. DYNAMIC CONTROL DIRECTIVES (state-aware, per-turn behavior)
+  const controlLines: string[] = [];
+  if (lockedProductName && !isUnknownProduct) {
+    controlLines.push(`CURRENT PRODUCT LOCK: The conversation is locked to "${lockedProductName}". Use ONLY its data above. Do NOT bring up any other product unless the customer explicitly asks.`);
+  }
+  if (templateJustSent) {
+    controlLines.push(`NOTE: The saved product intro/template message was JUST sent to the customer automatically. Do NOT resend the link or repeat that intro — continue naturally with a short, relevant next line.`);
+  }
+  if (explicitPaymentRequest) {
+    controlLines.push(`PAYMENT MODE: The customer is explicitly asking for payment. Send ONLY the official payment account details and how to share the screenshot/proof. Do NOT re-pitch the product or add marketing. Never claim payment is received/verified.`);
+  } else if (explicitLinkRequest) {
+    controlLines.push(`LINK MODE: The customer asked for the link/download. Send the actual configured link directly with a short one-line guide. No long pitch.`);
+  } else if (buyingIntent) {
+    controlLines.push(`HIGH BUYING INTENT: The customer is ready to move forward. Stop pitching, reduce discovery, answer directly, and guide them to the next action (payment / activation / link). Keep it to 1-2 short lines.`);
+  }
+  if (wantsAlternative) {
+    controlLines.push(`The customer asked for an alternative/comparison — you MAY briefly compare with another catalog product here, then return focus to what fits their need.`);
+  }
+  const controlDirectives = controlLines.length > 0 ? `[SALES CONTROL DIRECTIVES]\n${controlLines.join("\n")}` : "";
+
   // ASSEMBLE PROMPT
   const promptParts = [
     memoryLines.join("\n"),
     toolLines.join("\n\n"),
     paymentLines.length > 0 ? paymentLines.join("\n") : "",
     negotiationGuard,
+    controlDirectives,
     turns.length > 0 ? `[RECENT CONVERSATION TURNS]:\n${turns.join("\n")}` : "",
     `CUSTOMER'S LATEST MESSAGE(S): "${latestCustomerText}"`,
-    `Reply as a real Pakistani sales consultant in natural Roman Urdu (split multiple thoughts with "---MSG---"):`,
+    `Reply ONLY as the seller (never as the customer), concise (1-3 short sentences) in natural Roman Urdu (split multiple thoughts with "---MSG---"):`,
   ].filter(Boolean);
 
   return {

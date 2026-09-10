@@ -42,7 +42,7 @@ export default function Tools() {
 
   // Edit Modal State
   const [editingTool, setEditingTool] = useState<Tool | null>(null);
-  const [activeTab, setActiveTab] = useState<"general" | "ai" | "sections" | "images" | "settings">("general");
+  const [activeTab, setActiveTab] = useState<"general" | "ai" | "sales" | "sections" | "images" | "settings">("general");
 
   // Edit Form Fields
   const [editName, setEditName] = useState("");
@@ -67,6 +67,29 @@ export default function Tools() {
   const [editSections, setEditSections] = useState<ToolSection[]>([]);
   const [editLinks, setEditLinks] = useState<ToolLink[]>([]);
   const [editRawDraft, setEditRawDraft] = useState("");
+
+  // Saved Product Template Message
+  const [editTemplateEnabled, setEditTemplateEnabled] = useState(false);
+  const [editTemplateContent, setEditTemplateContent] = useState("");
+  const [editTemplateSendOnce, setEditTemplateSendOnce] = useState(true);
+  const [editTemplateVariables, setEditTemplateVariables] = useState(false);
+
+  // Extended Product Sales Intelligence
+  const [editIdealCustomer, setEditIdealCustomer] = useState("");
+  const [editPainPoints, setEditPainPoints] = useState("");
+  const [editPrimarySelling, setEditPrimarySelling] = useState("");
+  const [editSecondarySelling, setEditSecondarySelling] = useState("");
+  const [editValueArguments, setEditValueArguments] = useState("");
+  const [editDiscoveryQuestions, setEditDiscoveryQuestions] = useState("");
+  const [editCommonObjections, setEditCommonObjections] = useState("");
+  const [editObjectionStrategy, setEditObjectionStrategy] = useState("");
+  const [editNegotiationRules, setEditNegotiationRules] = useState("");
+  const [editAllowedDiscounts, setEditAllowedDiscounts] = useState("");
+  const [editUrgencyRules, setEditUrgencyRules] = useState("");
+  const [editBuyingSignals, setEditBuyingSignals] = useState("");
+  const [editClosingStrategy, setEditClosingStrategy] = useState("");
+  const [editCrossSell, setEditCrossSell] = useState("");
+  const [editSupportNotes, setEditSupportNotes] = useState("");
   const [isSavingEdit, setIsSavingEdit] = useState(false);
 
   // Image Upload in Modal
@@ -174,7 +197,7 @@ export default function Tools() {
     }
   };
 
-  const handleOpenEdit = (tool: Tool, initialTab: "general" | "ai" | "images" | "settings" = "general") => {
+  const handleOpenEdit = (tool: Tool, initialTab: "general" | "ai" | "sales" | "images" | "settings" = "general") => {
     setEditingTool(tool);
     setActiveTab(initialTab);
     setEditName(tool.name);
@@ -199,6 +222,32 @@ export default function Tools() {
     setEditSections(tool.sections ? JSON.parse(JSON.stringify(tool.sections)) : []);
     setEditLinks(tool.links ? JSON.parse(JSON.stringify(tool.links)) : []);
     setEditRawDraft(tool.rawDraft || "");
+
+    // Template message
+    const tm = tool.templateMessage || {};
+    setEditTemplateEnabled(Boolean(tm.enabled));
+    setEditTemplateContent(tm.content || "");
+    setEditTemplateSendOnce(tm.sendOnce !== false);
+    setEditTemplateVariables(Boolean(tm.variablesEnabled));
+
+    // Extended sales intelligence
+    const sd = tool.sales || {};
+    setEditIdealCustomer(sd.ideal_customer || "");
+    setEditPainPoints((sd.pain_points || []).join("\n"));
+    setEditPrimarySelling(sd.primary_selling_point || "");
+    setEditSecondarySelling((sd.secondary_selling_points || []).join("\n"));
+    setEditValueArguments((sd.value_arguments || []).join("\n"));
+    setEditDiscoveryQuestions((sd.discovery_questions || []).join("\n"));
+    setEditCommonObjections((sd.common_objections || []).join("\n"));
+    setEditObjectionStrategy(sd.objection_strategy || "");
+    setEditNegotiationRules(sd.negotiation_rules || "");
+    setEditAllowedDiscounts(sd.allowed_discounts || "");
+    setEditUrgencyRules(sd.urgency_rules || "");
+    setEditBuyingSignals((sd.buying_signals || []).join("\n"));
+    setEditClosingStrategy(sd.closing_strategy || "");
+    setEditCrossSell(sd.cross_sell_rules || "");
+    setEditSupportNotes(sd.support_notes || "");
+
     setSelectedFile(null);
     setPreviewUrl(null);
     setImageTitle("");
@@ -341,6 +390,30 @@ export default function Tools() {
         sections: editSections,
         links: editLinks,
         rawDraft: editRawDraft,
+        templateMessage: {
+          enabled: editTemplateEnabled,
+          content: editTemplateContent,
+          sendOnce: editTemplateSendOnce,
+          variablesEnabled: editTemplateVariables,
+        },
+        sales: {
+          ...(editingTool.sales || {}),
+          ideal_customer: editIdealCustomer.trim() || undefined,
+          pain_points: editPainPoints.split("\n").map(s => s.trim()).filter(Boolean),
+          primary_selling_point: editPrimarySelling.trim() || undefined,
+          secondary_selling_points: editSecondarySelling.split("\n").map(s => s.trim()).filter(Boolean),
+          value_arguments: editValueArguments.split("\n").map(s => s.trim()).filter(Boolean),
+          discovery_questions: editDiscoveryQuestions.split("\n").map(s => s.trim()).filter(Boolean),
+          common_objections: editCommonObjections.split("\n").map(s => s.trim()).filter(Boolean),
+          objection_strategy: editObjectionStrategy.trim() || undefined,
+          negotiation_rules: editNegotiationRules.trim() || undefined,
+          allowed_discounts: editAllowedDiscounts.trim() || undefined,
+          urgency_rules: editUrgencyRules.trim() || undefined,
+          buying_signals: editBuyingSignals.split("\n").map(s => s.trim()).filter(Boolean),
+          closing_strategy: editClosingStrategy.trim() || undefined,
+          cross_sell_rules: editCrossSell.trim() || undefined,
+          support_notes: editSupportNotes.trim() || undefined,
+        },
       };
 
       await axios.put(`/api/tools/${editingTool.id}`, updatedTool);
@@ -757,6 +830,19 @@ export default function Tools() {
 
               <button
                 type="button"
+                onClick={() => setActiveTab("sales")}
+                className={`py-3 text-xs font-bold border-b-2 transition-all flex items-center gap-1.5 ${
+                  activeTab === "sales"
+                    ? "border-emerald-600 text-emerald-700"
+                    : "border-transparent text-slate-500 hover:text-slate-800"
+                }`}
+              >
+                <MessageSquare className="w-3.5 h-3.5" />
+                Sales & Template
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setActiveTab("sections")}
                 className={`py-3 text-xs font-bold border-b-2 transition-all flex items-center gap-1.5 ${
                   activeTab === "sections"
@@ -1055,6 +1141,209 @@ export default function Tools() {
                       placeholder="Requires decent microphone audio for best cloning&#10;Max 10,000 characters per single clip"
                       className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-800 outline-none focus:border-emerald-500 focus:bg-white"
                     />
+                  </div>
+                </div>
+              )}
+
+              {/* TAB: SALES INTELLIGENCE & TEMPLATE MESSAGE */}
+              {activeTab === "sales" && (
+                <div className="space-y-5">
+                  {/* Saved Product Template Message */}
+                  <div className="p-4 bg-emerald-50/70 border border-emerald-200/80 rounded-xl space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <span className="text-xs font-bold text-emerald-900 uppercase tracking-wider block">
+                          Template Message
+                        </span>
+                        <p className="text-[11px] text-emerald-800/80">
+                          Message sent automatically (exactly as saved) when a customer first starts discussing this tool — before the AI reply.
+                        </p>
+                      </div>
+                      <label className="flex items-center gap-1.5 text-[11px] font-bold text-emerald-900 cursor-pointer shrink-0">
+                        <input
+                          type="checkbox"
+                          checked={editTemplateEnabled}
+                          onChange={(e) => setEditTemplateEnabled(e.target.checked)}
+                          className="accent-emerald-600 w-3.5 h-3.5"
+                        />
+                        Enable
+                      </label>
+                    </div>
+
+                    <textarea
+                      value={editTemplateContent}
+                      onChange={(e) => setEditTemplateContent(e.target.value)}
+                      rows={4}
+                      placeholder={"VoiceDelta ke complete details yahan hain 👇\n[LINK]"}
+                      className="w-full bg-white border border-slate-200 rounded-xl p-3 text-xs text-slate-800 outline-none focus:border-emerald-500 font-mono resize-y"
+                    />
+
+                    <div className="flex flex-wrap items-center gap-4">
+                      <label className="flex items-center gap-1.5 text-[11px] font-medium text-slate-700 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={editTemplateSendOnce}
+                          onChange={(e) => setEditTemplateSendOnce(e.target.checked)}
+                          className="accent-emerald-600 w-3.5 h-3.5"
+                        />
+                        Send only once per conversation
+                      </label>
+                      <label className="flex items-center gap-1.5 text-[11px] font-medium text-slate-700 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={editTemplateVariables}
+                          onChange={(e) => setEditTemplateVariables(e.target.checked)}
+                          className="accent-emerald-600 w-3.5 h-3.5"
+                        />
+                        Enable variables
+                      </label>
+                    </div>
+
+                    {editTemplateVariables && (
+                      <p className="text-[10px] text-slate-500">
+                        Supported variables: <code className="bg-white px-1 rounded">{"{tool_name}"}</code> <code className="bg-white px-1 rounded">{"{price_pkr}"}</code> <code className="bg-white px-1 rounded">{"{price_usd}"}</code> <code className="bg-white px-1 rounded">{"{link}"}</code>. Everything else is sent exactly as typed.
+                      </p>
+                    )}
+
+                    <div>
+                      <span className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Exact outbound preview</span>
+                      <div className="bg-[#dcf8c6] text-slate-900 rounded-xl rounded-tl-sm p-3 text-xs whitespace-pre-wrap break-words shadow-2xs">
+                        {(() => {
+                          let preview = editTemplateContent || "(empty — nothing will be sent)";
+                          if (editTemplateVariables && editTemplateContent) {
+                            const link = editLinks[0]?.url || "";
+                            preview = editTemplateContent
+                              .replace(/\{tool_name\}/g, editName || "{tool_name}")
+                              .replace(/\{price_pkr\}/g, editPricePkr ? `Rs. ${editPricePkr}` : "{price_pkr}")
+                              .replace(/\{price_usd\}/g, editPriceUsd ? `$${editPriceUsd}` : "{price_usd}")
+                              .replace(/\{link\}/g, link || "{link}");
+                          }
+                          return preview;
+                        })()}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Extended Product Sales Intelligence */}
+                  <div className="space-y-3">
+                    <span className="text-xs font-bold text-slate-800 uppercase tracking-wider block">
+                      Product Sales Intelligence
+                    </span>
+                    <p className="text-[11px] text-slate-500 -mt-2">
+                      Used dynamically by the AI for this product only. Multi-line fields: 1 item per line.
+                    </p>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Ideal Customer</label>
+                        <input type="text" value={editIdealCustomer} onChange={(e) => setEditIdealCustomer(e.target.value)}
+                          placeholder="e.g. Faceless YouTube automation creators"
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 outline-none focus:border-emerald-500 focus:bg-white" />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Primary Selling Point</label>
+                        <input type="text" value={editPrimarySelling} onChange={(e) => setEditPrimarySelling(e.target.value)}
+                          placeholder="e.g. Only tool with 9-layer Content ID bypass"
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 outline-none focus:border-emerald-500 focus:bg-white" />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Customer Pain Points (1/line)</label>
+                        <textarea value={editPainPoints} onChange={(e) => setEditPainPoints(e.target.value)} rows={3}
+                          placeholder={"Copyright strikes on reused videos\nHours wasted editing manually"}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800 outline-none focus:border-emerald-500 focus:bg-white" />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Secondary Selling Points (1/line)</label>
+                        <textarea value={editSecondarySelling} onChange={(e) => setEditSecondarySelling(e.target.value)} rows={3}
+                          placeholder={"100% local & offline\nLifetime license option"}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800 outline-none focus:border-emerald-500 focus:bg-white" />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Value Arguments (1/line)</label>
+                        <textarea value={editValueArguments} onChange={(e) => setEditValueArguments(e.target.value)} rows={3}
+                          placeholder={"Cheaper than one copyright strike\nSaves 10+ hours per video"}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800 outline-none focus:border-emerald-500 focus:bg-white" />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Discovery Questions (1/line)</label>
+                        <textarea value={editDiscoveryQuestions} onChange={(e) => setEditDiscoveryQuestions(e.target.value)} rows={3}
+                          placeholder={"Kis niche ka channel hai?\nRozana kitni videos banate hain?"}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800 outline-none focus:border-emerald-500 focus:bg-white" />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Common Objections (1/line)</label>
+                        <textarea value={editCommonObjections} onChange={(e) => setEditCommonObjections(e.target.value)} rows={3}
+                          placeholder={"Mehnga hai\nPehle test karna hai"}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800 outline-none focus:border-emerald-500 focus:bg-white" />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Buying Signals (1/line)</label>
+                        <textarea value={editBuyingSignals} onChange={(e) => setEditBuyingSignals(e.target.value)} rows={3}
+                          placeholder={"link bhejo\nHWID kaha se milega\npayment details"}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800 outline-none focus:border-emerald-500 focus:bg-white" />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Objection Handling Strategy</label>
+                      <textarea value={editObjectionStrategy} onChange={(e) => setEditObjectionStrategy(e.target.value)} rows={2}
+                        placeholder="Acknowledge → Diagnose real objection → Reframe value → Resolve → Next step. Never dump a discount first."
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800 outline-none focus:border-emerald-500 focus:bg-white" />
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Negotiation Rules</label>
+                        <textarea value={editNegotiationRules} onChange={(e) => setEditNegotiationRules(e.target.value)} rows={2}
+                          placeholder="Rate fixed. Floor only for same-day payment."
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800 outline-none focus:border-emerald-500 focus:bg-white" />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Allowed Discounts</label>
+                        <textarea value={editAllowedDiscounts} onChange={(e) => setEditAllowedDiscounts(e.target.value)} rows={2}
+                          placeholder="Monthly Rs. 1,500 → min Rs. 1,200 (instant). Lifetime Rs. 3,500 → min Rs. 2,800."
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800 outline-none focus:border-emerald-500 focus:bg-white" />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Urgency / Scarcity Rules</label>
+                        <textarea value={editUrgencyRules} onChange={(e) => setEditUrgencyRules(e.target.value)} rows={2}
+                          placeholder="Only mention real limited-time offers. Never fabricate scarcity."
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800 outline-none focus:border-emerald-500 focus:bg-white" />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Closing Strategy</label>
+                        <textarea value={editClosingStrategy} onChange={(e) => setEditClosingStrategy(e.target.value)} rows={2}
+                          placeholder="Confirm HWID → send payment accounts → ask for screenshot."
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800 outline-none focus:border-emerald-500 focus:bg-white" />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Cross-Sell Rules</label>
+                        <textarea value={editCrossSell} onChange={(e) => setEditCrossSell(e.target.value)} rows={2}
+                          placeholder="After ClipShield close, if creator needs voiceovers, suggest VoiceDelta."
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800 outline-none focus:border-emerald-500 focus:bg-white" />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Support Notes</label>
+                        <textarea value={editSupportNotes} onChange={(e) => setEditSupportNotes(e.target.value)} rows={2}
+                          placeholder="Activation via WhatsApp after HWID. Windows only."
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800 outline-none focus:border-emerald-500 focus:bg-white" />
+                      </div>
+                    </div>
                   </div>
                 </div>
               )}

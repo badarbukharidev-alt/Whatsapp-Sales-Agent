@@ -50,6 +50,10 @@ export function extractStructuredMemory(
     lastToolDiscussed: existingSummary?.lastToolDiscussed || undefined,
     totalTurnsCount: messages.length,
     lastSummarizedAt: new Date().toISOString(),
+    // Preserve product-lock & template state managed by the agent (never derived here).
+    currentProductId: existingSummary?.currentProductId || undefined,
+    currentProductName: existingSummary?.currentProductName || undefined,
+    templatesSent: [...(existingSummary?.templatesSent || [])],
   };
 
   // Clean placeholder names like "Customer"

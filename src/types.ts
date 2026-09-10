@@ -80,6 +80,42 @@ export interface ToolLink {
   note?: string;
 }
 
+/**
+ * Admin-authored onboarding message that is sent EXACTLY as stored the first time
+ * a customer starts discussing this specific product (before the AI reply).
+ */
+export interface ToolTemplateMessage {
+  enabled?: boolean;
+  content?: string;
+  /** Default true: send only once per conversation for this product. */
+  sendOnce?: boolean;
+  /** Default false: when true, only {tool_name} {price_pkr} {price_usd} {link} are substituted. */
+  variablesEnabled?: boolean;
+}
+
+/**
+ * Structured, product-specific sales intelligence used to drive controlled,
+ * state-aware selling. Every field is optional and injected dynamically only
+ * for the currently locked product.
+ */
+export interface ToolSalesData {
+  ideal_customer?: string;
+  pain_points?: string[];
+  primary_selling_point?: string;
+  secondary_selling_points?: string[];
+  value_arguments?: string[];
+  discovery_questions?: string[];
+  common_objections?: string[];
+  objection_strategy?: string;
+  negotiation_rules?: string;
+  allowed_discounts?: string;
+  urgency_rules?: string;
+  buying_signals?: string[];
+  closing_strategy?: string;
+  cross_sell_rules?: string;
+  support_notes?: string;
+}
+
 export interface Tool {
   id: string;
   name: string;
@@ -107,6 +143,10 @@ export interface Tool {
   sections?: ToolSection[];
   links?: ToolLink[];
   rawDraft?: string;
+  /** Saved product onboarding template sent first when a customer starts discussing this tool. */
+  templateMessage?: ToolTemplateMessage;
+  /** Extended product-specific sales intelligence. */
+  sales?: ToolSalesData;
 }
 
 export interface ChatMessage {
@@ -129,6 +169,11 @@ export interface CustomerMemorySummary {
   stage?: "greeting" | "discovery" | "negotiation" | "payment_pending" | "paid" | "support" | string;
   lastToolDiscussed?: string;
   totalTurnsCount?: number;
+  /** Product the conversation is currently locked to (id + name). */
+  currentProductId?: string;
+  currentProductName?: string;
+  /** Tool ids whose onboarding template message has already been sent in this conversation. */
+  templatesSent?: string[];
 }
 
 export interface CustomerList {

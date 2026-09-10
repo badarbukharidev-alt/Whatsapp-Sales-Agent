@@ -371,6 +371,110 @@ async function runRegressionSuite() {
     );
   });
 
+  // =========================================================================
+  // SCENARIO 6: PRODUCT CONTEXT LOCK & CONTROLLED SELLING DIRECTIVES
+  // =========================================================================
+  const baseCustomer: Customer = {
+    phoneNumber: "923001234567",
+    name: "Ali",
+    status: "Interested",
+    messages: [
+      { role: "user", content: "ClipShield chahiye", timestamp: new Date().toISOString() },
+      { role: "agent", content: "Han bhai ClipShield perfect hai.", timestamp: new Date().toISOString() },
+    ],
+    memorySummary: { lastToolDiscussed: "ClipShield", totalTurnsCount: 2, currentProductId: "x", currentProductName: "ClipShield" },
+  };
+  const clipTool = toolsData.find(t => t.name.toLowerCase().includes("clip"))!;
+
+  test("6.1 Product lock directive keeps conversation on ONE product", () => {
+    const { prompt } = synthesizeSalesPrompt({
+      customer: baseCustomer,
+      matchedTools: [clipTool],
+      allAccountToolsSummary: "- ClipShield\n- VoiceDelta",
+      recentMessages: baseCustomer.messages!,
+      latestCustomerText: "aur batao",
+      settings: { aiAgentEnabled: true, language: "Roman Urdu" } as any,
+      lockedProductName: clipTool.name,
+    });
+    assert.ok(prompt.includes("CURRENT PRODUCT LOCK"), "Must include product lock directive");
+    assert.ok(prompt.includes(clipTool.name), "Lock directive must name the locked product");
+  });
+
+  test("6.2 Explicit payment request triggers payment-only mode (no re-pitch)", () => {
+    const { prompt } = synthesizeSalesPrompt({
+      customer: baseCustomer,
+      matchedTools: [clipTool],
+      allAccountToolsSummary: "- ClipShield",
+      recentMessages: baseCustomer.messages!,
+      latestCustomerText: "payment details bhejo",
+      settings: {
+        aiAgentEnabled: true,
+        language: "Roman Urdu",
+        paymentMethods: [{ id: "1", provider: "Easypaisa", accountTitle: "Badar", accountNumber: "03001112223", isActive: true }],
+      } as any,
+      lockedProductName: clipTool.name,
+      explicitPaymentRequest: true,
+    });
+    assert.ok(prompt.includes("PAYMENT MODE"), "Must enter payment mode");
+    assert.ok(/Do NOT re-pitch/i.test(prompt), "Payment mode must forbid re-pitching");
+    assert.ok(prompt.includes("OFFICIAL PAYMENT ACCOUNTS"), "Payment accounts must be injected");
+    assert.ok(prompt.includes("03001112223"), "Configured payment number must be present");
+  });
+
+  test("6.3 High buying intent stops the pitch and moves to action", () => {
+    const { prompt } = synthesizeSalesPrompt({
+      customer: baseCustomer,
+      matchedTools: [clipTool],
+      allAccountToolsSummary: "- ClipShield",
+      recentMessages: baseCustomer.messages!,
+      latestCustomerText: "le lunga, price kya hai",
+      settings: { aiAgentEnabled: true, language: "Roman Urdu" } as any,
+      lockedProductName: clipTool.name,
+      buyingIntent: true,
+    });
+    assert.ok(prompt.includes("HIGH BUYING INTENT"), "Must include buying-intent directive");
+  });
+
+  test("6.4 Extended product-specific sales intelligence is injected", () => {
+    const salesTool: Tool = {
+      ...clipTool,
+      sales: {
+        primary_selling_point: "9-layer Content ID bypass no one else offers",
+        discovery_questions: ["Kis niche ka channel hai?"],
+        negotiation_rules: "Rate fixed, floor only for same-day payment",
+        allowed_discounts: "Rs. 1,200 monthly for instant payment",
+        buying_signals: ["link bhejo", "HWID"],
+        closing_strategy: "Confirm HWID then send payment accounts",
+      },
+    };
+    const { prompt } = synthesizeSalesPrompt({
+      customer: baseCustomer,
+      matchedTools: [salesTool],
+      allAccountToolsSummary: "- ClipShield",
+      recentMessages: baseCustomer.messages!,
+      latestCustomerText: "details",
+      settings: { aiAgentEnabled: true, language: "Roman Urdu" } as any,
+      lockedProductName: salesTool.name,
+    });
+    assert.ok(prompt.includes("Primary Selling Point:"), "Primary selling point must be injected");
+    assert.ok(prompt.includes("Allowed Discounts (ONLY these are permitted):"), "Allowed discounts must be injected");
+    assert.ok(prompt.includes("Closing Strategy:"), "Closing strategy must be injected");
+  });
+
+  test("6.5 System prompt enforces concise replies and strict role separation", () => {
+    const { systemPrompt } = synthesizeSalesPrompt({
+      customer: baseCustomer,
+      matchedTools: [clipTool],
+      allAccountToolsSummary: "- ClipShield",
+      recentMessages: baseCustomer.messages!,
+      latestCustomerText: "hi",
+      settings: { aiAgentEnabled: true, language: "Roman Urdu" } as any,
+    });
+    assert.ok(/1 to 3 SHORT sentences/i.test(systemPrompt), "Must enforce concise default length");
+    assert.ok(/STRICT ROLE SEPARATION/i.test(systemPrompt), "Must enforce role separation");
+    assert.ok(/NEVER write the customer's messages/i.test(systemPrompt), "Must forbid speaking as the customer");
+  });
+
   for (const t of testQueue) {
     try {
       await t.fn();

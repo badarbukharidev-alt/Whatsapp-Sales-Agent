@@ -8,6 +8,65 @@ import { Customer, CustomerStatus, Tool } from "../types.js";
 import { checkAiReplyQuota, recordAiReply, recordUserMessage } from "./usage.js";
 import { recordStatedFacts, clampPriceFloors, extractMentionedFacts } from "./tool-matcher.js";
 
+// ---------------------------------------------------------------------------
+// Controlled-selling helpers: buying intent, explicit requests, role separation
+// ---------------------------------------------------------------------------
+
+/** Strong buying-intent signals (Roman Urdu + English). */
+const BUYING_INTENT_REGEX =
+  /(?:\b(?:le?na|lena|leni|chahiye|chaiye|chahye)\b|\blink\b|\bprice\b|\brate\b|\bkitne?\b|\bkitna\b|final\s*price|\bpayment\b|jazz\s*cash|jazzcash|easy\s*paisa|easypaisa|\braast\b|account\s*(?:number|details|no)|\bpro\b|start\s*kar|shuru\s*kar|kharid|khareed|purchase|\bbuy\b|sub\s*len|order\s*kar|paise?\s*(?:bhej|send|transfer|kaha))/i;
+
+/** Explicit payment-details request. */
+const EXPLICIT_PAYMENT_REGEX =
+  /(?:payment\s*(?:details|method|info|kaise|karni|kar\s*d|number|account)|kaise?\s*pay|kahan?\s*(?:pay|paise|bhej)|account\s*(?:number|details|title|no)\b|jazz\s*cash|jazzcash|easy\s*paisa|easypaisa|\braast\b|bank\s*(?:details|account))/i;
+
+/** Explicit link / download request. */
+const EXPLICIT_LINK_REGEX =
+  /(?:\blink\b|\blinks\b|download|trial\s*(?:link|de)|website\s*(?:link|do)|\bportal\b)/i;
+
+/** Customer explicitly wants an alternative / comparison to the locked product. */
+const ALTERNATIVE_REGEX =
+  /(?:alternative|alternate|doosr|dusr|koi\s*aur|kuch\s*aur|compare|comparison|difference|farq|instead\s*of|behtar\s*option|other\s*tool|second\s*option)/i;
+
+/**
+ * Renders a saved product template. By default the message is returned EXACTLY
+ * as stored. Only when variables are explicitly enabled are the recognized
+ * tokens substituted; a missing value leaves its token untouched.
+ */
+function renderTemplateMessage(
+  tm: { content?: string; variablesEnabled?: boolean },
+  tool: Tool
+): string {
+  const content = tm.content || "";
+  if (!tm.variablesEnabled) return content;
+  const link = (tool.links && tool.links[0] && tool.links[0].url) || "";
+  const values: Record<string, string> = {
+    "{tool_name}": tool.name || "",
+    "{price_pkr}": tool.pricePkr ? `Rs. ${tool.pricePkr}` : "",
+    "{price_usd}": tool.priceUsd ? `$${tool.priceUsd}` : "",
+    "{link}": link,
+  };
+  return content.replace(
+    /\{tool_name\}|\{price_pkr\}|\{price_usd\}|\{link\}/g,
+    (m) => (values[m] !== undefined && values[m] !== "" ? values[m] : m)
+  );
+}
+
+/**
+ * Strips any fabricated customer/user turns and role prefixes so the model can
+ * never speak AS the customer. Keeps only the assistant's own words.
+ */
+function stripFabricatedCustomerTurns(raw: string): string {
+  if (!raw) return raw;
+  const lines = raw.split(/\r?\n/);
+  const kept: string[] = [];
+  for (const line of lines) {
+    if (/^\s*(?:customer|user|client|grahak|buyer|cust)\s*[:\-]/i.test(line)) continue;
+    kept.push(line.replace(/^\s*(?:agent|you|assistant|bot|salesperson|seller|reply)\s*[:\-]\s*/i, ""));
+  }
+  return kept.join("\n").trim();
+}
+
 interface QueuedIncomingMessage {
   seq: number;
   text: string;
@@ -143,16 +202,19 @@ async function handleCustomerMessageBatch(
 
   // 3. Generate retrieval-based AI response
   const response = await generateResponse(cleanJid, combinedUserText, name, batch, userId);
-  if (!response || (response.textMessages.length === 0 && !response.imageToSend)) {
+  if (!response || (response.textMessages.length === 0 && !response.imageToSend && !response.templateMessage)) {
     return;
   }
 
-  // 4. Send response sequentially with natural WhatsApp typing delay
+  // 4. Send response: saved product template FIRST (exactly as stored), then AI messages.
   const delaySec = settings.responseDelaySeconds || 1.4;
-  await sendResponse(cleanJid, response.textMessages, response.imageToSend, delaySec, userId);
+  await sendResponse(cleanJid, response.textMessages, response.imageToSend, delaySec, userId, response.templateMessage);
 
-  // 5. Save agent reply immediately to permanent memory
-  const replyMemoryText = response.textMessages.join("\n\n") + (response.imageToSend ? `\n[Sent Image: ${response.imageToSend}]` : "");
+  // 5. Save agent reply immediately to permanent memory (template included for history)
+  const replyParts: string[] = [];
+  if (response.templateMessage) replyParts.push(response.templateMessage);
+  replyParts.push(...response.textMessages);
+  const replyMemoryText = replyParts.join("\n\n") + (response.imageToSend ? `\n[Sent Image: ${response.imageToSend}]` : "");
   await customerService.saveMessage(cleanJid, "agent", replyMemoryText, userId);
   await recordAiReply();
 }
@@ -166,7 +228,7 @@ async function generateResponse(
   name?: string,
   batch?: QueuedIncomingMessage[],
   userId = "usr_admin_badar"
-): Promise<{ textMessages: string[]; imageToSend: string | null }> {
+): Promise<{ textMessages: string[]; imageToSend: string | null; templateMessage: string | null }> {
   const settings = await getSettings(userId);
 
   // 1. Load permanent customer record BEFORE generating reply
@@ -184,45 +246,107 @@ async function generateResponse(
 
   let match = await toolService.searchRelevantTools(latestCustomerText, userId, recentDialogue);
 
-  // Contextual continuity: If no new tool matched and not an unknown external product,
-  // check if this is a follow-up ("G", "details", "link", "budget", "kam", etc.)
-  // and keep discussing the active tool in this conversation
-  if (match.matched.length === 0 && !match.isUnknownProduct) {
-    const isContextualFollowUp =
-      latestCustomerText.trim().length <= 35 ||
-      /^(?:g|jee|ji|han|haan|theek|thik|ok|okay|yes|sahi|bilkul|details|link|demo|batao|bhejo|kam|discount|price|budget|lekin|aur|yeh|kese|how|why|kb|kab)\b/i.test(latestCustomerText.trim());
+  // Did THIS message explicitly identify a product (direct name / alias / keyword /
+  // semantic), as opposed to a short follow-up resolved purely from history?
+  const directDetail = (match.matchedDetails || []).find(
+    (d) =>
+      d.matchedToken !== "active-conversation-context" &&
+      !String(d.matchedToken).startsWith("history:")
+  );
+  const directlyDetectedTool: Tool | null =
+    (directDetail && match.matched.find((t) => t.id === directDetail.toolId)) || null;
 
-    const activeToolName = customer.memorySummary?.lastToolDiscussed;
-    if (activeToolName || isContextualFollowUp) {
-      const activeTool = accountTools.find(
-        (t) =>
-          (activeToolName && (t.name.toLowerCase().includes(activeToolName.toLowerCase()) || activeToolName.toLowerCase().includes(t.name.toLowerCase()))) ||
-          recentMessages.some((m) => m.content.toLowerCase().includes(t.name.toLowerCase().split(/[\–\-\:\|]/)[0].trim()))
-      );
+  const memory = customer.memorySummary || {};
+  const prevProductId = memory.currentProductId;
+  const prevProduct = prevProductId ? accountTools.find((t) => t.id === prevProductId) : undefined;
+  const wantsAlternative = ALTERNATIVE_REGEX.test(latestCustomerText);
 
-      if (activeTool) {
-        match = {
-          matched: [activeTool],
-          confidence: "alias",
-          isUnknownProduct: false,
-          matchedDetails: [{
-            toolId: activeTool.id,
-            toolName: activeTool.name,
-            matchedOn: "alias",
-            matchedToken: "active-conversation-context"
-          }]
-        };
-      }
+  // 3. PRODUCT CONTEXT LOCK — the conversation stays on ONE product.
+  //    Another product is only surfaced when the customer explicitly names it,
+  //    asks for an alternative/comparison, or the current one cannot satisfy.
+  let lockedTool: Tool | null = null;
+  if (match.isUnknownProduct) {
+    // Customer explicitly asked for an uncataloged product: keep unknown flow, don't lock.
+    lockedTool = null;
+  } else if (directlyDetectedTool) {
+    // Customer explicitly named a catalog product this turn -> (re)lock to it.
+    lockedTool = directlyDetectedTool;
+  } else if (prevProduct) {
+    // No new explicit product; stay locked to the current product (follow-up continuity).
+    lockedTool = prevProduct;
+  } else if (match.matched.length > 0) {
+    // First contextual match with no prior lock.
+    lockedTool = match.matched[0];
+  } else {
+    // Fallback: continuity from last-discussed tool for short follow-ups.
+    const activeToolName = memory.lastToolDiscussed;
+    if (activeToolName) {
+      lockedTool =
+        accountTools.find(
+          (t) =>
+            t.name.toLowerCase().includes(activeToolName.toLowerCase()) ||
+            activeToolName.toLowerCase().includes(t.name.toLowerCase())
+        ) || null;
     }
   }
 
-  // 3. Check if agent recently claimed rate is fixed for negotiation consistency
+  // Enforce single-product context: never mix product data across products.
+  if (lockedTool) {
+    match = {
+      matched: [lockedTool],
+      confidence: match.matched.some((t) => t.id === lockedTool!.id) ? match.confidence : "alias",
+      isUnknownProduct: false,
+      queryProduct: undefined,
+      matchedDetails: [
+        {
+          toolId: lockedTool.id,
+          toolName: lockedTool.name,
+          matchedOn: directlyDetectedTool ? (directDetail!.matchedOn as any) : "alias",
+          matchedToken: directlyDetectedTool ? directDetail!.matchedToken : "current-product-lock",
+        },
+      ],
+    };
+  }
+
+  // 4. SAVED PRODUCT TEMPLATE MESSAGE — sent FIRST, exactly once, on first detection.
+  let templateMessage: string | null = null;
+  const templatesSent = [...(memory.templatesSent || [])];
+  if (lockedTool && directlyDetectedTool && directlyDetectedTool.id === lockedTool.id) {
+    const tm = lockedTool.templateMessage;
+    const alreadySent = templatesSent.includes(lockedTool.id);
+    const sendOnce = tm?.sendOnce !== false; // default: send once
+    if (tm?.enabled && (tm.content || "").trim().length > 0 && !(sendOnce && alreadySent)) {
+      templateMessage = renderTemplateMessage(tm, lockedTool);
+      if (!templatesSent.includes(lockedTool.id)) templatesSent.push(lockedTool.id);
+    }
+  }
+
+  // 5. Persist product-lock + template state to permanent memory.
+  if (lockedTool) {
+    await customerService.updateCustomerMemory(
+      cleanJid,
+      {
+        currentProductId: lockedTool.id,
+        currentProductName: lockedTool.name,
+        lastToolDiscussed: lockedTool.name,
+        templatesSent,
+      },
+      userId
+    );
+  }
+
+  // 6. Buying-intent & explicit-request detection.
+  const buyingIntent = BUYING_INTENT_REGEX.test(latestCustomerText);
+  const explicitPaymentRequest = EXPLICIT_PAYMENT_REGEX.test(latestCustomerText);
+  const explicitLinkRequest = EXPLICIT_LINK_REGEX.test(latestCustomerText);
+
+  // 7. Negotiation consistency guard.
   const agentRecentlyClaimedFixed = recentMessages
     .filter((m) => m.role === "agent")
     .slice(-2)
     .some((m) => /(?:fixed|kam nahi|rate final|final price|discount nahi)/i.test(m.content));
 
-  // 4. Synthesize lean, anti-bloat sales prompt
+  // 8. Synthesize lean, controlled sales prompt (ONLY the locked product's data).
   const { prompt, systemPrompt } = synthesizeSalesPrompt({
     customer,
     matchedTools: match.matched,
@@ -233,9 +357,15 @@ async function generateResponse(
     isUnknownProduct: match.isUnknownProduct,
     queryProduct: match.queryProduct,
     agentRecentlyClaimedFixed,
+    lockedProductName: lockedTool?.name,
+    buyingIntent,
+    explicitPaymentRequest,
+    explicitLinkRequest,
+    templateJustSent: Boolean(templateMessage),
+    wantsAlternative,
   });
 
-  console.log(`[Agent:${userId}] Querying AI for ${cleanJid} (Matched: ${match.matched.map(t => t.name).join(", ") || (match.isUnknownProduct ? `Unknown:${match.queryProduct}` : 'CatalogOverview')})...`);
+  console.log(`[Agent:${userId}] Querying AI for ${cleanJid} (Locked: ${lockedTool?.name || (match.isUnknownProduct ? `Unknown:${match.queryProduct}` : 'CatalogOverview')}${buyingIntent ? ' | HighIntent' : ''}${templateMessage ? ' | TemplateFirst' : ''})...`);
   const rawReply = await askAI(prompt, systemPrompt, userId);
 
   // 5. Extract status tags e.g. [SET_STATUS: <StatusName>]
@@ -255,12 +385,12 @@ async function generateResponse(
     text = text.replace(imageTagMatch[0], "").trim();
   }
 
-  // 7. Evaluate & apply customer status transition
-  await evaluateAndApplyCustomerStatus(cleanJid, customer, latestCustomerText, extractedAiStatus, userId);
+  // 7. Evaluate & apply customer status transition (buying intent nudges Interested)
+  await evaluateAndApplyCustomerStatus(cleanJid, customer, latestCustomerText, extractedAiStatus, userId, buyingIntent);
 
-  // Clean conversational prefixes
-  text = text
-    .replace(/^(Agent|You|Assistant|Bot|Salesperson):\s*/gim, "")
+  // STRICT ROLE SEPARATION: remove any fabricated customer turns / role prefixes,
+  // so the model can never output messages as if it were the customer.
+  text = stripFabricatedCustomerTurns(text)
     .replace(/^["']|["']$/g, "")
     .trim();
 
@@ -290,7 +420,7 @@ async function generateResponse(
       .map((p) => p.trim())
       .filter((p) => p.length > 0);
 
-    if (paragraphs.length > 1 && paragraphs.length <= 4) {
+    if (paragraphs.length > 1 && paragraphs.length <= 3) {
       messages = paragraphs;
     } else if (text.length > 0) {
       messages = [text];
@@ -301,8 +431,9 @@ async function generateResponse(
     .map((m) => m.replace(/^(Message\s*\d+:|\d+\.)\s*/i, "").trim())
     .filter((m) => m.length > 0);
 
-  if (messages.length > 4) {
-    messages = messages.slice(0, 4);
+  // Concise WhatsApp default: never more than 3 short bubbles.
+  if (messages.length > 3) {
+    messages = messages.slice(0, 3);
   }
 
   if (messages.length === 0 && imageToSend) {
@@ -312,6 +443,7 @@ async function generateResponse(
   return {
     textMessages: messages,
     imageToSend,
+    templateMessage,
   };
 }
 
@@ -323,8 +455,20 @@ async function sendResponse(
   textMessages: string[],
   imageToSend: string | null,
   delaySec: number,
-  userId?: string
+  userId?: string,
+  templateMessage?: string | null
 ) {
+  // TEMPLATE ORDER GUARANTEE: the saved product template is ALWAYS sent first,
+  // exactly as stored, before any AI-generated message.
+  if (templateMessage && templateMessage.trim().length > 0) {
+    console.log(`[Agent:${userId || 'default'}] Sending saved product template FIRST to ${cleanJid}.`);
+    await sendMessage(cleanJid, templateMessage, userId);
+    if (textMessages.length > 0 || imageToSend) {
+      const waitMs = Math.max(900, Math.min(2500, delaySec * 1000));
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+    }
+  }
+
   for (let i = 0; i < textMessages.length; i++) {
     const msg = textMessages[i];
     console.log(`[Agent:${userId || 'default'}] Sending message [${i + 1}/${textMessages.length}] to ${cleanJid}: "${msg}"`);
@@ -351,7 +495,8 @@ async function evaluateAndApplyCustomerStatus(
   customer: Customer,
   latestCustomerText: string,
   aiStatusTag?: string | null,
-  userId = "usr_admin_badar"
+  userId = "usr_admin_badar",
+  buyingIntentDetected = false
 ) {
   try {
     const currentStatus: CustomerStatus = normalizeCustomerStatus(customer?.status);
@@ -379,9 +524,11 @@ async function evaluateAndApplyCustomerStatus(
       reason = `AI evaluated conversational transition to ${targetStatus}.`;
     } else if (currentStatus === "New Customer") {
       const toolInterestRegex = /\b(tool|price|cost|features|voice|voices|video|audio|clone|cloning|demo|rate|package|plan|kitne|chahiye|available|kese)\b/i;
-      if (toolInterestRegex.test(textLower)) {
+      if (buyingIntentDetected || toolInterestRegex.test(textLower)) {
         targetStatus = "Interested";
-        reason = "New customer inquired about tool features or pricing.";
+        reason = buyingIntentDetected
+          ? "New customer showed strong buying intent."
+          : "New customer inquired about tool features or pricing.";
       }
     }
 

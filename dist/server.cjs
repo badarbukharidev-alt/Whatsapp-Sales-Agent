@@ -1413,7 +1413,11 @@ function extractStructuredMemory(existingSummary, messages, customerNameHint) {
     stage: existingSummary?.stage || "greeting",
     lastToolDiscussed: existingSummary?.lastToolDiscussed || void 0,
     totalTurnsCount: messages.length,
-    lastSummarizedAt: (/* @__PURE__ */ new Date()).toISOString()
+    lastSummarizedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    // Preserve product-lock & template state managed by the agent (never derived here).
+    currentProductId: existingSummary?.currentProductId || void 0,
+    currentProductName: existingSummary?.currentProductName || void 0,
+    templatesSent: [...existingSummary?.templatesSent || []]
   };
   if (summary.customerName && /^(customer|user|unknown|client)$/i.test(summary.customerName)) {
     summary.customerName = void 0;
@@ -3225,7 +3229,13 @@ function synthesizeSalesPrompt(params) {
     settings,
     isUnknownProduct,
     queryProduct,
-    agentRecentlyClaimedFixed
+    agentRecentlyClaimedFixed,
+    lockedProductName,
+    buyingIntent,
+    explicitPaymentRequest,
+    explicitLinkRequest,
+    templateJustSent,
+    wantsAlternative
   } = params;
   const memory = customer.memorySummary;
   const isReturningCustomer = Boolean(
@@ -3257,7 +3267,24 @@ CRITICAL RULES (ABSOLUTELY NO ROBOTIC BOT BEHAVIOR & ZERO HALLUCINATIONS):
 7. CONTEXT CONTINUITY:
    - If the customer gives a short confirmation or reply like "G", "haan", "theek", "ok", "yes", "Details", NEVER reset the conversation or ask generic questions. Seamlessly connect to the tool currently under discussion.
 8. STRICT SOURCE OF TRUTH:
-   - Only discuss products, features, dynamic sections, and rates stored in our catalog. NEVER invent uncarried tools or fabricate features.`;
+   - Only discuss products, features, dynamic sections, and rates stored in our catalog. NEVER invent uncarried tools or fabricate features.
+9. MESSAGE LENGTH (CONCISE BY DEFAULT):
+   - Default reply length is 1 to 3 SHORT sentences. Do NOT send long marketing paragraphs unless the customer explicitly asks for full "details".
+   - Every message must have ONE clear purpose: answer, clarify, recommend, handle an objection, negotiate, close, or give payment info. Never repeat information already shared.
+10. STAY ON THE LOCKED PRODUCT (NO DRIFT):
+   - Discuss ONLY the product the customer is currently asking about. NEVER switch to or pitch another product on your own.
+   - Mention a different product ONLY if the customer explicitly asks for it, asks for an alternative/comparison, or the current product genuinely cannot meet their need.
+11. ZERO FABRICATION (NEVER INVENT):
+   - Never invent features, prices, discounts, promotions, technical capabilities, availability, account limits, customer results, testimonials, or payment confirmation. If something is not in the provided product data, say you'll confirm \u2014 do not make it up.
+   - NEVER tell the customer their payment is received/verified. Only a human admin verifies payments.
+12. BUYING INTENT \u2014 KNOW WHEN TO STOP SELLING:
+   - If the customer is ready ("le lunga", "link bhejo", "price?", "payment details", "Pro chahiye"), STOP pitching. Reduce discovery, answer directly, and move to the requested action (link / payment / activation steps).
+   - If they ask a direct question, answer it directly. If they ask for the link, send the link. If they ask for payment details, send the configured payment details.
+13. OBJECTION HANDLING (DON'T DUMP DISCOUNTS):
+   - On "mehnga hai / budget kam / soch ke bataunga / X me de do / dusra sasta / pehle test", first diagnose the REAL objection (price, value, trust, risk, timing, feature, competitor, indecision). Then: Acknowledge -> Diagnose -> Reframe (value) -> Resolve -> Next step.
+   - Only ever offer a discount or lower price that actually exists in the product's negotiation rules / allowed discounts, and tie any concession to a condition (pay today / longer term). Never fabricate urgency or scarcity.
+14. STRICT ROLE SEPARATION:
+   - You are ONLY the seller. NEVER write the customer's messages or reply on their behalf (e.g. never output "haan bhej do" or "payment kaise karni hai?" as if the customer said it). Output only your own seller reply.`;
   const memoryLines = [];
   memoryLines.push(`[CUSTOMER CONTEXT & PROFILE]`);
   if (customer.name || memory?.customerName) {
@@ -3308,7 +3335,7 @@ CRITICAL RULES (ABSOLUTELY NO ROBOTIC BOT BEHAVIOR & ZERO HALLUCINATIONS):
       }
       if (t.sales_points && t.sales_points.length > 0) {
         toolLines.push(`Standout Sales Angles & Creator Benefits:`);
-        t.sales_points.forEach((s) => toolLines.push(`  * ${s}`));
+        t.sales_points.forEach((s2) => toolLines.push(`  * ${s2}`));
       }
       if (t.how_to_use) {
         toolLines.push(`How To Use & Setup Instructions:
@@ -3342,13 +3369,31 @@ ${sec.content}`);
           toolLines.push(`Objection Guide (Needs Time): ${t.objection_responses.need_time}`);
         }
       }
+      const s = t.sales;
+      if (s) {
+        if (s.primary_selling_point) toolLines.push(`Primary Selling Point: ${s.primary_selling_point}`);
+        if (s.secondary_selling_points?.length) toolLines.push(`Secondary Selling Points: ${s.secondary_selling_points.join("; ")}`);
+        if (s.value_arguments?.length) toolLines.push(`Value Arguments: ${s.value_arguments.join("; ")}`);
+        if (s.ideal_customer) toolLines.push(`Ideal Customer: ${s.ideal_customer}`);
+        if (s.pain_points?.length) toolLines.push(`Customer Pain Points: ${s.pain_points.join("; ")}`);
+        if (s.discovery_questions?.length) toolLines.push(`Discovery Questions (ask ONE at a time when needed): ${s.discovery_questions.join(" | ")}`);
+        if (s.common_objections?.length) toolLines.push(`Common Objections: ${s.common_objections.join("; ")}`);
+        if (s.objection_strategy) toolLines.push(`Objection Handling Strategy: ${s.objection_strategy}`);
+        if (s.negotiation_rules) toolLines.push(`Negotiation Rules: ${s.negotiation_rules}`);
+        if (s.allowed_discounts) toolLines.push(`Allowed Discounts (ONLY these are permitted): ${s.allowed_discounts}`);
+        if (s.urgency_rules) toolLines.push(`Urgency / Scarcity Rules (use ONLY when real / verified): ${s.urgency_rules}`);
+        if (s.buying_signals?.length) toolLines.push(`Buying Signals to watch for: ${s.buying_signals.join("; ")}`);
+        if (s.closing_strategy) toolLines.push(`Closing Strategy: ${s.closing_strategy}`);
+        if (s.cross_sell_rules) toolLines.push(`Cross-Sell Rules: ${s.cross_sell_rules}`);
+        if (s.support_notes) toolLines.push(`Support Notes: ${s.support_notes}`);
+      }
     }
   } else {
     toolLines.push(`[AVAILABLE STORE TOOLS]`);
     toolLines.push(allAccountToolsSummary);
     toolLines.push(`INSTRUCTION: Greet naturally and casually as a human tech seller (e.g. "Walaikum Assalam bhai! Kya haal hain? Bataen kon sa software ya tool dekh rahe hain aap?"). NEVER use robotic bot phrases like "main kya madad kar sakta hoon". NEVER invent a persona name like 'Aamir'. NEVER mention SEO or unrelated services.`);
   }
-  const isPaymentRelevant = latestCustomerText.match(/(?:pay|payment|jazzcash|easypaisa|bank|raast|account|bhejo|transfer|kese\s+loon|kharidna|buy)/i) || memory?.stage === "payment_pending";
+  const isPaymentRelevant = explicitPaymentRequest || latestCustomerText.match(/(?:pay|payment|jazzcash|easypaisa|bank|raast|account|bhejo|transfer|kese\s+loon|kharidna|buy)/i) || memory?.stage === "payment_pending";
   const paymentLines = [];
   if (isPaymentRelevant) {
     const activePayments = (settings.paymentMethods || []).filter((p) => p.isActive !== false);
@@ -3365,15 +3410,35 @@ ${sec.content}`);
     return `${speaker}: ${m.content}`;
   });
   const negotiationGuard = agentRecentlyClaimedFixed ? `CONSISTENCY RULE: You recently stated rate is fixed. Do not immediately drop the price in this turn without value justification.` : "";
+  const controlLines = [];
+  if (lockedProductName && !isUnknownProduct) {
+    controlLines.push(`CURRENT PRODUCT LOCK: The conversation is locked to "${lockedProductName}". Use ONLY its data above. Do NOT bring up any other product unless the customer explicitly asks.`);
+  }
+  if (templateJustSent) {
+    controlLines.push(`NOTE: The saved product intro/template message was JUST sent to the customer automatically. Do NOT resend the link or repeat that intro \u2014 continue naturally with a short, relevant next line.`);
+  }
+  if (explicitPaymentRequest) {
+    controlLines.push(`PAYMENT MODE: The customer is explicitly asking for payment. Send ONLY the official payment account details and how to share the screenshot/proof. Do NOT re-pitch the product or add marketing. Never claim payment is received/verified.`);
+  } else if (explicitLinkRequest) {
+    controlLines.push(`LINK MODE: The customer asked for the link/download. Send the actual configured link directly with a short one-line guide. No long pitch.`);
+  } else if (buyingIntent) {
+    controlLines.push(`HIGH BUYING INTENT: The customer is ready to move forward. Stop pitching, reduce discovery, answer directly, and guide them to the next action (payment / activation / link). Keep it to 1-2 short lines.`);
+  }
+  if (wantsAlternative) {
+    controlLines.push(`The customer asked for an alternative/comparison \u2014 you MAY briefly compare with another catalog product here, then return focus to what fits their need.`);
+  }
+  const controlDirectives = controlLines.length > 0 ? `[SALES CONTROL DIRECTIVES]
+${controlLines.join("\n")}` : "";
   const promptParts = [
     memoryLines.join("\n"),
     toolLines.join("\n\n"),
     paymentLines.length > 0 ? paymentLines.join("\n") : "",
     negotiationGuard,
+    controlDirectives,
     turns.length > 0 ? `[RECENT CONVERSATION TURNS]:
 ${turns.join("\n")}` : "",
     `CUSTOMER'S LATEST MESSAGE(S): "${latestCustomerText}"`,
-    `Reply as a real Pakistani sales consultant in natural Roman Urdu (split multiple thoughts with "---MSG---"):`
+    `Reply ONLY as the seller (never as the customer), concise (1-3 short sentences) in natural Roman Urdu (split multiple thoughts with "---MSG---"):`
   ].filter(Boolean);
   return {
     prompt: promptParts.join("\n\n"),
@@ -3387,6 +3452,31 @@ var init_prompt_service = __esm({
 });
 
 // src/server/agent.ts
+function renderTemplateMessage(tm, tool) {
+  const content = tm.content || "";
+  if (!tm.variablesEnabled) return content;
+  const link = tool.links && tool.links[0] && tool.links[0].url || "";
+  const values = {
+    "{tool_name}": tool.name || "",
+    "{price_pkr}": tool.pricePkr ? `Rs. ${tool.pricePkr}` : "",
+    "{price_usd}": tool.priceUsd ? `$${tool.priceUsd}` : "",
+    "{link}": link
+  };
+  return content.replace(
+    /\{tool_name\}|\{price_pkr\}|\{price_usd\}|\{link\}/g,
+    (m) => values[m] !== void 0 && values[m] !== "" ? values[m] : m
+  );
+}
+function stripFabricatedCustomerTurns(raw) {
+  if (!raw) return raw;
+  const lines = raw.split(/\r?\n/);
+  const kept = [];
+  for (const line of lines) {
+    if (/^\s*(?:customer|user|client|grahak|buyer|cust)\s*[:\-]/i.test(line)) continue;
+    kept.push(line.replace(/^\s*(?:agent|you|assistant|bot|salesperson|seller|reply)\s*[:\-]\s*/i, ""));
+  }
+  return kept.join("\n").trim();
+}
 function startAgent() {
   console.log("[Agent] Persistent Multi-Tenant WhatsApp Sales Closer Engine initialized.");
 }
@@ -3465,12 +3555,15 @@ async function handleCustomerMessageBatch(phoneNumber, batch, name, userId = "us
     return;
   }
   const response = await generateResponse(cleanJid, combinedUserText, name, batch, userId);
-  if (!response || response.textMessages.length === 0 && !response.imageToSend) {
+  if (!response || response.textMessages.length === 0 && !response.imageToSend && !response.templateMessage) {
     return;
   }
   const delaySec = settings.responseDelaySeconds || 1.4;
-  await sendResponse(cleanJid, response.textMessages, response.imageToSend, delaySec, userId);
-  const replyMemoryText = response.textMessages.join("\n\n") + (response.imageToSend ? `
+  await sendResponse(cleanJid, response.textMessages, response.imageToSend, delaySec, userId, response.templateMessage);
+  const replyParts = [];
+  if (response.templateMessage) replyParts.push(response.templateMessage);
+  replyParts.push(...response.textMessages);
+  const replyMemoryText = replyParts.join("\n\n") + (response.imageToSend ? `
 [Sent Image: ${response.imageToSend}]` : "");
   await customerService.saveMessage(cleanJid, "agent", replyMemoryText, userId);
   await recordAiReply();
@@ -3483,28 +3576,73 @@ async function generateResponse(cleanJid, latestCustomerText, name, batch, userI
   const catalogSummary = await toolService.getAccountToolSummary(userId);
   const recentDialogue = recentMessages.slice(-6).map((m) => `${m.role === "user" ? "Customer" : "Agent"}: ${m.content}`);
   let match = await toolService.searchRelevantTools(latestCustomerText, userId, recentDialogue);
-  if (match.matched.length === 0 && !match.isUnknownProduct) {
-    const isContextualFollowUp = latestCustomerText.trim().length <= 35 || /^(?:g|jee|ji|han|haan|theek|thik|ok|okay|yes|sahi|bilkul|details|link|demo|batao|bhejo|kam|discount|price|budget|lekin|aur|yeh|kese|how|why|kb|kab)\b/i.test(latestCustomerText.trim());
-    const activeToolName = customer.memorySummary?.lastToolDiscussed;
-    if (activeToolName || isContextualFollowUp) {
-      const activeTool = accountTools.find(
-        (t) => activeToolName && (t.name.toLowerCase().includes(activeToolName.toLowerCase()) || activeToolName.toLowerCase().includes(t.name.toLowerCase())) || recentMessages.some((m) => m.content.toLowerCase().includes(t.name.toLowerCase().split(/[\–\-\:\|]/)[0].trim()))
-      );
-      if (activeTool) {
-        match = {
-          matched: [activeTool],
-          confidence: "alias",
-          isUnknownProduct: false,
-          matchedDetails: [{
-            toolId: activeTool.id,
-            toolName: activeTool.name,
-            matchedOn: "alias",
-            matchedToken: "active-conversation-context"
-          }]
-        };
-      }
+  const directDetail = (match.matchedDetails || []).find(
+    (d) => d.matchedToken !== "active-conversation-context" && !String(d.matchedToken).startsWith("history:")
+  );
+  const directlyDetectedTool = directDetail && match.matched.find((t) => t.id === directDetail.toolId) || null;
+  const memory = customer.memorySummary || {};
+  const prevProductId = memory.currentProductId;
+  const prevProduct = prevProductId ? accountTools.find((t) => t.id === prevProductId) : void 0;
+  const wantsAlternative = ALTERNATIVE_REGEX.test(latestCustomerText);
+  let lockedTool = null;
+  if (match.isUnknownProduct) {
+    lockedTool = null;
+  } else if (directlyDetectedTool) {
+    lockedTool = directlyDetectedTool;
+  } else if (prevProduct) {
+    lockedTool = prevProduct;
+  } else if (match.matched.length > 0) {
+    lockedTool = match.matched[0];
+  } else {
+    const activeToolName = memory.lastToolDiscussed;
+    if (activeToolName) {
+      lockedTool = accountTools.find(
+        (t) => t.name.toLowerCase().includes(activeToolName.toLowerCase()) || activeToolName.toLowerCase().includes(t.name.toLowerCase())
+      ) || null;
     }
   }
+  if (lockedTool) {
+    match = {
+      matched: [lockedTool],
+      confidence: match.matched.some((t) => t.id === lockedTool.id) ? match.confidence : "alias",
+      isUnknownProduct: false,
+      queryProduct: void 0,
+      matchedDetails: [
+        {
+          toolId: lockedTool.id,
+          toolName: lockedTool.name,
+          matchedOn: directlyDetectedTool ? directDetail.matchedOn : "alias",
+          matchedToken: directlyDetectedTool ? directDetail.matchedToken : "current-product-lock"
+        }
+      ]
+    };
+  }
+  let templateMessage = null;
+  const templatesSent = [...memory.templatesSent || []];
+  if (lockedTool && directlyDetectedTool && directlyDetectedTool.id === lockedTool.id) {
+    const tm = lockedTool.templateMessage;
+    const alreadySent = templatesSent.includes(lockedTool.id);
+    const sendOnce = tm?.sendOnce !== false;
+    if (tm?.enabled && (tm.content || "").trim().length > 0 && !(sendOnce && alreadySent)) {
+      templateMessage = renderTemplateMessage(tm, lockedTool);
+      if (!templatesSent.includes(lockedTool.id)) templatesSent.push(lockedTool.id);
+    }
+  }
+  if (lockedTool) {
+    await customerService.updateCustomerMemory(
+      cleanJid,
+      {
+        currentProductId: lockedTool.id,
+        currentProductName: lockedTool.name,
+        lastToolDiscussed: lockedTool.name,
+        templatesSent
+      },
+      userId
+    );
+  }
+  const buyingIntent = BUYING_INTENT_REGEX.test(latestCustomerText);
+  const explicitPaymentRequest = EXPLICIT_PAYMENT_REGEX.test(latestCustomerText);
+  const explicitLinkRequest = EXPLICIT_LINK_REGEX.test(latestCustomerText);
   const agentRecentlyClaimedFixed = recentMessages.filter((m) => m.role === "agent").slice(-2).some((m) => /(?:fixed|kam nahi|rate final|final price|discount nahi)/i.test(m.content));
   const { prompt, systemPrompt } = synthesizeSalesPrompt({
     customer,
@@ -3515,9 +3653,15 @@ async function generateResponse(cleanJid, latestCustomerText, name, batch, userI
     settings,
     isUnknownProduct: match.isUnknownProduct,
     queryProduct: match.queryProduct,
-    agentRecentlyClaimedFixed
+    agentRecentlyClaimedFixed,
+    lockedProductName: lockedTool?.name,
+    buyingIntent,
+    explicitPaymentRequest,
+    explicitLinkRequest,
+    templateJustSent: Boolean(templateMessage),
+    wantsAlternative
   });
-  console.log(`[Agent:${userId}] Querying AI for ${cleanJid} (Matched: ${match.matched.map((t) => t.name).join(", ") || (match.isUnknownProduct ? `Unknown:${match.queryProduct}` : "CatalogOverview")})...`);
+  console.log(`[Agent:${userId}] Querying AI for ${cleanJid} (Locked: ${lockedTool?.name || (match.isUnknownProduct ? `Unknown:${match.queryProduct}` : "CatalogOverview")}${buyingIntent ? " | HighIntent" : ""}${templateMessage ? " | TemplateFirst" : ""})...`);
   const rawReply = await askAI(prompt, systemPrompt, userId);
   let extractedAiStatus = null;
   let text = rawReply;
@@ -3532,8 +3676,8 @@ async function generateResponse(cleanJid, latestCustomerText, name, batch, userI
     imageToSend = imageTagMatch[1].trim().replace(/^["']|["']$/g, "");
     text = text.replace(imageTagMatch[0], "").trim();
   }
-  await evaluateAndApplyCustomerStatus(cleanJid, customer, latestCustomerText, extractedAiStatus, userId);
-  text = text.replace(/^(Agent|You|Assistant|Bot|Salesperson):\s*/gim, "").replace(/^["']|["']$/g, "").trim();
+  await evaluateAndApplyCustomerStatus(cleanJid, customer, latestCustomerText, extractedAiStatus, userId, buyingIntent);
+  text = stripFabricatedCustomerTurns(text).replace(/^["']|["']$/g, "").trim();
   if (match.matched.length > 0) {
     for (const tool of match.matched) {
       const newlyStated = extractMentionedFacts(text, tool);
@@ -3548,25 +3692,34 @@ async function generateResponse(cleanJid, latestCustomerText, name, batch, userI
     messages = text.split("---MSG---").map((m) => m.trim()).filter((m) => m.length > 0);
   } else {
     const paragraphs = text.split(/\n\s*\n/).map((p) => p.trim()).filter((p) => p.length > 0);
-    if (paragraphs.length > 1 && paragraphs.length <= 4) {
+    if (paragraphs.length > 1 && paragraphs.length <= 3) {
       messages = paragraphs;
     } else if (text.length > 0) {
       messages = [text];
     }
   }
   messages = messages.map((m) => m.replace(/^(Message\s*\d+:|\d+\.)\s*/i, "").trim()).filter((m) => m.length > 0);
-  if (messages.length > 4) {
-    messages = messages.slice(0, 4);
+  if (messages.length > 3) {
+    messages = messages.slice(0, 3);
   }
   if (messages.length === 0 && imageToSend) {
     messages = ["Han bhai, ye dekho interface \u{1F447}"];
   }
   return {
     textMessages: messages,
-    imageToSend
+    imageToSend,
+    templateMessage
   };
 }
-async function sendResponse(cleanJid, textMessages, imageToSend, delaySec, userId) {
+async function sendResponse(cleanJid, textMessages, imageToSend, delaySec, userId, templateMessage) {
+  if (templateMessage && templateMessage.trim().length > 0) {
+    console.log(`[Agent:${userId || "default"}] Sending saved product template FIRST to ${cleanJid}.`);
+    await sendMessage(cleanJid, templateMessage, userId);
+    if (textMessages.length > 0 || imageToSend) {
+      const waitMs = Math.max(900, Math.min(2500, delaySec * 1e3));
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+    }
+  }
   for (let i = 0; i < textMessages.length; i++) {
     const msg = textMessages[i];
     console.log(`[Agent:${userId || "default"}] Sending message [${i + 1}/${textMessages.length}] to ${cleanJid}: "${msg}"`);
@@ -3582,7 +3735,7 @@ async function sendResponse(cleanJid, textMessages, imageToSend, delaySec, userI
     await sendToolImage(cleanJid, imageToSend, void 0, userId);
   }
 }
-async function evaluateAndApplyCustomerStatus(cleanJid, customer, latestCustomerText, aiStatusTag, userId = "usr_admin_badar") {
+async function evaluateAndApplyCustomerStatus(cleanJid, customer, latestCustomerText, aiStatusTag, userId = "usr_admin_badar", buyingIntentDetected = false) {
   try {
     const currentStatus = normalizeCustomerStatus(customer?.status);
     const textLower = latestCustomerText.toLowerCase();
@@ -3606,9 +3759,9 @@ async function evaluateAndApplyCustomerStatus(cleanJid, customer, latestCustomer
       reason = `AI evaluated conversational transition to ${targetStatus}.`;
     } else if (currentStatus === "New Customer") {
       const toolInterestRegex = /\b(tool|price|cost|features|voice|voices|video|audio|clone|cloning|demo|rate|package|plan|kitne|chahiye|available|kese)\b/i;
-      if (toolInterestRegex.test(textLower)) {
+      if (buyingIntentDetected || toolInterestRegex.test(textLower)) {
         targetStatus = "Interested";
-        reason = "New customer inquired about tool features or pricing.";
+        reason = buyingIntentDetected ? "New customer showed strong buying intent." : "New customer inquired about tool features or pricing.";
       }
     }
     if (targetStatus && targetStatus !== currentStatus) {
@@ -3625,7 +3778,7 @@ async function evaluateAndApplyCustomerStatus(cleanJid, customer, latestCustomer
     console.error("[Agent] Error evaluating customer status:", err);
   }
 }
-var customerQueues, globalSequenceCounter;
+var BUYING_INTENT_REGEX, EXPLICIT_PAYMENT_REGEX, EXPLICIT_LINK_REGEX, ALTERNATIVE_REGEX, customerQueues, globalSequenceCounter;
 var init_agent = __esm({
   "src/server/agent.ts"() {
     init_ai();
@@ -3636,6 +3789,10 @@ var init_agent = __esm({
     init_whatsapp();
     init_usage();
     init_tool_matcher();
+    BUYING_INTENT_REGEX = /(?:\b(?:le?na|lena|leni|chahiye|chaiye|chahye)\b|\blink\b|\bprice\b|\brate\b|\bkitne?\b|\bkitna\b|final\s*price|\bpayment\b|jazz\s*cash|jazzcash|easy\s*paisa|easypaisa|\braast\b|account\s*(?:number|details|no)|\bpro\b|start\s*kar|shuru\s*kar|kharid|khareed|purchase|\bbuy\b|sub\s*len|order\s*kar|paise?\s*(?:bhej|send|transfer|kaha))/i;
+    EXPLICIT_PAYMENT_REGEX = /(?:payment\s*(?:details|method|info|kaise|karni|kar\s*d|number|account)|kaise?\s*pay|kahan?\s*(?:pay|paise|bhej)|account\s*(?:number|details|title|no)\b|jazz\s*cash|jazzcash|easy\s*paisa|easypaisa|\braast\b|bank\s*(?:details|account))/i;
+    EXPLICIT_LINK_REGEX = /(?:\blink\b|\blinks\b|download|trial\s*(?:link|de)|website\s*(?:link|do)|\bportal\b)/i;
+    ALTERNATIVE_REGEX = /(?:alternative|alternate|doosr|dusr|koi\s*aur|kuch\s*aur|compare|comparison|difference|farq|instead\s*of|behtar\s*option|other\s*tool|second\s*option)/i;
     customerQueues = /* @__PURE__ */ new Map();
     globalSequenceCounter = 100;
   }
