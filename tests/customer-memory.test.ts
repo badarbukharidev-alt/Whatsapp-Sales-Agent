@@ -237,7 +237,7 @@ async function runCustomerMemoryTests() {
       settings: { aiAgentEnabled: true } as any
     });
 
-    assert.ok(synth.prompt.includes("[SECTION: 9-Layer Protection Details]"));
+    assert.ok(synth.prompt.includes("Constant Dynamic Section Message:"));
     assert.ok(synth.prompt.includes("Layer 1 audio shift"));
     assert.ok(synth.prompt.includes("Download Doc: https://docs.google.com/test"));
   });
