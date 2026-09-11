@@ -61,6 +61,8 @@ export default function Tools() {
   const [editMinPkr, setEditMinPkr] = useState("");
   const [editMinUsd, setEditMinUsd] = useState("");
   const [editNegotiationNotes, setEditNegotiationNotes] = useState("");
+  const [editSlotsRemaining, setEditSlotsRemaining] = useState("");
+  const [editSlotsNote, setEditSlotsNote] = useState("");
   const [editObjectionTooExpensive, setEditObjectionTooExpensive] = useState("");
   const [editObjectionNeedTime, setEditObjectionNeedTime] = useState("");
   const [editObjectionCompetitor, setEditObjectionCompetitor] = useState("");
@@ -212,6 +214,10 @@ export default function Tools() {
     setEditMinPkr(tool.pricing?.min_negotiable_pkr ? String(tool.pricing.min_negotiable_pkr) : "");
     setEditMinUsd(tool.pricing?.min_negotiable_usd ? String(tool.pricing.min_negotiable_usd) : "");
     setEditNegotiationNotes(tool.pricing?.negotiation_notes || "");
+    setEditSlotsRemaining(
+      typeof tool.pricing?.slots_remaining === "number" ? String(tool.pricing.slots_remaining) : ""
+    );
+    setEditSlotsNote(tool.pricing?.slots_note || "");
     setEditObjectionTooExpensive(tool.objection_responses?.too_expensive || "");
     setEditObjectionNeedTime(tool.objection_responses?.need_time || "");
     setEditObjectionCompetitor(tool.objection_responses?.comparing_competitor || "");
@@ -378,6 +384,8 @@ export default function Tools() {
           min_negotiable_pkr: editMinPkr.trim() ? parseInt(editMinPkr.trim(), 10) : undefined,
           min_negotiable_usd: editMinUsd.trim() ? parseInt(editMinUsd.trim(), 10) : undefined,
           negotiation_notes: editNegotiationNotes.trim() || undefined,
+          slots_remaining: editSlotsRemaining.trim() !== "" ? parseInt(editSlotsRemaining.trim(), 10) : undefined,
+          slots_note: editSlotsNote.trim() || undefined,
         },
         objection_responses: {
           ...(editingTool.objection_responses || {}),
@@ -1003,6 +1011,37 @@ export default function Tools() {
                         placeholder="e.g. Rate is fixed. Only drop to min floor if customer is leaving."
                         className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 outline-none focus:border-emerald-500"
                       />
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1 border-t border-slate-200">
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
+                          Slots / IDs Remaining (Optional)
+                        </label>
+                        <input
+                          type="number"
+                          min={0}
+                          value={editSlotsRemaining}
+                          onChange={(e) => setEditSlotsRemaining(e.target.value)}
+                          placeholder="e.g. 3"
+                          className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 outline-none focus:border-emerald-500 font-mono"
+                        />
+                        <span className="text-[10px] text-slate-400 mt-0.5 block">
+                          ONLY set this if it's real. When set, the AI uses this exact number for urgency ("sirf X ID reh gaye"). Leave blank for no scarcity messaging — update it yourself as you sell out.
+                        </span>
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
+                          Scarcity Reason (Optional)
+                        </label>
+                        <input
+                          type="text"
+                          value={editSlotsNote}
+                          onChange={(e) => setEditSlotsNote(e.target.value)}
+                          placeholder="e.g. manual HWID activation, batch of 10"
+                          className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 outline-none focus:border-emerald-500"
+                        />
+                      </div>
                     </div>
                   </div>
 

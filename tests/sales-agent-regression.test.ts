@@ -797,6 +797,93 @@ async function runRegressionSuite() {
     assert.strictEqual(users.length, 0, "No accounts (with password hashes) should ship as defaults");
   });
 
+  // =========================================================================
+  // SCENARIO 12: Grounded urgency/scarcity + real product images actually send.
+  // =========================================================================
+  test("12.1 synthesizeSalesPrompt injects REAL LIVE AVAILABILITY only when slots_remaining is set", () => {
+    const toolWithSlots: Tool = { ...clipTool, pricing: { ...clipTool.pricing, slots_remaining: 3, slots_note: "batch of 10" } };
+    const { prompt: withSlots } = synthesizeSalesPrompt({
+      customer: baseCustomer,
+      matchedTools: [toolWithSlots],
+      allAccountToolsSummary: "- ClipShield",
+      recentMessages: baseCustomer.messages!,
+      latestCustomerText: "kitne available hain",
+      settings: { aiAgentEnabled: true, language: "Roman Urdu" } as any,
+    });
+    assert.ok(withSlots.includes("REAL LIVE AVAILABILITY"), "Must inject availability line when slots_remaining is set");
+    assert.ok(withSlots.includes("3 slots"), "Must state the exact configured count");
+    assert.ok(withSlots.includes("batch of 10"), "Must include the scarcity reason note");
+
+    const { prompt: withoutSlots } = synthesizeSalesPrompt({
+      customer: baseCustomer,
+      matchedTools: [clipTool],
+      allAccountToolsSummary: "- ClipShield",
+      recentMessages: baseCustomer.messages!,
+      latestCustomerText: "kitne available hain",
+      settings: { aiAgentEnabled: true, language: "Roman Urdu" } as any,
+    });
+    assert.ok(!withoutSlots.includes("REAL LIVE AVAILABILITY"), "Must NOT inject any availability line when slots_remaining is unset");
+  });
+
+  test("12.2 System prompt forbids fabricated urgency and requires the real count when present", () => {
+    const { systemPrompt } = synthesizeSalesPrompt({
+      customer: baseCustomer,
+      matchedTools: [clipTool],
+      allAccountToolsSummary: "- ClipShield",
+      recentMessages: baseCustomer.messages!,
+      latestCustomerText: "hi",
+      settings: { aiAgentEnabled: true, language: "Roman Urdu" } as any,
+    });
+    assert.ok(/URGENCY & SCARCITY/i.test(systemPrompt));
+    assert.ok(/NEVER INVENTED/i.test(systemPrompt) || /fabricated urgency/i.test(systemPrompt));
+  });
+
+  test("12.3 buildCompactPublicQuery preserves the REAL availability count for the fallback model", () => {
+    const fakePrompt = [
+      "=== PRODUCT CATALOG: ClipShield ===",
+      "Description & Problem Solved: ClipShield bypasses YouTube Content ID claims.",
+      "Pricing: Rs. 1500/mo",
+      "REAL LIVE AVAILABILITY: Exactly 3 slots / IDs remaining right now (batch of 10). This is TRUE — use it for genuine urgency. NEVER state any other availability number.",
+      `CUSTOMER'S LATEST MESSAGE(S): "kitne bache hain"`,
+      "Reply ONLY as the seller..."
+    ].join("\n");
+    const compact = buildCompactPublicQuery(fakePrompt);
+    assert.ok(compact.includes("REAL LIVE AVAILABILITY"), "Availability line must survive into the compact fallback query");
+    assert.ok(compact.includes("3 slots"));
+  });
+
+  test("12.4 Uploaded product images are listed with [SEND_IMAGE: <id>] instruction in the prompt", () => {
+    const toolWithImage: Tool = {
+      ...clipTool,
+      images: [{ id: "img_1", filename: "shot1.png", filepath: "data/tool-images/shot1.png", url: "/tool-images/shot1.png", description: "Dashboard screenshot" } as any],
+    };
+    const { prompt } = synthesizeSalesPrompt({
+      customer: baseCustomer,
+      matchedTools: [toolWithImage],
+      allAccountToolsSummary: "- ClipShield",
+      recentMessages: baseCustomer.messages!,
+      latestCustomerText: "screenshot dikhao",
+      settings: { aiAgentEnabled: true, language: "Roman Urdu" } as any,
+    });
+    assert.ok(prompt.includes("Uploaded Product Images"));
+    assert.ok(prompt.includes("img_1"));
+    assert.ok(prompt.includes("[SEND_IMAGE:"));
+  });
+
+  test("12.5 buildCompactPublicQuery preserves the image id list for the fallback model", () => {
+    const fakePrompt = [
+      "=== PRODUCT CATALOG: ClipShield ===",
+      "Description & Problem Solved: ClipShield bypasses YouTube Content ID claims.",
+      "Uploaded Product Images (use [SEND_IMAGE: <id>] to attach one):",
+      "  - id=\"img_1\": Dashboard screenshot",
+      `CUSTOMER'S LATEST MESSAGE(S): "screenshot dikhao"`,
+      "Reply ONLY as the seller..."
+    ].join("\n");
+    const compact = buildCompactPublicQuery(fakePrompt);
+    assert.ok(compact.includes("img_1"), `Image id must survive into the compact query. Got:\n${compact}`);
+    assert.ok(compact.includes("SEND_IMAGE"));
+  });
+
   for (const t of testQueue) {
     try {
       await t.fn();

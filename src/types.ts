@@ -58,6 +58,16 @@ export interface ToolPricing {
   min_negotiable_pkr?: number;
   min_negotiable_usd?: number;
   negotiation_notes?: string;
+  /**
+   * TRUE remaining-availability count you maintain by hand (e.g. limited
+   * license IDs / onboarding slots for this batch). When set, the agent is
+   * allowed to use it for real urgency/scarcity messaging. Leave unset/undefined
+   * to disable scarcity messaging entirely — the agent is never allowed to
+   * invent a number that isn't configured here.
+   */
+  slots_remaining?: number;
+  /** Optional short note on WHY slots are limited (shown to the agent only), e.g. "manual HWID activation, batch of 10". */
+  slots_note?: string;
   [key: string]: any;
 }
 

@@ -1305,9 +1305,20 @@ ${catalogMatch[1].trim().slice(0, 260)}` : "Store Catalog: 1. ClipShield (YouTub
     paymentBlock = `[REAL PAYMENT ACCOUNTS \u2014 use ONLY these exact numbers, NEVER invent different ones]
 ${paymentMatch[1].trim()}`;
   }
+  let availabilityLine = "";
+  const availabilityMatch = prompt.match(/REAL LIVE AVAILABILITY:\s*([^\n]+)/i);
+  if (availabilityMatch && availabilityMatch[1]) {
+    availabilityLine = `REAL LIVE AVAILABILITY: ${availabilityMatch[1].trim()}`;
+  }
+  let imagesBlock = "";
+  const imagesMatch = prompt.match(/Uploaded Product Images[^\n]*:\s*\n([\s\S]*?)(?=\n[A-Z]|\n===|$)/i);
+  if (imagesMatch && imagesMatch[1].trim()) {
+    imagesBlock = `Uploaded Product Images (use [SEND_IMAGE: <id>]):
+${imagesMatch[1].trim()}`;
+  }
   const roleRules = [
     "Role: Real human Pakistani software consultant chatting on WhatsApp. MUST reply in Roman Urdu only (Urdu words written in English letters, like 'bhai', 'kitna', 'Walaikum Assalam'). NEVER reply in English.",
-    "RULES: (1) NEVER invent a persona name like 'Aamir'. (2) NEVER offer SEO or web design. (3) ClipShield and VoiceDelta are ALWAYS available. (4) For VoiceDelta, always call it VoiceDelta (not ElevenLabs). (5) In ongoing chats, do NOT repeat 'AOA' or the customer's name on every message. (6) NEVER use markdown link syntax [text](url) \u2014 always write URLs as plain text. (7) NEVER fabricate account numbers, payment details, or bank info \u2014 only use what is given."
+    "RULES: (1) NEVER invent a persona name like 'Aamir'. (2) NEVER offer SEO or web design. (3) ClipShield and VoiceDelta are ALWAYS available. (4) For VoiceDelta, always call it VoiceDelta (not ElevenLabs). (5) In ongoing chats, do NOT repeat 'AOA' or the customer's name on every message. (6) NEVER use markdown link syntax [text](url) \u2014 always write URLs as plain text. (7) NEVER fabricate account numbers, payment details, or bank info \u2014 only use what is given. (8) If a REAL LIVE AVAILABILITY count is given below, use it assertively for urgency \u2014 otherwise NEVER claim limited slots/stock, that is fabrication. (9) To send a product image, output [SEND_IMAGE: <id>] using only an id listed below \u2014 never claim to send an image without this tag."
   ].join("\n");
   if (salesDirectives.includes("template message was JUST sent")) {
     extractedLinksBlock = "";
@@ -1315,6 +1326,8 @@ ${paymentMatch[1].trim()}`;
   const bodyParts = [
     roleRules,
     toolSummary,
+    availabilityLine,
+    imagesBlock,
     quotedRatesLine,
     paymentBlock,
     salesDirectives,
@@ -3423,7 +3436,12 @@ CRITICAL RULES (ABSOLUTELY NO ROBOTIC BOT BEHAVIOR & ZERO HALLUCINATIONS):
    - On "mehnga hai / budget kam / soch ke bataunga / X me de do / dusra sasta / pehle test", first diagnose the REAL objection (price, value, trust, risk, timing, feature, competitor, indecision). Then: Acknowledge -> Diagnose -> Reframe (value) -> Resolve -> Next step.
    - Only ever offer a discount or lower price that actually exists in the product's negotiation rules / allowed discounts, and tie any concession to a condition (pay today / longer term). Never fabricate urgency or scarcity.
 14. STRICT ROLE SEPARATION:
-   - You are ONLY the seller. NEVER write the customer's messages or reply on their behalf (e.g. never output "haan bhej do" or "payment kaise karni hai?" as if the customer said it). Output only your own seller reply.`;
+   - You are ONLY the seller. NEVER write the customer's messages or reply on their behalf (e.g. never output "haan bhej do" or "payment kaise karni hai?" as if the customer said it). Output only your own seller reply.
+15. URGENCY & SCARCITY \u2014 ONLY THE REAL NUMBER, NEVER INVENTED:
+   - If "REAL LIVE AVAILABILITY" is shown above for this product, that count is genuine (the seller maintains it by hand) and you SHOULD use it to create real urgency: lead with it naturally ("bhai sirf X ID reh gaye hain is batch mein"), tie it to a clear next step (confirm now / HWID abhi bhej dein), and repeat it if the customer hesitates.
+   - If "REAL LIVE AVAILABILITY" is NOT shown, this product has no live scarcity data: do NOT say "limited slots", "sirf X reh gaye hain", "jaldi karein warna khatam", or any stock/countdown claim \u2014 that would be fabricated urgency, banned by rule 13. Sell on value, not invented pressure.
+16. SEND REAL PRODUCT IMAGES:
+   - If "Uploaded Product Images" are listed above, you may attach one by outputting [SEND_IMAGE: <id>] using the exact id shown \u2014 do this whenever the customer asks for a screenshot, proof, or what the interface/dashboard looks like. Never claim to have sent an image without this tag, and never reference an id that isn't listed.`;
   const memoryLines = [];
   memoryLines.push(`[CUSTOMER CONTEXT & PROFILE]`);
   if (customer.name || memory?.customerName) {
@@ -3468,6 +3486,12 @@ CRITICAL RULES (ABSOLUTELY NO ROBOTIC BOT BEHAVIOR & ZERO HALLUCINATIONS):
       if (t.pricing?.negotiation_notes) {
         toolLines.push(`Negotiation Policy: ${t.pricing.negotiation_notes}`);
       }
+      if (typeof t.pricing?.slots_remaining === "number") {
+        const n = t.pricing.slots_remaining;
+        toolLines.push(
+          `REAL LIVE AVAILABILITY: Exactly ${n} slot${n === 1 ? "" : "s"} / ID${n === 1 ? "" : "s"} remaining right now${t.pricing.slots_note ? ` (${t.pricing.slots_note})` : ""}. This is TRUE \u2014 use it for genuine urgency. NEVER state any other availability number.`
+        );
+      }
       if (t.features && t.features.length > 0) {
         toolLines.push(`Key Features:`);
         t.features.forEach((f) => toolLines.push(`  * ${f}`));
@@ -3489,6 +3513,10 @@ ${t.how_to_use}`);
       if (t.links && t.links.length > 0) {
         toolLines.push(`Official Links & Downloads:`);
         t.links.forEach((l) => toolLines.push(`  - ${l.title}: ${l.url} ${l.note ? `(${l.note})` : ""}`));
+      }
+      if (t.images && t.images.length > 0) {
+        toolLines.push(`Uploaded Product Images (use [SEND_IMAGE: <id>] to attach one):`);
+        t.images.forEach((img) => toolLines.push(`  - id="${img.id}": ${img.title || img.description || "product image"}`));
       }
       if (t.sections && t.sections.length > 0) {
         toolLines.push(`Constant Dynamic Section Message:`);
@@ -4001,6 +4029,17 @@ ${primaryLink}`, guide],
       templateMessage
     };
   }
+  const wantsScreenshot = SCREENSHOT_REQUEST_REGEX.test(latestCustomerText);
+  const availableImage = lockedTool?.images?.find((img) => img?.filepath || img?.url);
+  if (wantsScreenshot && lockedTool && availableImage) {
+    const imagePath = availableImage.filepath || availableImage.url;
+    await evaluateAndApplyCustomerStatus(cleanJid, customer, latestCustomerText, null, userId, buyingIntent);
+    return {
+      textMessages: [`Han bhai, ye dekho ${lockedTool.name} ka interface \u{1F447}`],
+      imageToSend: imagePath,
+      templateMessage
+    };
+  }
   const { prompt, systemPrompt } = synthesizeSalesPrompt({
     customer,
     matchedTools: match.matched,
@@ -4030,7 +4069,9 @@ ${primaryLink}`, guide],
   let imageToSend = null;
   const imageTagMatch = text.match(/\[(?:SEND_IMAGE|ATTACH_IMAGE):\s*([^\]]+)\]/i);
   if (imageTagMatch) {
-    imageToSend = imageTagMatch[1].trim().replace(/^["']|["']$/g, "");
+    const ref = imageTagMatch[1].trim().replace(/^["']|["']$/g, "");
+    const matchedImage = lockedTool?.images?.find((img) => img.id === ref || img.filename === ref);
+    imageToSend = matchedImage ? matchedImage.filepath || matchedImage.url : null;
     text = text.replace(imageTagMatch[0], "").trim();
   }
   await evaluateAndApplyCustomerStatus(cleanJid, customer, latestCustomerText, extractedAiStatus, userId, buyingIntent);
@@ -4167,7 +4208,7 @@ async function evaluateAndApplyCustomerStatus(cleanJid, customer, latestCustomer
     console.error("[Agent] Error evaluating customer status:", err);
   }
 }
-var BUYING_INTENT_REGEX, EXPLICIT_PAYMENT_REGEX, EXPLICIT_LINK_REGEX, ALTERNATIVE_REGEX, PRICE_MENTION_REGEX, customerQueues, globalSequenceCounter;
+var BUYING_INTENT_REGEX, EXPLICIT_PAYMENT_REGEX, EXPLICIT_LINK_REGEX, ALTERNATIVE_REGEX, SCREENSHOT_REQUEST_REGEX, PRICE_MENTION_REGEX, customerQueues, globalSequenceCounter;
 var init_agent = __esm({
   "src/server/agent.ts"() {
     init_ai();
@@ -4183,6 +4224,7 @@ var init_agent = __esm({
     EXPLICIT_PAYMENT_REGEX = /(?:payment\s*(?:details|method|info|kaise|karni|kar\s*d|number|account)|kaise?\s*pay|kahan?\s*(?:pay|paise|paisay|bhej)|account\s*(?:number|details|title|no)\b|jazz\s*cash|jazzcash|easy\s*paisa|easypaisa|\braast\b|bank\s*(?:details|account)|\bpay\s*(?:karna|karni|karu|karoon|kru|kro|kese|kaise)\b|pais(?:e|ay)?\s*(?:kaise|kese)\s*(?:du|doon|dun|de|karu|karoon)|\bhow\s*to\s*pay\b)/i;
     EXPLICIT_LINK_REGEX = /(?:\blink\b|\blinks\b|download|trial\s*(?:link|de)|website\s*(?:link|do)|\bportal\b)/i;
     ALTERNATIVE_REGEX = /(?:alternative|alternate|doosr|dusr|koi\s*aur|kuch\s*aur|compare|comparison|difference|farq|instead\s*of|behtar\s*option|other\s*tool|second\s*option)/i;
+    SCREENSHOT_REQUEST_REGEX = /(?:screenshot|screen\s*shot|\bpic\b|picture|photo|tasveer|tasvir|dikhao|dikha\s*do|dikhaen|dikha\s*den|proof|sample\s*(?:dikhao|dikha)|interface\s*(?:dikhao|bhejo|dikha)|dashboard\s*(?:dikhao|bhejo)|demo\s*dikhao)/i;
     PRICE_MENTION_REGEX = /(?:^|\n)[^\n]{0,40}?(?:rs\.?\s?[\d,]+|[\d,]+\s?(?:rs|pkr|rupees)|\$\s?[\d,]+)[^\n]{0,20}/gi;
     customerQueues = /* @__PURE__ */ new Map();
     globalSequenceCounter = 100;

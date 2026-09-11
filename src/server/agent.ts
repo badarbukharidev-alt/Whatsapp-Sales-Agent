@@ -38,6 +38,10 @@ const EXPLICIT_LINK_REGEX =
 const ALTERNATIVE_REGEX =
   /(?:alternative|alternate|doosr|dusr|koi\s*aur|kuch\s*aur|compare|comparison|difference|farq|instead\s*of|behtar\s*option|other\s*tool|second\s*option)/i;
 
+/** Customer wants visual proof — screenshot / interface / sample photo. */
+const SCREENSHOT_REQUEST_REGEX =
+  /(?:screenshot|screen\s*shot|\bpic\b|picture|photo|tasveer|tasvir|dikhao|dikha\s*do|dikhaen|dikha\s*den|proof|sample\s*(?:dikhao|dikha)|interface\s*(?:dikhao|bhejo|dikha)|dashboard\s*(?:dikhao|bhejo)|demo\s*dikhao)/i;
+
 /**
  * Renders a saved product template. By default the message is returned EXACTLY
  * as stored. Only when variables are explicitly enabled are the recognized
@@ -520,6 +524,27 @@ async function generateResponse(
   }
   // ── END DETERMINISTIC LINK DELIVERY ─────────────────────────────────────
 
+  // ── DETERMINISTIC IMAGE DELIVERY ────────────────────────────────────────
+  // If the customer asks for a screenshot/proof/interface photo and this
+  // product actually has an uploaded image, send the REAL uploaded file —
+  // never wait on the AI to notice, decide, and correctly emit a
+  // [SEND_IMAGE: ...] tag (unreliable, especially on the public fallback
+  // model). This is the same "don't trust the model with something we can
+  // just do in code" pattern as the link/payment delivery above, and it's
+  // what makes uploaded tool images actually get sent at all.
+  const wantsScreenshot = SCREENSHOT_REQUEST_REGEX.test(latestCustomerText);
+  const availableImage = lockedTool?.images?.find((img) => img?.filepath || img?.url);
+  if (wantsScreenshot && lockedTool && availableImage) {
+    const imagePath = availableImage.filepath || availableImage.url;
+    await evaluateAndApplyCustomerStatus(cleanJid, customer, latestCustomerText, null, userId, buyingIntent);
+    return {
+      textMessages: [`Han bhai, ye dekho ${lockedTool.name} ka interface 👇`],
+      imageToSend: imagePath,
+      templateMessage,
+    };
+  }
+  // ── END DETERMINISTIC IMAGE DELIVERY ────────────────────────────────────
+
   // 8. Synthesize lean, controlled sales prompt (ONLY the locked product's data).
   const { prompt, systemPrompt } = synthesizeSalesPrompt({
     customer,
@@ -551,11 +576,17 @@ async function generateResponse(
     text = text.replace(statusTagMatch[0], "").trim();
   }
 
-  // 6. Extract image tags e.g. [SEND_IMAGE: <filepath>]
+  // 6. Extract image tags e.g. [SEND_IMAGE: <id>] — resolved against the
+  // locked tool's real uploaded images so the model can only ever reference
+  // an image that actually exists (an id it invents simply resolves to
+  // nothing and no image is sent, rather than trying to read an arbitrary
+  // fabricated file path off disk).
   let imageToSend: string | null = null;
   const imageTagMatch = text.match(/\[(?:SEND_IMAGE|ATTACH_IMAGE):\s*([^\]]+)\]/i);
   if (imageTagMatch) {
-    imageToSend = imageTagMatch[1].trim().replace(/^["']|["']$/g, "");
+    const ref = imageTagMatch[1].trim().replace(/^["']|["']$/g, "");
+    const matchedImage = lockedTool?.images?.find((img) => img.id === ref || img.filename === ref);
+    imageToSend = matchedImage ? matchedImage.filepath || matchedImage.url : null;
     text = text.replace(imageTagMatch[0], "").trim();
   }
 

@@ -440,10 +440,26 @@ export function buildCompactPublicQuery(prompt: string, systemPrompt?: string, j
     paymentBlock = `[REAL PAYMENT ACCOUNTS — use ONLY these exact numbers, NEVER invent different ones]\n${paymentMatch[1].trim()}`;
   }
 
+  // 3e. Extract the REAL live availability/scarcity line and the uploaded
+  // product images list — both must survive compaction: availability is the
+  // only number the model is allowed to use for urgency, and the image ids
+  // are the only ones it may reference in a [SEND_IMAGE: <id>] tag.
+  let availabilityLine = "";
+  const availabilityMatch = prompt.match(/REAL LIVE AVAILABILITY:\s*([^\n]+)/i);
+  if (availabilityMatch && availabilityMatch[1]) {
+    availabilityLine = `REAL LIVE AVAILABILITY: ${availabilityMatch[1].trim()}`;
+  }
+
+  let imagesBlock = "";
+  const imagesMatch = prompt.match(/Uploaded Product Images[^\n]*:\s*\n([\s\S]*?)(?=\n[A-Z]|\n===|$)/i);
+  if (imagesMatch && imagesMatch[1].trim()) {
+    imagesBlock = `Uploaded Product Images (use [SEND_IMAGE: <id>]):\n${imagesMatch[1].trim()}`;
+  }
+
   // 4. Strict guardrails against fake personas, SEO hallucinations, and repeated greetings
   const roleRules = [
     "Role: Real human Pakistani software consultant chatting on WhatsApp. MUST reply in Roman Urdu only (Urdu words written in English letters, like 'bhai', 'kitna', 'Walaikum Assalam'). NEVER reply in English.",
-    "RULES: (1) NEVER invent a persona name like 'Aamir'. (2) NEVER offer SEO or web design. (3) ClipShield and VoiceDelta are ALWAYS available. (4) For VoiceDelta, always call it VoiceDelta (not ElevenLabs). (5) In ongoing chats, do NOT repeat 'AOA' or the customer's name on every message. (6) NEVER use markdown link syntax [text](url) — always write URLs as plain text. (7) NEVER fabricate account numbers, payment details, or bank info — only use what is given.",
+    "RULES: (1) NEVER invent a persona name like 'Aamir'. (2) NEVER offer SEO or web design. (3) ClipShield and VoiceDelta are ALWAYS available. (4) For VoiceDelta, always call it VoiceDelta (not ElevenLabs). (5) In ongoing chats, do NOT repeat 'AOA' or the customer's name on every message. (6) NEVER use markdown link syntax [text](url) — always write URLs as plain text. (7) NEVER fabricate account numbers, payment details, or bank info — only use what is given. (8) If a REAL LIVE AVAILABILITY count is given below, use it assertively for urgency — otherwise NEVER claim limited slots/stock, that is fabrication. (9) To send a product image, output [SEND_IMAGE: <id>] using only an id listed below — never claim to send an image without this tag.",
   ].join("\n");
 
   // If template was JUST sent, do not append extractedLinksBlock to prevent duplicate links
@@ -455,6 +471,8 @@ export function buildCompactPublicQuery(prompt: string, systemPrompt?: string, j
   const bodyParts = [
     roleRules,
     toolSummary,
+    availabilityLine,
+    imagesBlock,
     quotedRatesLine,
     paymentBlock,
     salesDirectives,

@@ -107,7 +107,12 @@ CRITICAL RULES (ABSOLUTELY NO ROBOTIC BOT BEHAVIOR & ZERO HALLUCINATIONS):
    - On "mehnga hai / budget kam / soch ke bataunga / X me de do / dusra sasta / pehle test", first diagnose the REAL objection (price, value, trust, risk, timing, feature, competitor, indecision). Then: Acknowledge -> Diagnose -> Reframe (value) -> Resolve -> Next step.
    - Only ever offer a discount or lower price that actually exists in the product's negotiation rules / allowed discounts, and tie any concession to a condition (pay today / longer term). Never fabricate urgency or scarcity.
 14. STRICT ROLE SEPARATION:
-   - You are ONLY the seller. NEVER write the customer's messages or reply on their behalf (e.g. never output "haan bhej do" or "payment kaise karni hai?" as if the customer said it). Output only your own seller reply.`;
+   - You are ONLY the seller. NEVER write the customer's messages or reply on their behalf (e.g. never output "haan bhej do" or "payment kaise karni hai?" as if the customer said it). Output only your own seller reply.
+15. URGENCY & SCARCITY — ONLY THE REAL NUMBER, NEVER INVENTED:
+   - If "REAL LIVE AVAILABILITY" is shown above for this product, that count is genuine (the seller maintains it by hand) and you SHOULD use it to create real urgency: lead with it naturally ("bhai sirf X ID reh gaye hain is batch mein"), tie it to a clear next step (confirm now / HWID abhi bhej dein), and repeat it if the customer hesitates.
+   - If "REAL LIVE AVAILABILITY" is NOT shown, this product has no live scarcity data: do NOT say "limited slots", "sirf X reh gaye hain", "jaldi karein warna khatam", or any stock/countdown claim — that would be fabricated urgency, banned by rule 13. Sell on value, not invented pressure.
+16. SEND REAL PRODUCT IMAGES:
+   - If "Uploaded Product Images" are listed above, you may attach one by outputting [SEND_IMAGE: <id>] using the exact id shown — do this whenever the customer asks for a screenshot, proof, or what the interface/dashboard looks like. Never claim to have sent an image without this tag, and never reference an id that isn't listed.`;
 
   // 2. CUSTOMER MEMORY & CONTEXT BLOCK
   const memoryLines: string[] = [];
@@ -160,6 +165,15 @@ CRITICAL RULES (ABSOLUTELY NO ROBOTIC BOT BEHAVIOR & ZERO HALLUCINATIONS):
         toolLines.push(`Negotiation Policy: ${t.pricing.negotiation_notes}`);
       }
 
+      // REAL scarcity — only present when the admin has actually set a live
+      // count. This is the ONLY number the agent may ever use for urgency.
+      if (typeof t.pricing?.slots_remaining === "number") {
+        const n = t.pricing.slots_remaining;
+        toolLines.push(
+          `REAL LIVE AVAILABILITY: Exactly ${n} slot${n === 1 ? "" : "s"} / ID${n === 1 ? "" : "s"} remaining right now${t.pricing.slots_note ? ` (${t.pricing.slots_note})` : ""}. This is TRUE — use it for genuine urgency. NEVER state any other availability number.`
+        );
+      }
+
       // Features & Selling Points
       if (t.features && t.features.length > 0) {
         toolLines.push(`Key Features:`);
@@ -187,6 +201,15 @@ CRITICAL RULES (ABSOLUTELY NO ROBOTIC BOT BEHAVIOR & ZERO HALLUCINATIONS):
       if (t.links && t.links.length > 0) {
         toolLines.push(`Official Links & Downloads:`);
         t.links.forEach((l) => toolLines.push(`  - ${l.title}: ${l.url} ${l.note ? `(${l.note})` : ""}`));
+      }
+
+      // Uploaded product images — the ONLY images you may ever offer. To send
+      // one, output the tag [SEND_IMAGE: <id>] anywhere in your reply (it is
+      // stripped before the customer sees it and the real file is attached).
+      // NEVER claim to have sent a screenshot without this tag.
+      if (t.images && t.images.length > 0) {
+        toolLines.push(`Uploaded Product Images (use [SEND_IMAGE: <id>] to attach one):`);
+        t.images.forEach((img) => toolLines.push(`  - id="${img.id}": ${img.title || img.description || "product image"}`));
       }
 
       // SINGLE CONSTANT DYNAMIC SECTION MESSAGE
