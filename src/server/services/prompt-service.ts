@@ -127,7 +127,7 @@ CRITICAL RULES (ABSOLUTELY NO ROBOTIC BOT BEHAVIOR & ZERO HALLUCINATIONS):
   }
   if (memory?.quotedPrices && Object.keys(memory.quotedPrices).length > 0) {
     const quotes = Object.entries(memory.quotedPrices).map(([t, p]) => `${t}: ${p}`).join(", ");
-    memoryLines.push(`Previously Quoted Rates: ${quotes}`);
+    memoryLines.push(`Previously Quoted Rates (ALREADY TOLD TO THIS CUSTOMER — repeat these exact numbers, do NOT state a different price): ${quotes}`);
   }
   if (isReturningCustomer) {
     memoryLines.push(`DIRECTIVE: Conversation is active. Do NOT greet with "AOA" or reset context. Do NOT repeatedly say customer's name. Reply directly to customer's message.`);

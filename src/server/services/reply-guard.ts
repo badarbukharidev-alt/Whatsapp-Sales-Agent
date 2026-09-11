@@ -8,6 +8,22 @@ import { Tool } from "../../types.js";
 /** Any http(s) / www URL token. */
 const URL_REGEX = /(?:https?:\/\/|www\.)[^\s<>()\[\]{}"'`]+/gi;
 
+/**
+ * Phrases that only show up when the model breaks character and starts talking
+ * ABOUT the prompt/assistant framework instead of replying as the seller — e.g.
+ * "Got it — no reset, no repeated name. Ready for the next message. What did he
+ * say?" This happens when a weak fallback model is handed a cut-off or overly
+ * meta prompt and echoes the instructions back instead of using them.
+ */
+const META_LEAK_REGEX =
+  /(?:\bgot it\b[^.!?]{0,40}(?:ready for|next message)|what did (?:he|she|they) say|what'?s the message (?:from|the customer)|message (?:from )?(?:the )?customer that i (?:need|have) to respond|your message (?:got|seems) cut off|could you resend|please resend|as an ai\b|i(?:'m| am) an ai\b|i don'?t have (?:access|context)|no reset,? no repeated name|i(?:'ll| will) reply (?:directly|now)\s*$)/i;
+
+/** True when the reply breaks character and talks about the prompt instead of answering it. */
+export function isMetaLeak(text: string): boolean {
+  if (!text) return false;
+  return META_LEAK_REGEX.test(text);
+}
+
 /** Obvious placeholder hosts a model invents when it has no real link. */
 const PLACEHOLDER_HOST_REGEX =
   /(?:example\.(?:com|org|net)|yourdomain|your-?site|placeholder|dummy|test\.com|xyz\.com|abc\.com|link\.com|sample\.com|domain\.com)/i;

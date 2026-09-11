@@ -1143,8 +1143,10 @@ async function callOpenAI(apiKey, prompt, systemPrompt) {
   }
   return { success: false, text: "", provider: "OpenAI", error: "OpenAI request failed" };
 }
-function buildCompactPublicQuery(prompt, systemPrompt) {
-  const isClassification = Boolean(systemPrompt && /json|classif|match|categor/i.test(systemPrompt)) || /json|classifier|categor|intent/i.test(prompt);
+function buildCompactPublicQuery(prompt, systemPrompt, jsonMode) {
+  const isClassification = Boolean(jsonMode) || // Narrow legacy fallback for callers that don't pass jsonMode explicitly:
+  // only an UNAMBIGUOUS "this persona outputs JSON" system prompt counts.
+  Boolean(systemPrompt && /\bjson[\s-]*only\b|\bstrict\s*json\b|\boutput\s+valid\s+json\b/i.test(systemPrompt));
   if (isClassification) {
     if (prompt.length <= 1e3) return prompt;
     return prompt.slice(0, 1e3);
@@ -1218,6 +1220,11 @@ ${catalogMatch[1].trim().slice(0, 260)}` : "Store Catalog: 1. ClipShield (YouTub
   if (ctrlMatch && ctrlMatch[1]) {
     salesDirectives = `DIRECTIVE: ${ctrlMatch[1].trim().replace(/\n+/g, " | ")}`;
   }
+  let quotedRatesLine = "";
+  const quotedMatch = prompt.match(/Previously Quoted Rates[^:]*:\s*([^\n]+)/i);
+  if (quotedMatch && quotedMatch[1]) {
+    quotedRatesLine = `ALREADY QUOTED (repeat these exact numbers, never contradict): ${quotedMatch[1].trim()}`;
+  }
   const roleRules = [
     "Role: Real human Pakistani software consultant chatting on WhatsApp. MUST reply in Roman Urdu only (Urdu words written in English letters, like 'bhai', 'kitna', 'Walaikum Assalam'). NEVER reply in English.",
     "RULES: (1) NEVER invent a persona name like 'Aamir'. (2) NEVER offer SEO or web design. (3) ClipShield and VoiceDelta are ALWAYS available. (4) For VoiceDelta, always call it VoiceDelta (not ElevenLabs). (5) In ongoing chats, do NOT repeat 'AOA' or the customer's name on every message. (6) NEVER use markdown link syntax [text](url) \u2014 always write URLs as plain text. (7) NEVER fabricate account numbers, payment details, or bank info \u2014 only use what is given."
@@ -1228,6 +1235,7 @@ ${catalogMatch[1].trim().slice(0, 260)}` : "Store Catalog: 1. ClipShield (YouTub
   const bodyParts = [
     roleRules,
     toolSummary,
+    quotedRatesLine,
     salesDirectives,
     recentContext,
     customerMsg ? `Customer message: "${customerMsg}"` : prompt.slice(-250),
@@ -1236,8 +1244,8 @@ ${catalogMatch[1].trim().slice(0, 260)}` : "Store Catalog: 1. ClipShield (YouTub
   const fullQuery = [...bodyParts, extractedLinksBlock].filter(Boolean).join("\n\n");
   return fullQuery;
 }
-async function callPublicFallback(provider, prompt, systemPrompt) {
-  const compactQuery = buildCompactPublicQuery(prompt, systemPrompt);
+async function callPublicFallback(provider, prompt, systemPrompt, jsonMode) {
+  const compactQuery = buildCompactPublicQuery(prompt, systemPrompt, jsonMode);
   const safeQuery = compactQuery.length > 3e3 ? compactQuery.substring(0, 3e3) : compactQuery;
   const encodedQuery = encodeURIComponent(safeQuery);
   let url = `https://api-rebix.zone.id/api/gemini?q=${encodedQuery}`;
@@ -1275,7 +1283,7 @@ async function callPublicFallback(provider, prompt, systemPrompt) {
   }
   return { success: false, text: "", provider };
 }
-async function askAI(prompt, systemPrompt, userId) {
+async function askAI(prompt, systemPrompt, userId, jsonMode) {
   const settings = await getSettings(userId);
   const geminiKey = settings.geminiApiKey?.trim() || process.env.GEMINI_API_KEY?.trim();
   const groqKey = settings.groqApiKey?.trim() || process.env.GROQ_API_KEY?.trim();
@@ -1304,7 +1312,7 @@ async function askAI(prompt, systemPrompt, userId) {
   console.warn("[AI] Official API keys not available or failed. Trying public proxy fallbacks...");
   const publicProviders = preferred.includes("deepseek") ? ["DeepSeek", "Gemini", "GPTLogic"] : ["Gemini", "DeepSeek", "GPTLogic"];
   for (const prov of publicProviders) {
-    const res = await callPublicFallback(prov, prompt, systemPrompt);
+    const res = await callPublicFallback(prov, prompt, systemPrompt, jsonMode);
     if (res.success && res.text) {
       return res.text;
     }
@@ -2678,7 +2686,7 @@ Rules:
 
 JSON format:
 {"matchedToolIds": string[], "isUnknownProduct": boolean, "queryProduct": string | null}`;
-    const reply = await askAI(prompt, "You are a JSON-only tool classifier. Output valid JSON only.", userId);
+    const reply = await askAI(prompt, "You are a JSON-only tool classifier. Output valid JSON only.", userId, true);
     const jsonMatch = reply.match(/\{[\s\S]*?\}/);
     if (!jsonMatch) return null;
     const parsed = JSON.parse(jsonMatch[0]);
@@ -3316,7 +3324,7 @@ CRITICAL RULES (ABSOLUTELY NO ROBOTIC BOT BEHAVIOR & ZERO HALLUCINATIONS):
   }
   if (memory?.quotedPrices && Object.keys(memory.quotedPrices).length > 0) {
     const quotes = Object.entries(memory.quotedPrices).map(([t, p]) => `${t}: ${p}`).join(", ");
-    memoryLines.push(`Previously Quoted Rates: ${quotes}`);
+    memoryLines.push(`Previously Quoted Rates (ALREADY TOLD TO THIS CUSTOMER \u2014 repeat these exact numbers, do NOT state a different price): ${quotes}`);
   }
   if (isReturningCustomer) {
     memoryLines.push(`DIRECTIVE: Conversation is active. Do NOT greet with "AOA" or reset context. Do NOT repeatedly say customer's name. Reply directly to customer's message.`);
@@ -3465,6 +3473,10 @@ var init_prompt_service = __esm({
 });
 
 // src/server/services/reply-guard.ts
+function isMetaLeak(text) {
+  if (!text) return false;
+  return META_LEAK_REGEX.test(text);
+}
 function isBareAffirmation(text) {
   if (!text) return false;
   const words = text.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ").split(/\s+/).filter(Boolean);
@@ -3578,10 +3590,11 @@ function stripRepeatedOffer(text, lastAgentText) {
   const result = kept.join("\n").trim();
   return result.length > 0 ? result : text;
 }
-var URL_REGEX, PLACEHOLDER_HOST_REGEX, AFFIRMATION_WORD_REGEX, AFFIRMATION_FILLER_REGEX, OFFER_VERB_SOURCE, OFFER_VERB_REGEX, CONTINUATION_STARTER_REGEX;
+var URL_REGEX, META_LEAK_REGEX, PLACEHOLDER_HOST_REGEX, AFFIRMATION_WORD_REGEX, AFFIRMATION_FILLER_REGEX, OFFER_VERB_SOURCE, OFFER_VERB_REGEX, CONTINUATION_STARTER_REGEX;
 var init_reply_guard = __esm({
   "src/server/services/reply-guard.ts"() {
     URL_REGEX = /(?:https?:\/\/|www\.)[^\s<>()\[\]{}"'`]+/gi;
+    META_LEAK_REGEX = /(?:\bgot it\b[^.!?]{0,40}(?:ready for|next message)|what did (?:he|she|they) say|what'?s the message (?:from|the customer)|message (?:from )?(?:the )?customer that i (?:need|have) to respond|your message (?:got|seems) cut off|could you resend|please resend|as an ai\b|i(?:'m| am) an ai\b|i don'?t have (?:access|context)|no reset,? no repeated name|i(?:'ll| will) reply (?:directly|now)\s*$)/i;
     PLACEHOLDER_HOST_REGEX = /(?:example\.(?:com|org|net)|yourdomain|your-?site|placeholder|dummy|test\.com|xyz\.com|abc\.com|link\.com|sample\.com|domain\.com)/i;
     AFFIRMATION_WORD_REGEX = /^(?:g|gg|gee|ji|jee|jii|ha|haan|han|hn|hnji|hanji|jihan|ok|oky|okay|okk|k|acha|achaa|achha|theek|thek|thik|sahi|yes|ya|yeah|yep|yup|sure|done|zaroor|bilkul|bhejo|bhej|bhejdo|bhejde|bhejein|bhejen|send|dedo|dedein|krdo|kardo|kar|do|karo|please|plz|pls|bhai|bro|sir)$/i;
     AFFIRMATION_FILLER_REGEX = /^(?:hai|hain|hy|he|na|nah|yr|yaar|jani|jaan|zra|zara|abhi|to|tou)$/i;
@@ -3606,6 +3619,11 @@ function renderTemplateMessage(tm, tool) {
     /\{tool_name\}|\{price_pkr\}|\{price_usd\}|\{link\}/g,
     (m) => values[m] !== void 0 && values[m] !== "" ? values[m] : m
   );
+}
+function extractQuotedPriceSummary(templateContent) {
+  const matches = templateContent.match(PRICE_MENTION_REGEX) || [];
+  const cleaned = matches.map((m) => m.replace(/[^\S\r\n]+/g, " ").trim()).filter(Boolean).slice(0, 4);
+  return cleaned.join(" | ").slice(0, 200);
 }
 function stripFabricatedCustomerTurns(raw) {
   if (!raw) return raw;
@@ -3796,6 +3814,7 @@ async function generateResponse(cleanJid, latestCustomerText, name, batch, userI
   }
   let templateMessage = null;
   const templatesSent = [...memory.templatesSent || []];
+  const quotedPrices = { ...memory.quotedPrices || {} };
   if (lockedTool && directlyDetectedTool && directlyDetectedTool.id === lockedTool.id) {
     const tm = lockedTool.templateMessage;
     const alreadySent = templatesSent.includes(lockedTool.id);
@@ -3803,6 +3822,8 @@ async function generateResponse(cleanJid, latestCustomerText, name, batch, userI
     if (tm?.enabled && (tm.content || "").trim().length > 0 && !(sendOnce && alreadySent)) {
       templateMessage = renderTemplateMessage(tm, lockedTool);
       if (!templatesSent.includes(lockedTool.id)) templatesSent.push(lockedTool.id);
+      const quoted = extractQuotedPriceSummary(templateMessage);
+      if (quoted) quotedPrices[lockedTool.name] = quoted;
     }
   }
   if (lockedTool) {
@@ -3812,7 +3833,8 @@ async function generateResponse(cleanJid, latestCustomerText, name, batch, userI
         currentProductId: lockedTool.id,
         currentProductName: lockedTool.name,
         lastToolDiscussed: lockedTool.name,
-        templatesSent
+        templatesSent,
+        quotedPrices
       },
       userId
     );
@@ -3890,15 +3912,24 @@ ${primaryLink}`, guide],
   }
   await evaluateAndApplyCustomerStatus(cleanJid, customer, latestCustomerText, extractedAiStatus, userId, buyingIntent);
   text = stripFabricatedCustomerTurns(text).replace(/^["']|["']$/g, "").trim();
+  const buildSafeFallbackReply = () => {
+    if (templateMessage) {
+      return "Aap pehle test kar lein, jab satisfied hon toh batayega payment details share kar doonga.";
+    }
+    if (lockedTool) {
+      const alreadyQuoted = quotedPrices[lockedTool.name];
+      const priceLine = alreadyQuoted ? `${lockedTool.name} ka price ${alreadyQuoted} hai` : `${lockedTool.name} ka monthly price Rs. ${lockedTool.pricePkr || 1500} hai`;
+      return `${priceLine}. Bataen aage kaise proceed karna hai, main abhi link aur details bhej deta hoon.`;
+    }
+    return "Walaikum Assalam bhai! Kaise hain aap? Bataen konsa software ya tool dekh rahe hain aap?";
+  };
   if (isEnglishHallucination(text)) {
     console.log(`[Agent:${userId}] Intercepted English AI hallucination ("${text.slice(0, 40)}..."). Replacing with Roman Urdu response.`);
-    if (templateMessage) {
-      text = "Aap pehle test kar lein, jab satisfied hon toh batayega payment details share kar doonga.";
-    } else if (lockedTool) {
-      text = `ClipShield ka monthly price Rs. ${lockedTool.pricePkr || 1500} hai. Agar 1000 Pkr finalize karna hai toh bataen, main abhi link aur account details bhej deta hoon.`;
-    } else {
-      text = "Walaikum Assalam bhai! Kaise hain aap? Bataen konsa software ya tool dekh rahe hain aap?";
-    }
+    text = buildSafeFallbackReply();
+  }
+  if (isMetaLeak(text)) {
+    console.log(`[Agent:${userId}] Intercepted meta-leak AI reply ("${text.slice(0, 60)}..."). Replacing with in-character response.`);
+    text = buildSafeFallbackReply();
   }
   text = cleanAndFixUrls(text, Boolean(templateMessage));
   if (!templateMessage) {
@@ -4013,7 +4044,7 @@ async function evaluateAndApplyCustomerStatus(cleanJid, customer, latestCustomer
     console.error("[Agent] Error evaluating customer status:", err);
   }
 }
-var BUYING_INTENT_REGEX, EXPLICIT_PAYMENT_REGEX, EXPLICIT_LINK_REGEX, ALTERNATIVE_REGEX, customerQueues, globalSequenceCounter;
+var BUYING_INTENT_REGEX, EXPLICIT_PAYMENT_REGEX, EXPLICIT_LINK_REGEX, ALTERNATIVE_REGEX, PRICE_MENTION_REGEX, customerQueues, globalSequenceCounter;
 var init_agent = __esm({
   "src/server/agent.ts"() {
     init_ai();
@@ -4029,6 +4060,7 @@ var init_agent = __esm({
     EXPLICIT_PAYMENT_REGEX = /(?:payment\s*(?:details|method|info|kaise|karni|kar\s*d|number|account)|kaise?\s*pay|kahan?\s*(?:pay|paise|bhej)|account\s*(?:number|details|title|no)\b|jazz\s*cash|jazzcash|easy\s*paisa|easypaisa|\braast\b|bank\s*(?:details|account))/i;
     EXPLICIT_LINK_REGEX = /(?:\blink\b|\blinks\b|download|trial\s*(?:link|de)|website\s*(?:link|do)|\bportal\b)/i;
     ALTERNATIVE_REGEX = /(?:alternative|alternate|doosr|dusr|koi\s*aur|kuch\s*aur|compare|comparison|difference|farq|instead\s*of|behtar\s*option|other\s*tool|second\s*option)/i;
+    PRICE_MENTION_REGEX = /(?:^|\n)[^\n]{0,40}?(?:rs\.?\s?[\d,]+|[\d,]+\s?(?:rs|pkr|rupees)|\$\s?[\d,]+)[^\n]{0,20}/gi;
     customerQueues = /* @__PURE__ */ new Map();
     globalSequenceCounter = 100;
   }
@@ -4153,7 +4185,7 @@ Format required:
 Raw Information:
 ${rawInfo}
 `;
-      const aiResponse = await askAI(prompt, void 0, user?.id);
+      const aiResponse = await askAI(prompt, void 0, user?.id, true);
       let parsedTool;
       try {
         const cleanedResponse = aiResponse.replace(/```json/g, "").replace(/```/g, "").trim();

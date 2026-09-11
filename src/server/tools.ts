@@ -164,7 +164,7 @@ Raw Information:
 ${rawInfo}
 `;
       
-      const aiResponse = await askAI(prompt, undefined, user?.id);
+      const aiResponse = await askAI(prompt, undefined, user?.id, true);
       
       let parsedTool: any;
       try {

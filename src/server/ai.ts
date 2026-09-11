@@ -196,11 +196,23 @@ export async function callOpenAI(apiKey: string, prompt: string, systemPrompt?: 
 /**
  * Builds a compact query for public GET fallbacks that preserves customer message,
  * matched tool details, conversation context, and strict anti-hallucination guardrails.
+ *
+ * `jsonMode` MUST be passed explicitly by callers that actually want raw JSON /
+ * schema output preserved untouched (e.g. the LLM tool classifier). It used to be
+ * guessed from keywords found anywhere in the prompt text ("json", "match",
+ * "categor", "intent") — but ordinary sales-reply prompts legitimately contain
+ * those same words (e.g. the "[SALES CONTROL DIRECTIVES] HIGH BUYING INTENT:"
+ * line), which silently flipped normal customer replies into this raw-slice path
+ * and truncated them BEFORE the customer's actual message, causing the AI to
+ * respond with confused meta-commentary about its own missing prompt instead of
+ * a sales reply. Keyword sniffing on `prompt` is intentionally not used anymore.
  */
-export function buildCompactPublicQuery(prompt: string, systemPrompt?: string): string {
+export function buildCompactPublicQuery(prompt: string, systemPrompt?: string, jsonMode?: boolean): string {
   const isClassification =
-    Boolean(systemPrompt && /json|classif|match|categor/i.test(systemPrompt)) ||
-    /json|classifier|categor|intent/i.test(prompt);
+    Boolean(jsonMode) ||
+    // Narrow legacy fallback for callers that don't pass jsonMode explicitly:
+    // only an UNAMBIGUOUS "this persona outputs JSON" system prompt counts.
+    Boolean(systemPrompt && /\bjson[\s-]*only\b|\bstrict\s*json\b|\boutput\s+valid\s+json\b/i.test(systemPrompt));
 
   // For classification tasks, preserve the prompt and schema intact
   if (isClassification) {
@@ -304,6 +316,14 @@ export function buildCompactPublicQuery(prompt: string, systemPrompt?: string): 
     salesDirectives = `DIRECTIVE: ${ctrlMatch[1].trim().replace(/\n+/g, " | ")}`;
   }
 
+  // 3c. Extract previously-quoted-rates consistency line so the fallback model
+  // never states a different price than what was already sent to this customer.
+  let quotedRatesLine = "";
+  const quotedMatch = prompt.match(/Previously Quoted Rates[^:]*:\s*([^\n]+)/i);
+  if (quotedMatch && quotedMatch[1]) {
+    quotedRatesLine = `ALREADY QUOTED (repeat these exact numbers, never contradict): ${quotedMatch[1].trim()}`;
+  }
+
   // 4. Strict guardrails against fake personas, SEO hallucinations, and repeated greetings
   const roleRules = [
     "Role: Real human Pakistani software consultant chatting on WhatsApp. MUST reply in Roman Urdu only (Urdu words written in English letters, like 'bhai', 'kitna', 'Walaikum Assalam'). NEVER reply in English.",
@@ -319,6 +339,7 @@ export function buildCompactPublicQuery(prompt: string, systemPrompt?: string): 
   const bodyParts = [
     roleRules,
     toolSummary,
+    quotedRatesLine,
     salesDirectives,
     recentContext,
     customerMsg ? `Customer message: "${customerMsg}"` : prompt.slice(-250),
@@ -333,8 +354,8 @@ export function buildCompactPublicQuery(prompt: string, systemPrompt?: string): 
 /**
  * Calls public backup proxy endpoint with sanitized prompt length and strict validation.
  */
-async function callPublicFallback(provider: string, prompt: string, systemPrompt?: string): Promise<NormalizedAIResponse> {
-  const compactQuery = buildCompactPublicQuery(prompt, systemPrompt);
+async function callPublicFallback(provider: string, prompt: string, systemPrompt?: string, jsonMode?: boolean): Promise<NormalizedAIResponse> {
+  const compactQuery = buildCompactPublicQuery(prompt, systemPrompt, jsonMode);
   // Raised from 1000 to 3000 chars so tool details + links are NOT truncated away
   const safeQuery = compactQuery.length > 3000 ? compactQuery.substring(0, 3000) : compactQuery;
   const encodedQuery = encodeURIComponent(safeQuery);
@@ -394,7 +415,7 @@ async function callPublicFallback(provider: string, prompt: string, systemPrompt
  * 3. Falls back to public proxies if official keys are absent or failed.
  * 4. Returns safe fallback string if all fail, without crashing WhatsApp connection.
  */
-export async function askAI(prompt: string, systemPrompt?: string, userId?: string): Promise<string> {
+export async function askAI(prompt: string, systemPrompt?: string, userId?: string, jsonMode?: boolean): Promise<string> {
   const settings = await getSettings(userId);
   const geminiKey = (settings as any).geminiApiKey?.trim() || process.env.GEMINI_API_KEY?.trim();
   const groqKey = (settings as any).groqApiKey?.trim() || process.env.GROQ_API_KEY?.trim();
@@ -434,7 +455,7 @@ export async function askAI(prompt: string, systemPrompt?: string, userId?: stri
     : ["Gemini", "DeepSeek", "GPTLogic"];
 
   for (const prov of publicProviders) {
-    const res = await callPublicFallback(prov, prompt, systemPrompt);
+    const res = await callPublicFallback(prov, prompt, systemPrompt, jsonMode);
     if (res.success && res.text) {
       return res.text;
     }

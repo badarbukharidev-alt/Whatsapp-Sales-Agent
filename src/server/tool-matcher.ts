@@ -308,7 +308,7 @@ Rules:
 JSON format:
 {"matchedToolIds": string[], "isUnknownProduct": boolean, "queryProduct": string | null}`;
 
-    const reply = await askAI(prompt, "You are a JSON-only tool classifier. Output valid JSON only.", userId);
+    const reply = await askAI(prompt, "You are a JSON-only tool classifier. Output valid JSON only.", userId, true);
     const jsonMatch = reply.match(/\{[\s\S]*?\}/);
     if (!jsonMatch) return null;
 

@@ -20,6 +20,7 @@ import {
   enforceKnownLinks,
   stripLeadingContinuationFragment,
   stripRepeatedOffer,
+  isMetaLeak,
 } from "../src/server/services/reply-guard.js";
 
 const toolsData: Tool[] = JSON.parse(
@@ -608,6 +609,65 @@ async function runRegressionSuite() {
     const out = stripRepeatedOffer(reply, lastAgent);
     assert.ok(!/share kar deta hoon\?/.test(out), "the repeated offer question must be dropped");
     assert.ok(out.includes("Jee bilkul"), "the rest of the reply is kept");
+  });
+
+  // =========================================================================
+  // SCENARIO 9: buildCompactPublicQuery — jsonMode false-positive (Sep-11, 12:12pm)
+  // A live ClipShield chat broke completely: the agent replied with raw meta
+  // text ("Got it — no reset, no repeated name. Ready for the next message.
+  // What did he say?") instead of answering "price kia hy". Root cause: the
+  // sales prompt's own "[SALES CONTROL DIRECTIVES] HIGH BUYING INTENT:" line
+  // contains the literal word "intent", which used to flip buildCompactPublicQuery
+  // into its raw-slice classification branch for EVERY high-intent sales turn,
+  // truncating the prompt at 1000 chars — before the customer's actual message.
+  // =========================================================================
+  test("9.1 A normal sales prompt with 'HIGH BUYING INTENT' must NOT be treated as JSON classification", () => {
+    const longSection = "Description filler ".repeat(80); // push prompt over 1000 chars
+    const fakePrompt = [
+      "=== PRODUCT CATALOG: ClipShield ===",
+      `Description & Problem Solved: ${longSection}`,
+      "Pricing: Rs. 1500/mo",
+      "[SALES CONTROL DIRECTIVES]",
+      "HIGH BUYING INTENT: The customer is ready to move forward. Stop pitching, reduce discovery, answer directly.",
+      "[RECENT CONVERSATION TURNS]:",
+      "Customer: Faida kia ha",
+      `CUSTOMER'S LATEST MESSAGE(S): "Aur price kia hy"`,
+      "Reply ONLY as the seller..."
+    ].join("\n");
+
+    const compact = buildCompactPublicQuery(fakePrompt);
+    assert.ok(
+      compact.includes('Aur price kia hy'),
+      `Compact query must preserve the customer's actual message, not truncate before it. Got:\n${compact}`
+    );
+    assert.ok(
+      !compact.startsWith("=== PRODUCT CATALOG"),
+      "Must not fall into the raw-slice classification branch for an ordinary sales prompt"
+    );
+  });
+
+  test("9.2 A real JSON-classifier systemPrompt still preserves the raw prompt/schema", () => {
+    const fakePrompt = `Classify customer software intent. Return STRICT JSON ONLY.\nCatalog:\n- ID "1" (ClipShield)\nCustomer: "CapCut chahiye"\nJSON format:\n{"matchedToolIds": string[]}`;
+    const compact = buildCompactPublicQuery(fakePrompt, "You are a JSON-only tool classifier. Output valid JSON only.");
+    assert.strictEqual(compact, fakePrompt, "Real JSON classifier prompts must be preserved verbatim (untouched by compaction)");
+  });
+
+  test("9.3 jsonMode=true forces raw-slice behavior explicitly regardless of content", () => {
+    const fakePrompt = "Some short prompt with no trigger words at all.";
+    const compact = buildCompactPublicQuery(fakePrompt, undefined, true);
+    assert.strictEqual(compact, fakePrompt, "Explicit jsonMode must force the classification path");
+  });
+
+  test("9.4 isMetaLeak recognizes the exact broken replies from the Sep-11 incident", () => {
+    const broken = [
+      "Got it — no reset, no repeated name. Ready for Badar's next message. What did he say?",
+      "Got it. What's the message from the customer that I need to respond to?",
+      "It looks like your message got cut off. Could you resend the full details or let me know what you'd like to do next?",
+    ];
+    for (const b of broken) {
+      assert.ok(isMetaLeak(b), `Must flag as meta-leak: "${b}"`);
+    }
+    assert.ok(!isMetaLeak("ClipShield ka monthly price Rs. 1500 hai bhai."), "A normal in-character reply must NOT be flagged");
   });
 
   for (const t of testQueue) {

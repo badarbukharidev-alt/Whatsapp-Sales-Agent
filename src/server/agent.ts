@@ -15,6 +15,7 @@ import {
   enforceKnownLinks,
   stripLeadingContinuationFragment,
   stripRepeatedOffer,
+  isMetaLeak,
 } from "./services/reply-guard.js";
 
 // ---------------------------------------------------------------------------
@@ -59,6 +60,27 @@ function renderTemplateMessage(
     /\{tool_name\}|\{price_pkr\}|\{price_usd\}|\{link\}/g,
     (m) => (values[m] !== undefined && values[m] !== "" ? values[m] : m)
   );
+}
+
+/** Matches a "Rs. 1200" / "1200 Pkr" / "$6" style price mention with its own label line. */
+const PRICE_MENTION_REGEX =
+  /(?:^|\n)[^\n]{0,40}?(?:rs\.?\s?[\d,]+|[\d,]+\s?(?:rs|pkr|rupees)|\$\s?[\d,]+)[^\n]{0,20}/gi;
+
+/**
+ * Pulls the price line(s) out of a saved template message so they can be recorded
+ * as "already quoted" for this customer. A template is admin-authored and sent
+ * verbatim, so whatever price it states becomes the price the AI must stay
+ * consistent with afterwards — even if it differs from the tool's base `pricePkr`
+ * (e.g. a promo/lifetime rate). Without this, the agent can contradict its own
+ * template a message later when the customer simply asks "price kya hai".
+ */
+function extractQuotedPriceSummary(templateContent: string): string {
+  const matches = templateContent.match(PRICE_MENTION_REGEX) || [];
+  const cleaned = matches
+    .map((m) => m.replace(/[^\S\r\n]+/g, " ").trim())
+    .filter(Boolean)
+    .slice(0, 4);
+  return cleaned.join(" | ").slice(0, 200);
 }
 
 /**
@@ -395,6 +417,7 @@ async function generateResponse(
   // 4. SAVED PRODUCT TEMPLATE MESSAGE — sent FIRST, exactly once, on first detection.
   let templateMessage: string | null = null;
   const templatesSent = [...(memory.templatesSent || [])];
+  const quotedPrices: Record<string, string> = { ...(memory.quotedPrices || {}) };
   if (lockedTool && directlyDetectedTool && directlyDetectedTool.id === lockedTool.id) {
     const tm = lockedTool.templateMessage;
     const alreadySent = templatesSent.includes(lockedTool.id);
@@ -402,6 +425,10 @@ async function generateResponse(
     if (tm?.enabled && (tm.content || "").trim().length > 0 && !(sendOnce && alreadySent)) {
       templateMessage = renderTemplateMessage(tm, lockedTool);
       if (!templatesSent.includes(lockedTool.id)) templatesSent.push(lockedTool.id);
+      // Record whatever price the template actually quoted so later turns never
+      // contradict it (the template can legitimately differ from tool.pricePkr).
+      const quoted = extractQuotedPriceSummary(templateMessage);
+      if (quoted) quotedPrices[lockedTool.name] = quoted;
     }
   }
 
@@ -414,6 +441,7 @@ async function generateResponse(
         currentProductName: lockedTool.name,
         lastToolDiscussed: lockedTool.name,
         templatesSent,
+        quotedPrices,
       },
       userId
     );
@@ -531,16 +559,37 @@ async function generateResponse(
     .replace(/^["']|["']$/g, "")
     .trim();
 
+  // Shared, in-character fallback used whenever the AI reply must be discarded
+  // (English hallucination, or the model breaking character / leaking meta-text).
+  // Prefers whatever price was ALREADY quoted to this customer (template or prior
+  // turn) so the safe fallback never re-introduces the very contradiction bug
+  // this guard exists to prevent.
+  const buildSafeFallbackReply = (): string => {
+    if (templateMessage) {
+      return "Aap pehle test kar lein, jab satisfied hon toh batayega payment details share kar doonga.";
+    }
+    if (lockedTool) {
+      const alreadyQuoted = quotedPrices[lockedTool.name];
+      const priceLine = alreadyQuoted
+        ? `${lockedTool.name} ka price ${alreadyQuoted} hai`
+        : `${lockedTool.name} ka monthly price Rs. ${lockedTool.pricePkr || 1500} hai`;
+      return `${priceLine}. Bataen aage kaise proceed karna hai, main abhi link aur details bhej deta hoon.`;
+    }
+    return "Walaikum Assalam bhai! Kaise hain aap? Bataen konsa software ya tool dekh rahe hain aap?";
+  };
+
   // ENGLISH HALLUCINATION INTERCEPTOR:
   if (isEnglishHallucination(text)) {
     console.log(`[Agent:${userId}] Intercepted English AI hallucination ("${text.slice(0, 40)}..."). Replacing with Roman Urdu response.`);
-    if (templateMessage) {
-      text = "Aap pehle test kar lein, jab satisfied hon toh batayega payment details share kar doonga.";
-    } else if (lockedTool) {
-      text = `ClipShield ka monthly price Rs. ${lockedTool.pricePkr || 1500} hai. Agar 1000 Pkr finalize karna hai toh bataen, main abhi link aur account details bhej deta hoon.`;
-    } else {
-      text = "Walaikum Assalam bhai! Kaise hain aap? Bataen konsa software ya tool dekh rahe hain aap?";
-    }
+    text = buildSafeFallbackReply();
+  }
+
+  // META-LEAK INTERCEPTOR: the model broke character and talked about the prompt
+  // itself ("Got it — no reset, no repeated name. Ready for the next message.
+  // What did he say?") instead of answering as the seller.
+  if (isMetaLeak(text)) {
+    console.log(`[Agent:${userId}] Intercepted meta-leak AI reply ("${text.slice(0, 60)}..."). Replacing with in-character response.`);
+    text = buildSafeFallbackReply();
   }
 
   // CLEAN & FIX URLS: Repair mangled links, convert markdown links to plain URLs, and strip URLs if template was sent
