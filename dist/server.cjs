@@ -970,6 +970,12 @@ var init_settings = __esm({
       allowChannels: false,
       paymentInstructions: "Payment send karne ke baad screenshot/receipt share karein, verification ke foran baad access mil jaye ga.",
       responseDelaySeconds: 1.5,
+      // isActive: false — these are UNFILLED PLACEHOLDERS ("Account Title" / a fake
+      // number), only used as a schema example for a brand-new/unreachable settings
+      // file. They must never be treated as real, live payment accounts: the agent
+      // filters on isActive, so a corrupted/missing settings.json now correctly
+      // falls through to "no payment info configured" instead of quoting this
+      // placeholder number to a real customer as if it were genuine.
       paymentMethods: [
         {
           id: "pm_easypaisa_1",
@@ -978,7 +984,7 @@ var init_settings = __esm({
           accountNumber: "03001234567",
           bankName: "Easypaisa Wallet",
           instructions: "Send via Easypaisa App",
-          isActive: true
+          isActive: false
         },
         {
           id: "pm_jazzcash_1",
@@ -987,7 +993,7 @@ var init_settings = __esm({
           accountNumber: "03001234567",
           bankName: "JazzCash Mobile Account",
           instructions: "Send via JazzCash App",
-          isActive: true
+          isActive: false
         }
       ]
     };
@@ -995,6 +1001,49 @@ var init_settings = __esm({
 });
 
 // src/server/ai.ts
+function extractJsonObject(raw) {
+  if (!raw) return null;
+  const cleaned = raw.replace(/```json/gi, "").replace(/```/g, "");
+  try {
+    return JSON.parse(cleaned.trim());
+  } catch {
+  }
+  const start = cleaned.indexOf("{");
+  if (start < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escapeNext = false;
+  for (let i = start; i < cleaned.length; i++) {
+    const ch = cleaned[i];
+    if (escapeNext) {
+      escapeNext = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escapeNext = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (ch === "{") {
+      depth++;
+    } else if (ch === "}") {
+      depth--;
+      if (depth === 0) {
+        const candidate = cleaned.slice(start, i + 1);
+        try {
+          return JSON.parse(candidate);
+        } catch {
+          return null;
+        }
+      }
+    }
+  }
+  return null;
+}
 async function callOfficialGemini(apiKey, prompt, systemPrompt) {
   const cleanKey = apiKey.trim();
   if (!cleanKey) return { success: false, text: "", provider: "Gemini", error: "Missing API Key" };
@@ -1143,12 +1192,27 @@ async function callOpenAI(apiKey, prompt, systemPrompt) {
   }
   return { success: false, text: "", provider: "OpenAI", error: "OpenAI request failed" };
 }
+function trimAtBoundary(text, max) {
+  if (!text || text.length <= max) return text || "";
+  const cut = text.slice(0, max);
+  const lastBreak = Math.max(cut.lastIndexOf("\n"), cut.lastIndexOf(". "), cut.lastIndexOf(" "));
+  return (lastBreak > max * 0.5 ? cut.slice(0, lastBreak) : cut).trim();
+}
 function buildCompactPublicQuery(prompt, systemPrompt, jsonMode) {
   const isClassification = Boolean(jsonMode) || // Narrow legacy fallback for callers that don't pass jsonMode explicitly:
   // only an UNAMBIGUOUS "this persona outputs JSON" system prompt counts.
   Boolean(systemPrompt && /\bjson[\s-]*only\b|\bstrict\s*json\b|\boutput\s+valid\s+json\b/i.test(systemPrompt));
   if (isClassification) {
     if (prompt.length <= 1e3) return prompt;
+    const rawInfoMatch = prompt.match(/Raw Information:\s*\n([\s\S]*)$/i);
+    if (rawInfoMatch && rawInfoMatch[1].trim()) {
+      const rawInfoText = rawInfoMatch[1].trim();
+      const compactSchema = 'Convert the raw tool info below into ONE JSON object for a software sales catalog. ZERO DATA LOSS: preserve every link, price, step, requirement, credential, and detail \u2014 split distinct topics into "sections" (array of {"title","content"}), one section per topic; do not summarize away specifics. Extract every URL into "links":[{"title","url","note"}]. Fields: {"name","category","description","pricePkr","priceUsd","aliases":[],"keywords":[],"pricing":{"min_negotiable_pkr","min_negotiable_usd","negotiation_notes"},"features":[],"sales_points":[],"use_cases":[],"requirements":[],"limitations":[],"how_to_use","faq":[{"question","answer"}],"links":[{"title","url","note"}],"sections":[{"title","content"}]}. RETURN RAW JSON ONLY, no markdown fences, no commentary.\n\nRaw Information:\n';
+      const budget = 6e3;
+      const rawInfoBudget = Math.max(200, budget - compactSchema.length);
+      const trimmedRawInfo = rawInfoText.length > rawInfoBudget ? trimAtBoundary(rawInfoText, rawInfoBudget) : rawInfoText;
+      return `${compactSchema}${trimmedRawInfo}`;
+    }
     return prompt.slice(0, 1e3);
   }
   let customerMsg = "";
@@ -1225,6 +1289,12 @@ ${catalogMatch[1].trim().slice(0, 260)}` : "Store Catalog: 1. ClipShield (YouTub
   if (quotedMatch && quotedMatch[1]) {
     quotedRatesLine = `ALREADY QUOTED (repeat these exact numbers, never contradict): ${quotedMatch[1].trim()}`;
   }
+  let paymentBlock = "";
+  const paymentMatch = prompt.match(/\[OFFICIAL PAYMENT ACCOUNTS\]\s*\n([\s\S]*?)(?=\n\[|\nCUSTOMER'S LATEST MESSAGE|\nCUSTOMER'S NEW MESSAGE|$)/i);
+  if (paymentMatch && paymentMatch[1].trim()) {
+    paymentBlock = `[REAL PAYMENT ACCOUNTS \u2014 use ONLY these exact numbers, NEVER invent different ones]
+${paymentMatch[1].trim()}`;
+  }
   const roleRules = [
     "Role: Real human Pakistani software consultant chatting on WhatsApp. MUST reply in Roman Urdu only (Urdu words written in English letters, like 'bhai', 'kitna', 'Walaikum Assalam'). NEVER reply in English.",
     "RULES: (1) NEVER invent a persona name like 'Aamir'. (2) NEVER offer SEO or web design. (3) ClipShield and VoiceDelta are ALWAYS available. (4) For VoiceDelta, always call it VoiceDelta (not ElevenLabs). (5) In ongoing chats, do NOT repeat 'AOA' or the customer's name on every message. (6) NEVER use markdown link syntax [text](url) \u2014 always write URLs as plain text. (7) NEVER fabricate account numbers, payment details, or bank info \u2014 only use what is given."
@@ -1236,6 +1306,7 @@ ${catalogMatch[1].trim().slice(0, 260)}` : "Store Catalog: 1. ClipShield (YouTub
     roleRules,
     toolSummary,
     quotedRatesLine,
+    paymentBlock,
     salesDirectives,
     recentContext,
     customerMsg ? `Customer message: "${customerMsg}"` : prompt.slice(-250),
@@ -1246,7 +1317,8 @@ ${catalogMatch[1].trim().slice(0, 260)}` : "Store Catalog: 1. ClipShield (YouTub
 }
 async function callPublicFallback(provider, prompt, systemPrompt, jsonMode) {
   const compactQuery = buildCompactPublicQuery(prompt, systemPrompt, jsonMode);
-  const safeQuery = compactQuery.length > 3e3 ? compactQuery.substring(0, 3e3) : compactQuery;
+  const outerCap = jsonMode ? 6500 : 3e3;
+  const safeQuery = compactQuery.length > outerCap ? trimAtBoundary(compactQuery, outerCap) : compactQuery;
   const encodedQuery = encodeURIComponent(safeQuery);
   let url = `https://api-rebix.zone.id/api/gemini?q=${encodedQuery}`;
   if (provider === "DeepSeek") url = `https://api-rebix.zone.id/api/deepseek-v3?q=${encodedQuery}`;
@@ -1344,15 +1416,41 @@ var init_json_store = __esm({
         this.cachedData = null;
         this.writeQueue = Promise.resolve();
         this.isLoaded = false;
+        /** mtime (ms) of the file as of the last successful load, for cross-process staleness detection. */
+        this.cachedMtimeMs = null;
+        /** Own writes update cachedMtimeMs too; this filters out cheap `fs.stat` polling noise. */
+        this.lastStatCheckAt = 0;
         this.filePath = filePath;
         this.defaultValue = defaultValue;
       }
       /**
        * Reads data from in-memory cache, or loads from disk on first call.
+       *
+       * cPanel/Passenger (and any multi-worker Node deployment) runs several
+       * independent processes behind the same app — each has its OWN copy of this
+       * in-memory cache. Without a staleness check, a tool/settings/payment edit
+       * saved by the worker that served the admin request would never be visible
+       * to a different worker that later handles a customer's WhatsApp message,
+       * which is exactly why data sometimes silently "isn't there" even though it
+       * was saved moments earlier. A `fs.stat` is orders of magnitude cheaper than
+       * a full read+parse, so this keeps the fast path fast while staying correct.
        */
       async get() {
         if (this.isLoaded && this.cachedData !== null) {
-          return this.cachedData;
+          const now = Date.now();
+          if (now - this.lastStatCheckAt < 500) {
+            return this.cachedData;
+          }
+          this.lastStatCheckAt = now;
+          try {
+            const stat = await import_promises3.default.stat(this.filePath);
+            if (this.cachedMtimeMs !== null && stat.mtimeMs > this.cachedMtimeMs) {
+              return this.reload();
+            }
+            return this.cachedData;
+          } catch {
+            return this.reload();
+          }
         }
         return this.reload();
       }
@@ -1362,9 +1460,14 @@ var init_json_store = __esm({
       async reload() {
         try {
           await import_promises3.default.mkdir(import_path3.default.dirname(this.filePath), { recursive: true });
-          const raw = await import_promises3.default.readFile(this.filePath, "utf-8");
+          const [raw, stat] = await Promise.all([
+            import_promises3.default.readFile(this.filePath, "utf-8"),
+            import_promises3.default.stat(this.filePath)
+          ]);
           this.cachedData = JSON.parse(raw);
           this.isLoaded = true;
+          this.cachedMtimeMs = stat.mtimeMs;
+          this.lastStatCheckAt = Date.now();
           return this.cachedData;
         } catch (err) {
           if (err.code === "ENOENT") {
@@ -1410,6 +1513,12 @@ var init_json_store = __esm({
         try {
           await import_promises3.default.writeFile(tempPath, serialized, "utf-8");
           await import_promises3.default.rename(tempPath, this.filePath);
+          try {
+            const stat = await import_promises3.default.stat(this.filePath);
+            this.cachedMtimeMs = stat.mtimeMs;
+            this.lastStatCheckAt = Date.now();
+          } catch {
+          }
         } catch (writeErr) {
           try {
             await import_promises3.default.unlink(tempPath);
@@ -2687,9 +2796,7 @@ Rules:
 JSON format:
 {"matchedToolIds": string[], "isUnknownProduct": boolean, "queryProduct": string | null}`;
     const reply = await askAI(prompt, "You are a JSON-only tool classifier. Output valid JSON only.", userId, true);
-    const jsonMatch = reply.match(/\{[\s\S]*?\}/);
-    if (!jsonMatch) return null;
-    const parsed = JSON.parse(jsonMatch[0]);
+    const parsed = extractJsonObject(reply);
     if (!parsed || typeof parsed !== "object") return null;
     const matchedTools = [];
     const matchedDetails = [];
@@ -3864,6 +3971,12 @@ Title: ${p.accountTitle}${p.instructions ? `
         templateMessage
       };
     }
+    await evaluateAndApplyCustomerStatus(cleanJid, customer, latestCustomerText, null, userId, buyingIntent);
+    return {
+      textMessages: ["Payment details abhi finalize kar raha hoon, thodi hi dair mein bhejta hoon aapko. \u{1F64F}"],
+      imageToSend: null,
+      templateMessage
+    };
   }
   const lastAgentText = [...recentMessages].reverse().find((m) => m.role === "agent")?.content || null;
   const affirmedPendingLink = isBareAffirmation(latestCustomerText) && detectPendingOffer(lastAgentText) === "link";
@@ -4057,7 +4170,7 @@ var init_agent = __esm({
     init_tool_matcher();
     init_reply_guard();
     BUYING_INTENT_REGEX = /(?:\b(?:le?na|lena|leni|chahiye|chaiye|chahye)\b|\blink\b|\bprice\b|\brate\b|\bkitne?\b|\bkitna\b|final\s*price|\bpayment\b|jazz\s*cash|jazzcash|easy\s*paisa|easypaisa|\braast\b|account\s*(?:number|details|no)|\bpro\b|start\s*kar|shuru\s*kar|kharid|khareed|purchase|\bbuy\b|sub\s*len|order\s*kar|paise?\s*(?:bhej|send|transfer|kaha))/i;
-    EXPLICIT_PAYMENT_REGEX = /(?:payment\s*(?:details|method|info|kaise|karni|kar\s*d|number|account)|kaise?\s*pay|kahan?\s*(?:pay|paise|bhej)|account\s*(?:number|details|title|no)\b|jazz\s*cash|jazzcash|easy\s*paisa|easypaisa|\braast\b|bank\s*(?:details|account))/i;
+    EXPLICIT_PAYMENT_REGEX = /(?:payment\s*(?:details|method|info|kaise|karni|kar\s*d|number|account)|kaise?\s*pay|kahan?\s*(?:pay|paise|paisay|bhej)|account\s*(?:number|details|title|no)\b|jazz\s*cash|jazzcash|easy\s*paisa|easypaisa|\braast\b|bank\s*(?:details|account)|\bpay\s*(?:karna|karni|karu|karoon|kru|kro|kese|kaise)\b|pais(?:e|ay)?\s*(?:kaise|kese)\s*(?:du|doon|dun|de|karu|karoon)|\bhow\s*to\s*pay\b)/i;
     EXPLICIT_LINK_REGEX = /(?:\blink\b|\blinks\b|download|trial\s*(?:link|de)|website\s*(?:link|do)|\bportal\b)/i;
     ALTERNATIVE_REGEX = /(?:alternative|alternate|doosr|dusr|koi\s*aur|kuch\s*aur|compare|comparison|difference|farq|instead\s*of|behtar\s*option|other\s*tool|second\s*option)/i;
     PRICE_MENTION_REGEX = /(?:^|\n)[^\n]{0,40}?(?:rs\.?\s?[\d,]+|[\d,]+\s?(?:rs|pkr|rupees)|\$\s?[\d,]+)[^\n]{0,20}/gi;
@@ -4188,9 +4301,8 @@ ${rawInfo}
       const aiResponse = await askAI(prompt, void 0, user?.id, true);
       let parsedTool;
       try {
-        const cleanedResponse = aiResponse.replace(/```json/g, "").replace(/```/g, "").trim();
-        const jsonMatch = cleanedResponse.match(/\{[\s\S]*?\}/);
-        parsedTool = jsonMatch ? JSON.parse(jsonMatch[0]) : JSON.parse(cleanedResponse);
+        parsedTool = extractJsonObject(aiResponse);
+        if (!parsedTool) throw new Error("No valid JSON object found in AI response");
       } catch (e) {
         console.error("Failed to parse LLM structured tool:", aiResponse);
         const urlMatches = rawInfo.match(/https?:\/\/[^\s\)\"\'\<\>]+/g) || [];

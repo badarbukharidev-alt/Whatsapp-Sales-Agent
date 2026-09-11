@@ -16,6 +16,10 @@ export class JsonStore<T> {
   private cachedData: T | null = null;
   private writeQueue: Promise<void> = Promise.resolve();
   private isLoaded: boolean = false;
+  /** mtime (ms) of the file as of the last successful load, for cross-process staleness detection. */
+  private cachedMtimeMs: number | null = null;
+  /** Own writes update cachedMtimeMs too; this filters out cheap `fs.stat` polling noise. */
+  private lastStatCheckAt = 0;
 
   constructor(filePath: string, defaultValue: T) {
     this.filePath = filePath;
@@ -24,10 +28,34 @@ export class JsonStore<T> {
 
   /**
    * Reads data from in-memory cache, or loads from disk on first call.
+   *
+   * cPanel/Passenger (and any multi-worker Node deployment) runs several
+   * independent processes behind the same app — each has its OWN copy of this
+   * in-memory cache. Without a staleness check, a tool/settings/payment edit
+   * saved by the worker that served the admin request would never be visible
+   * to a different worker that later handles a customer's WhatsApp message,
+   * which is exactly why data sometimes silently "isn't there" even though it
+   * was saved moments earlier. A `fs.stat` is orders of magnitude cheaper than
+   * a full read+parse, so this keeps the fast path fast while staying correct.
    */
   async get(): Promise<T> {
     if (this.isLoaded && this.cachedData !== null) {
-      return this.cachedData;
+      const now = Date.now();
+      if (now - this.lastStatCheckAt < 500) {
+        // Debounce: don't stat on every single call within the same burst.
+        return this.cachedData;
+      }
+      this.lastStatCheckAt = now;
+      try {
+        const stat = await fs.stat(this.filePath);
+        if (this.cachedMtimeMs !== null && stat.mtimeMs > this.cachedMtimeMs) {
+          return this.reload();
+        }
+        return this.cachedData;
+      } catch {
+        // Can't stat (e.g. deleted mid-flight) — fall through and try a real reload.
+        return this.reload();
+      }
     }
     return this.reload();
   }
@@ -38,9 +66,14 @@ export class JsonStore<T> {
   async reload(): Promise<T> {
     try {
       await fs.mkdir(path.dirname(this.filePath), { recursive: true });
-      const raw = await fs.readFile(this.filePath, "utf-8");
+      const [raw, stat] = await Promise.all([
+        fs.readFile(this.filePath, "utf-8"),
+        fs.stat(this.filePath),
+      ]);
       this.cachedData = JSON.parse(raw);
       this.isLoaded = true;
+      this.cachedMtimeMs = stat.mtimeMs;
+      this.lastStatCheckAt = Date.now();
       return this.cachedData as T;
     } catch (err: any) {
       if (err.code === "ENOENT") {
@@ -97,6 +130,13 @@ export class JsonStore<T> {
     try {
       await fs.writeFile(tempPath, serialized, "utf-8");
       await fs.rename(tempPath, this.filePath);
+      // Record the mtime OUR write produced, so a later `get()` can tell our own
+      // write apart from a genuinely newer write made by another worker process.
+      try {
+        const stat = await fs.stat(this.filePath);
+        this.cachedMtimeMs = stat.mtimeMs;
+        this.lastStatCheckAt = Date.now();
+      } catch {}
     } catch (writeErr) {
       // Clean up temporary file if rename failed
       try {

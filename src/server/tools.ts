@@ -1,7 +1,7 @@
 import { Express } from "express";
 import fs from "fs/promises";
 import path from "path";
-import { askAI } from "./ai.js";
+import { askAI, extractJsonObject } from "./ai.js";
 import { getUserByToken } from "./auth.js";
 import { toolService } from "./services/tool-service.js";
 import { Tool } from "../types.js";
@@ -165,12 +165,15 @@ ${rawInfo}
 `;
       
       const aiResponse = await askAI(prompt, undefined, user?.id, true);
-      
+
       let parsedTool: any;
       try {
-        const cleanedResponse = aiResponse.replace(/```json/g, '').replace(/```/g, '').trim();
-        const jsonMatch = cleanedResponse.match(/\{[\s\S]*?\}/);
-        parsedTool = jsonMatch ? JSON.parse(jsonMatch[0]) : JSON.parse(cleanedResponse);
+        // extractJsonObject does a balanced brace-depth scan instead of a naive
+        // non-greedy regex, so a full nested object (pricing, objection_responses,
+        // faq[], sections[], links[]) is captured whole instead of getting cut off
+        // at the first "}" — which used to silently drop most extracted fields.
+        parsedTool = extractJsonObject(aiResponse);
+        if (!parsedTool) throw new Error("No valid JSON object found in AI response");
       } catch (e) {
         console.error("Failed to parse LLM structured tool:", aiResponse);
         // Extract any URLs present in rawInfo

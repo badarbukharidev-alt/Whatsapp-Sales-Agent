@@ -28,7 +28,7 @@ const BUYING_INTENT_REGEX =
 
 /** Explicit payment-details request. */
 const EXPLICIT_PAYMENT_REGEX =
-  /(?:payment\s*(?:details|method|info|kaise|karni|kar\s*d|number|account)|kaise?\s*pay|kahan?\s*(?:pay|paise|bhej)|account\s*(?:number|details|title|no)\b|jazz\s*cash|jazzcash|easy\s*paisa|easypaisa|\braast\b|bank\s*(?:details|account))/i;
+  /(?:payment\s*(?:details|method|info|kaise|karni|kar\s*d|number|account)|kaise?\s*pay|kahan?\s*(?:pay|paise|paisay|bhej)|account\s*(?:number|details|title|no)\b|jazz\s*cash|jazzcash|easy\s*paisa|easypaisa|\braast\b|bank\s*(?:details|account)|\bpay\s*(?:karna|karni|karu|karoon|kru|kro|kese|kaise)\b|pais(?:e|ay)?\s*(?:kaise|kese)\s*(?:du|doon|dun|de|karu|karoon)|\bhow\s*to\s*pay\b)/i;
 
 /** Explicit link / download request. */
 const EXPLICIT_LINK_REGEX =
@@ -479,6 +479,15 @@ async function generateResponse(
         templateMessage,
       };
     }
+    // No payment method is configured/active at all: answer honestly instead of
+    // falling through to the AI, which — given no real numbers to work with —
+    // is exactly what produces a fabricated "example" account.
+    await evaluateAndApplyCustomerStatus(cleanJid, customer, latestCustomerText, null, userId, buyingIntent);
+    return {
+      textMessages: ["Payment details abhi finalize kar raha hoon, thodi hi dair mein bhejta hoon aapko. 🙏"],
+      imageToSend: null,
+      templateMessage,
+    };
   }
   // ── END HARDCODED PAYMENT BYPASS ─────────────────────────────────────────
 

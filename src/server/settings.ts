@@ -27,6 +27,12 @@ const DEFAULT_SETTINGS = {
   allowChannels: false,
   paymentInstructions: "Payment send karne ke baad screenshot/receipt share karein, verification ke foran baad access mil jaye ga.",
   responseDelaySeconds: 1.5,
+  // isActive: false — these are UNFILLED PLACEHOLDERS ("Account Title" / a fake
+  // number), only used as a schema example for a brand-new/unreachable settings
+  // file. They must never be treated as real, live payment accounts: the agent
+  // filters on isActive, so a corrupted/missing settings.json now correctly
+  // falls through to "no payment info configured" instead of quoting this
+  // placeholder number to a real customer as if it were genuine.
   paymentMethods: [
     {
       id: "pm_easypaisa_1",
@@ -35,7 +41,7 @@ const DEFAULT_SETTINGS = {
       accountNumber: "03001234567",
       bankName: "Easypaisa Wallet",
       instructions: "Send via Easypaisa App",
-      isActive: true
+      isActive: false
     },
     {
       id: "pm_jazzcash_1",
@@ -44,7 +50,7 @@ const DEFAULT_SETTINGS = {
       accountNumber: "03001234567",
       bankName: "JazzCash Mobile Account",
       instructions: "Send via JazzCash App",
-      isActive: true
+      isActive: false
     }
   ]
 };

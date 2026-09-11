@@ -1,5 +1,5 @@
 import { Tool, Customer } from "../types.js";
-import { askAI } from "./ai.js";
+import { askAI, extractJsonObject } from "./ai.js";
 
 export interface ToolMatchDetail {
   toolId: string;
@@ -309,10 +309,7 @@ JSON format:
 {"matchedToolIds": string[], "isUnknownProduct": boolean, "queryProduct": string | null}`;
 
     const reply = await askAI(prompt, "You are a JSON-only tool classifier. Output valid JSON only.", userId, true);
-    const jsonMatch = reply.match(/\{[\s\S]*?\}/);
-    if (!jsonMatch) return null;
-
-    const parsed = JSON.parse(jsonMatch[0]);
+    const parsed = extractJsonObject<any>(reply);
     if (!parsed || typeof parsed !== "object") return null;
 
     // Validate matched tools against catalog

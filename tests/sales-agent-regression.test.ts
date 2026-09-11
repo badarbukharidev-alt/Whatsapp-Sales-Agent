@@ -11,7 +11,7 @@ import {
   extractMentionedFacts
 } from "../src/server/tool-matcher.js";
 import { synthesizeSalesPrompt } from "../src/server/services/prompt-service.js";
-import { buildCompactPublicQuery } from "../src/server/ai.js";
+import { buildCompactPublicQuery, extractJsonObject } from "../src/server/ai.js";
 import {
   isBareAffirmation,
   detectPendingOffer,
@@ -668,6 +668,94 @@ async function runRegressionSuite() {
       assert.ok(isMetaLeak(b), `Must flag as meta-leak: "${b}"`);
     }
     assert.ok(!isMetaLeak("ClipShield ka monthly price Rs. 1500 hai bhai."), "A normal in-character reply must NOT be flagged");
+  });
+
+  // =========================================================================
+  // SCENARIO 10: "Where's my payment info?" — real accounts must reach the
+  // fallback query, and "add tool" must not silently lose the pasted description.
+  // =========================================================================
+  test("10.1 buildCompactPublicQuery preserves the REAL configured payment accounts", () => {
+    const fakePrompt = [
+      "=== PRODUCT CATALOG: ClipShield ===",
+      "Description & Problem Solved: ClipShield bypasses YouTube Content ID claims.",
+      "Pricing: Rs. 1500/mo",
+      "[OFFICIAL PAYMENT ACCOUNTS]",
+      "- Easypaisa: Badar Abbas Shah | Number: 03079031153 (Easypaisa Wallet)",
+      "- JazzCash: Badar Abbas Shah | Number: 03079031153 (JazzCash Mobile Account)",
+      "Closing Directive: Send payment account details clearly.",
+      "[SALES CONTROL DIRECTIVES]",
+      "HIGH BUYING INTENT: ready to move forward.",
+      `CUSTOMER'S LATEST MESSAGE(S): "mujhe pay karna hai kaise karu"`,
+      "Reply ONLY as the seller..."
+    ].join("\n");
+
+    const compact = buildCompactPublicQuery(fakePrompt);
+    assert.ok(compact.includes("03079031153"), `Real payment number must reach the fallback query. Got:\n${compact}`);
+    assert.ok(/never\s+invent/i.test(compact) || /use\s+ONLY\s+these/i.test(compact), "Must instruct the model to use only the real numbers");
+  });
+
+  test("10.2 EXPLICIT_PAYMENT_REGEX-equivalent phrasing 'pay karna hai' is recognized (agent.ts hardcoded bypass)", () => {
+    // Mirrors the regex in agent.ts so a drift between the two is caught here too.
+    const EXPLICIT_PAYMENT_REGEX =
+      /(?:payment\s*(?:details|method|info|kaise|karni|kar\s*d|number|account)|kaise?\s*pay|kahan?\s*(?:pay|paise|paisay|bhej)|account\s*(?:number|details|title|no)\b|jazz\s*cash|jazzcash|easy\s*paisa|easypaisa|\braast\b|bank\s*(?:details|account)|\bpay\s*(?:karna|karni|karu|karoon|kru|kro|kese|kaise)\b|pais(?:e|ay)?\s*(?:kaise|kese)\s*(?:du|doon|dun|de|karu|karoon)|\bhow\s*to\s*pay\b)/i;
+    assert.ok(EXPLICIT_PAYMENT_REGEX.test("mujhe pay karna hai kaise karu"));
+    assert.ok(EXPLICIT_PAYMENT_REGEX.test("paisay kaise du"));
+    assert.ok(EXPLICIT_PAYMENT_REGEX.test("how to pay?"));
+  });
+
+  test("10.3 extractJsonObject captures a FULL nested object (pricing/faq/sections), not just the first brace", () => {
+    const modelReply = "```json\n" + JSON.stringify({
+      name: "SuperVoice AI",
+      pricing: { min_negotiable_pkr: 800, min_negotiable_usd: 3, negotiation_notes: "same day only" },
+      faq: [{ question: "Refund?", answer: "No refunds once key issued." }],
+      sections: [
+        { title: "Setup", content: "Download from https://example.com/setup" },
+        { title: "Support", content: "WhatsApp https://wa.me/923001234567" },
+      ],
+      links: [{ title: "Setup", url: "https://example.com/setup", note: "" }],
+    }, null, 2) + "\n```";
+
+    const parsed = extractJsonObject<any>(modelReply);
+    assert.ok(parsed, "Must parse a fenced JSON object");
+    assert.strictEqual(parsed.sections?.length, 2, "Must capture BOTH sections, not truncate after the first nested object");
+    assert.strictEqual(parsed.faq?.length, 1);
+    assert.strictEqual(parsed.pricing?.min_negotiable_pkr, 800);
+  });
+
+  test("10.4 extractJsonObject returns null (not a garbage partial object) when there is no JSON at all", () => {
+    assert.strictEqual(extractJsonObject("Sorry, I can't help with that right now."), null);
+  });
+
+  test("10.5 buildCompactPublicQuery (jsonMode) preserves the pasted 'Add Tool' description instead of the fixed schema boilerplate", () => {
+    const rawInfo = [
+      "SuperVoice AI — clones any voice from a 30-second sample.",
+      "Pricing: Monthly Rs. 999, Lifetime Rs. 2500.",
+      "Setup: https://example.com/supervoice-setup",
+      "Support: https://wa.me/923001234567",
+      "Note: refunds are not available once a license key is issued.",
+    ].join("\n").repeat(20); // simulate a genuinely long, thorough paste
+
+    const bigSchemaBoilerplate = "CRITICAL EXTRACTION REQUIREMENTS:\n" + "1. ZERO DATA LOSS. ".repeat(60);
+    const fakePrompt = `You are an expert software product catalog architect.\n${bigSchemaBoilerplate}\n\nRaw Information:\n${rawInfo}\n`;
+
+    const compact = buildCompactPublicQuery(fakePrompt, undefined, true);
+    assert.ok(compact.includes("supervoice-setup"), `Pasted description must survive into the compact query. Got tail:\n${compact.slice(-200)}`);
+    assert.ok(compact.includes("refunds are not available"), "Must preserve detail from later in the pasted text, not just its start");
+  });
+
+  test("10.6 Default placeholder payment methods are inactive by default (never quoted as real)", () => {
+    // If settings.json is ever missing/corrupted, getSettings() falls back to
+    // DEFAULT_SETTINGS, whose paymentMethods are unfilled placeholders
+    // ("Account Title" / "03001234567"). They must stay isActive:false so the
+    // agent's `p.isActive !== false` filter excludes them — otherwise a broken
+    // settings file makes the agent quote this literal fake number as real.
+    const settingsSource = fs.readFileSync(path.resolve(process.cwd(), "src", "server", "settings.ts"), "utf-8");
+    const defaultBlockMatch = settingsSource.match(/DEFAULT_SETTINGS\s*=\s*\{[\s\S]*?paymentMethods:\s*\[([\s\S]*?)\]\s*\n\};/);
+    assert.ok(defaultBlockMatch, "Could not locate DEFAULT_SETTINGS.paymentMethods block");
+    const block = defaultBlockMatch![1];
+    const activeFlags = [...block.matchAll(/isActive:\s*(true|false)/g)].map((m) => m[1]);
+    assert.ok(activeFlags.length >= 2, "Expected isActive flags on both default placeholder payment methods");
+    assert.ok(activeFlags.every((v) => v === "false"), `Default placeholder payment methods must all be isActive:false, got: ${activeFlags.join(", ")}`);
   });
 
   for (const t of testQueue) {

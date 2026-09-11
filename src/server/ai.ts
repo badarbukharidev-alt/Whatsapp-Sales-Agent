@@ -10,6 +10,67 @@ export interface NormalizedAIResponse {
 }
 
 /**
+ * Extracts a single JSON object from a raw LLM response that may be wrapped in
+ * markdown fences, prose, or extra whitespace. Finds the first `{` and scans
+ * forward tracking brace depth (respecting string literals and escaped quotes)
+ * to the matching closing `}` — unlike a naive `/\{[\s\S]*?\}/` regex (non-greedy),
+ * which stops at the FIRST `}` it sees anywhere in the string. For a flat object
+ * that's harmless, but for a real structured object with nested sub-objects and
+ * arrays-of-objects (pricing, objection_responses, faq[], sections[], links[] —
+ * exactly the shape the tool-catalog importer asks for) the non-greedy regex
+ * silently truncated the match after the FIRST nested block closed, discarding
+ * most of the extracted fields even though the model's full JSON was correct.
+ */
+export function extractJsonObject<T = any>(raw: string): T | null {
+  if (!raw) return null;
+  const cleaned = raw.replace(/```json/gi, "").replace(/```/g, "");
+
+  // Fast path: the whole cleaned response already IS valid JSON.
+  try {
+    return JSON.parse(cleaned.trim()) as T;
+  } catch {
+    // fall through to brace-matching scan
+  }
+
+  const start = cleaned.indexOf("{");
+  if (start < 0) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escapeNext = false;
+  for (let i = start; i < cleaned.length; i++) {
+    const ch = cleaned[i];
+    if (escapeNext) {
+      escapeNext = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escapeNext = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (ch === "{") {
+      depth++;
+    } else if (ch === "}") {
+      depth--;
+      if (depth === 0) {
+        const candidate = cleaned.slice(start, i + 1);
+        try {
+          return JSON.parse(candidate) as T;
+        } catch {
+          return null;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * Calls official Google Gemini API via official SDK with fallback to direct REST POST.
  */
 export async function callOfficialGemini(apiKey: string, prompt: string, systemPrompt?: string): Promise<NormalizedAIResponse> {
@@ -194,6 +255,19 @@ export async function callOpenAI(apiKey: string, prompt: string, systemPrompt?: 
 }
 
 /**
+ * Trims to `max` chars without cutting mid-word — a plain `.slice()` on a long
+ * pasted description can land mid-URL or mid-sentence, which reads as garbled
+ * to both the model and a human. Falls back to a hard cut only if no space is
+ * found in range (e.g. one extremely long token).
+ */
+function trimAtBoundary(text: string, max: number): string {
+  if (!text || text.length <= max) return text || "";
+  const cut = text.slice(0, max);
+  const lastBreak = Math.max(cut.lastIndexOf("\n"), cut.lastIndexOf(". "), cut.lastIndexOf(" "));
+  return (lastBreak > max * 0.5 ? cut.slice(0, lastBreak) : cut).trim();
+}
+
+/**
  * Builds a compact query for public GET fallbacks that preserves customer message,
  * matched tool details, conversation context, and strict anti-hallucination guardrails.
  *
@@ -217,6 +291,36 @@ export function buildCompactPublicQuery(prompt: string, systemPrompt?: string, j
   // For classification tasks, preserve the prompt and schema intact
   if (isClassification) {
     if (prompt.length <= 1000) return prompt;
+
+    // The "convert raw tool info into a structured JSON catalog entry" prompt
+    // (tools.ts, used by Add Tool) puts its large free-form "Raw Information:"
+    // block at the very END, after a long fixed schema example. A plain
+    // head-slice to 1000 chars therefore kept the boilerplate schema and threw
+    // away the actual pasted description — exactly why "paste a full
+    // description, add the tool" produced a near-empty result. Detect that
+    // shape and shrink the FIXED boilerplate instead of the variable content.
+    const rawInfoMatch = prompt.match(/Raw Information:\s*\n([\s\S]*)$/i);
+    if (rawInfoMatch && rawInfoMatch[1].trim()) {
+      const rawInfoText = rawInfoMatch[1].trim();
+      const compactSchema =
+        'Convert the raw tool info below into ONE JSON object for a software sales catalog. ' +
+        'ZERO DATA LOSS: preserve every link, price, step, requirement, credential, and detail — ' +
+        'split distinct topics into "sections" (array of {"title","content"}), one section per topic; ' +
+        'do not summarize away specifics. Extract every URL into "links":[{"title","url","note"}]. ' +
+        'Fields: {"name","category","description","pricePkr","priceUsd","aliases":[],"keywords":[],' +
+        '"pricing":{"min_negotiable_pkr","min_negotiable_usd","negotiation_notes"},' +
+        '"features":[],"sales_points":[],"use_cases":[],"requirements":[],"limitations":[],"how_to_use",' +
+        '"faq":[{"question","answer"}],"links":[{"title","url","note"}],"sections":[{"title","content"}]}. ' +
+        'RETURN RAW JSON ONLY, no markdown fences, no commentary.\n\nRaw Information:\n';
+      // Generous budget — Add Tool is a one-off admin action, not a live chat
+      // reply, so it can afford a much larger GET query than the customer path.
+      const budget = 6000;
+      const rawInfoBudget = Math.max(200, budget - compactSchema.length);
+      const trimmedRawInfo =
+        rawInfoText.length > rawInfoBudget ? trimAtBoundary(rawInfoText, rawInfoBudget) : rawInfoText;
+      return `${compactSchema}${trimmedRawInfo}`;
+    }
+
     return prompt.slice(0, 1000);
   }
 
@@ -324,6 +428,18 @@ export function buildCompactPublicQuery(prompt: string, systemPrompt?: string, j
     quotedRatesLine = `ALREADY QUOTED (repeat these exact numbers, never contradict): ${quotedMatch[1].trim()}`;
   }
 
+  // 3d. Extract the REAL configured payment accounts. This was previously missing
+  // entirely from the compact query: whenever a payment-related turn didn't go
+  // through the hardcoded payment bypass in agent.ts, the fallback model was told
+  // "never fabricate payment info" but handed zero real account numbers — so it
+  // fabricated plausible-looking ones anyway. This block is a must-keep: it is
+  // never dropped by the later budget trimming, same as the customer's message.
+  let paymentBlock = "";
+  const paymentMatch = prompt.match(/\[OFFICIAL PAYMENT ACCOUNTS\]\s*\n([\s\S]*?)(?=\n\[|\nCUSTOMER'S LATEST MESSAGE|\nCUSTOMER'S NEW MESSAGE|$)/i);
+  if (paymentMatch && paymentMatch[1].trim()) {
+    paymentBlock = `[REAL PAYMENT ACCOUNTS — use ONLY these exact numbers, NEVER invent different ones]\n${paymentMatch[1].trim()}`;
+  }
+
   // 4. Strict guardrails against fake personas, SEO hallucinations, and repeated greetings
   const roleRules = [
     "Role: Real human Pakistani software consultant chatting on WhatsApp. MUST reply in Roman Urdu only (Urdu words written in English letters, like 'bhai', 'kitna', 'Walaikum Assalam'). NEVER reply in English.",
@@ -340,6 +456,7 @@ export function buildCompactPublicQuery(prompt: string, systemPrompt?: string, j
     roleRules,
     toolSummary,
     quotedRatesLine,
+    paymentBlock,
     salesDirectives,
     recentContext,
     customerMsg ? `Customer message: "${customerMsg}"` : prompt.slice(-250),
@@ -356,8 +473,13 @@ export function buildCompactPublicQuery(prompt: string, systemPrompt?: string, j
  */
 async function callPublicFallback(provider: string, prompt: string, systemPrompt?: string, jsonMode?: boolean): Promise<NormalizedAIResponse> {
   const compactQuery = buildCompactPublicQuery(prompt, systemPrompt, jsonMode);
-  // Raised from 1000 to 3000 chars so tool details + links are NOT truncated away
-  const safeQuery = compactQuery.length > 3000 ? compactQuery.substring(0, 3000) : compactQuery;
+  // Raised from 1000 to 3000 chars so tool details + links are NOT truncated away.
+  // jsonMode gets a much higher cap: it's used by the one-off "Add Tool" admin
+  // action (not live chat), and buildCompactPublicQuery already prioritized the
+  // pasted raw description into this budget — re-truncating it here at 3000
+  // would undo that and cut the description again with a head-only slice.
+  const outerCap = jsonMode ? 6500 : 3000;
+  const safeQuery = compactQuery.length > outerCap ? trimAtBoundary(compactQuery, outerCap) : compactQuery;
   const encodedQuery = encodeURIComponent(safeQuery);
 
   let url = `https://api-rebix.zone.id/api/gemini?q=${encodedQuery}`;
