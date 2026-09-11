@@ -758,6 +758,45 @@ async function runRegressionSuite() {
     assert.ok(activeFlags.every((v) => v === "false"), `Default placeholder payment methods must all be isActive:false, got: ${activeFlags.join(", ")}`);
   });
 
+  // =========================================================================
+  // SCENARIO 11: No hardcoded credentials / secrets / payment accounts in
+  // source or in the git-tracked data_defaults/ seed files.
+  // =========================================================================
+  test("11.1 auth.ts contains no hardcoded plaintext admin password", () => {
+    const authSource = fs.readFileSync(path.resolve(process.cwd(), "src", "server", "auth.ts"), "utf-8");
+    assert.ok(!authSource.includes("B@dar85299211"), "The real admin password must not be a literal in source");
+    assert.ok(!authSource.includes('hashPassword("user123")'), "The demo user's password must not be a fixed guessable literal");
+    assert.ok(authSource.includes("resolveAdminBootstrapPassword"), "Bootstrap password must be resolved (env var or random), not hardcoded");
+  });
+
+  test("11.2 getUsers() self-heal never overwrites an existing account's passwordHash", () => {
+    const authSource = fs.readFileSync(path.resolve(process.cwd(), "src", "server", "auth.ts"), "utf-8");
+    // The drift-check that used to force-reset an existing admin's password on
+    // every request (defeating any password change made from Settings) must be
+    // gone: passwordHash must not appear in the admin-repair `if` condition.
+    const repairMatch = authSource.match(/if \(admin\.role !== "admin"[^)]*\)\s*\{/);
+    assert.ok(repairMatch, "Could not locate the admin self-heal condition");
+    assert.ok(
+      !repairMatch![0].includes("passwordHash"),
+      `Self-heal condition must not compare/reset passwordHash: ${repairMatch![0]}`
+    );
+  });
+
+  test("11.3 data_defaults/*.json ship with no real payment accounts, API keys, or credentials", () => {
+    const dir = path.resolve(process.cwd(), "data_defaults");
+    const settings = JSON.parse(fs.readFileSync(path.join(dir, "settings.json"), "utf-8"));
+    for (const pm of settings.paymentMethods || []) {
+      assert.strictEqual(pm.isActive, false, `Default payment method "${pm.provider}" must be isActive:false`);
+      assert.notStrictEqual(pm.accountNumber, "03079031153", "Must not ship the real account number as a default");
+    }
+
+    const deepgram = JSON.parse(fs.readFileSync(path.join(dir, "deepgram_accounts.json"), "utf-8"));
+    assert.strictEqual(deepgram.length, 0, "No API keys should ship as defaults");
+
+    const users = JSON.parse(fs.readFileSync(path.join(dir, "users.json"), "utf-8"));
+    assert.strictEqual(users.length, 0, "No accounts (with password hashes) should ship as defaults");
+  });
+
   for (const t of testQueue) {
     try {
       await t.fn();

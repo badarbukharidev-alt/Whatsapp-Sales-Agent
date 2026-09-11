@@ -15,20 +15,20 @@
     {
       "id": "pm_easypaisa_1",
       "provider": "Easypaisa",
-      "accountTitle": "Badar Abbas Shah",
-      "accountNumber": "03079031153",
+      "accountTitle": "Account Title",
+      "accountNumber": "03001234567",
       "bankName": "Easypaisa Wallet",
       "instructions": "Send via Easypaisa App",
-      "isActive": true
+      "isActive": false
     },
     {
       "id": "pm_jazzcash_1",
       "provider": "JazzCash",
-      "accountTitle": "Badar Abbas Shah",
-      "accountNumber": "03079031153",
+      "accountTitle": "Account Title",
+      "accountNumber": "03001234567",
       "bankName": "JazzCash Mobile Account",
       "instructions": "Send via JazzCash App or *786#",
-      "isActive": true
+      "isActive": false
     }
   ]
 }

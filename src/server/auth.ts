@@ -226,14 +226,36 @@ export async function savePlans(plans: PlanDefinition[]): Promise<void> {
   await fs.writeFile(PLANS_FILE, JSON.stringify(plans, null, 2));
 }
 
+/**
+ * Resolves the password used to bootstrap the admin account on a completely
+ * fresh deployment (no users.json / no admin row yet). Never a fixed literal
+ * in source: set ADMIN_BOOTSTRAP_PASSWORD in the environment for a chosen
+ * password, or leave it unset to get a random one printed to the server log
+ * exactly once, at the moment the account is created. Change it via Settings
+ * right after first login either way.
+ */
+function resolveAdminBootstrapPassword(): string {
+  const fromEnv = process.env.ADMIN_BOOTSTRAP_PASSWORD?.trim();
+  if (fromEnv) return fromEnv;
+  const generated = crypto.randomBytes(9).toString("base64url");
+  console.warn(
+    `[Auth] No ADMIN_BOOTSTRAP_PASSWORD set — generated a one-time admin password: ${generated}\n` +
+      `[Auth] Save this now and change it from Settings after logging in; it will not be shown again.`
+  );
+  return generated;
+}
+
 export async function getUsers(): Promise<User[]> {
   try {
     const data = await fs.readFile(USERS_FILE, "utf-8");
     let users: User[] = JSON.parse(data);
 
-    // Guarantee the requested admin account exists with exact credentials
+    // Guarantee the designated admin account EXISTS with the right role/plan.
+    // This must never overwrite an existing account's passwordHash — doing so
+    // previously meant any password change made from Settings was silently
+    // reverted on the very next request, because this runs on every
+    // authenticated call via getUserByToken().
     const adminEmail = "baddarbukhari@gmail.com";
-    const adminPassHash = hashPassword("B@dar85299211");
     const adminIdx = users.findIndex((u) => u.email.toLowerCase() === adminEmail.toLowerCase());
 
     let hasChanged = false;
@@ -242,7 +264,7 @@ export async function getUsers(): Promise<User[]> {
         id: "usr_admin_badar",
         name: "Badar Bukhari",
         email: adminEmail,
-        passwordHash: adminPassHash,
+        passwordHash: hashPassword(resolveAdminBootstrapPassword()),
         role: "admin",
         status: "active",
         plan: "Enterprise",
@@ -255,10 +277,9 @@ export async function getUsers(): Promise<User[]> {
       hasChanged = true;
     } else {
       const admin = users[adminIdx];
-      if (admin.role !== "admin" || admin.status !== "active" || admin.passwordHash !== adminPassHash || !admin.assignedLimits) {
+      if (admin.role !== "admin" || admin.status !== "active" || !admin.assignedLimits) {
         admin.role = "admin";
         admin.status = "active";
-        admin.passwordHash = adminPassHash;
         if (!admin.assignedLimits) {
           admin.assignedLimits = { ...DEFAULT_PLAN_LIMITS.Enterprise };
         }
@@ -290,12 +311,13 @@ export async function getUsers(): Promise<User[]> {
 
     return users;
   } catch {
+    // Completely fresh deployment: no users.json exists yet at all.
     const defaultUsers: User[] = [
       {
         id: "usr_admin_badar",
         name: "Badar Bukhari",
         email: "baddarbukhari@gmail.com",
-        passwordHash: hashPassword("B@dar85299211"),
+        passwordHash: hashPassword(resolveAdminBootstrapPassword()),
         role: "admin",
         status: "active",
         plan: "Enterprise",
@@ -309,9 +331,11 @@ export async function getUsers(): Promise<User[]> {
         id: "usr_user_default",
         name: "Sarah Malik",
         email: "user@salesagent.ai",
-        passwordHash: hashPassword("user123"),
+        // Random, not a fixed guessable literal — this demo account is inactive
+        // until an admin sets a real password for it from the Users page.
+        passwordHash: hashPassword(crypto.randomBytes(9).toString("base64url")),
         role: "user",
-        status: "active",
+        status: "suspended",
         plan: "Pro",
         company: "Digital Growth Hub",
         phone: "+92 321 9876543",

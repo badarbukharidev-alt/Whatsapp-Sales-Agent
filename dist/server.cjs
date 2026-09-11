@@ -50,12 +50,21 @@ async function savePlans(plans) {
   await import_promises.default.mkdir(import_path.default.dirname(PLANS_FILE), { recursive: true });
   await import_promises.default.writeFile(PLANS_FILE, JSON.stringify(plans, null, 2));
 }
+function resolveAdminBootstrapPassword() {
+  const fromEnv = process.env.ADMIN_BOOTSTRAP_PASSWORD?.trim();
+  if (fromEnv) return fromEnv;
+  const generated = import_crypto.default.randomBytes(9).toString("base64url");
+  console.warn(
+    `[Auth] No ADMIN_BOOTSTRAP_PASSWORD set \u2014 generated a one-time admin password: ${generated}
+[Auth] Save this now and change it from Settings after logging in; it will not be shown again.`
+  );
+  return generated;
+}
 async function getUsers() {
   try {
     const data = await import_promises.default.readFile(USERS_FILE, "utf-8");
     let users = JSON.parse(data);
     const adminEmail = "baddarbukhari@gmail.com";
-    const adminPassHash = hashPassword("B@dar85299211");
     const adminIdx = users.findIndex((u) => u.email.toLowerCase() === adminEmail.toLowerCase());
     let hasChanged = false;
     if (adminIdx === -1) {
@@ -63,7 +72,7 @@ async function getUsers() {
         id: "usr_admin_badar",
         name: "Badar Bukhari",
         email: adminEmail,
-        passwordHash: adminPassHash,
+        passwordHash: hashPassword(resolveAdminBootstrapPassword()),
         role: "admin",
         status: "active",
         plan: "Enterprise",
@@ -76,10 +85,9 @@ async function getUsers() {
       hasChanged = true;
     } else {
       const admin = users[adminIdx];
-      if (admin.role !== "admin" || admin.status !== "active" || admin.passwordHash !== adminPassHash || !admin.assignedLimits) {
+      if (admin.role !== "admin" || admin.status !== "active" || !admin.assignedLimits) {
         admin.role = "admin";
         admin.status = "active";
-        admin.passwordHash = adminPassHash;
         if (!admin.assignedLimits) {
           admin.assignedLimits = { ...DEFAULT_PLAN_LIMITS.Enterprise };
         }
@@ -112,7 +120,7 @@ async function getUsers() {
         id: "usr_admin_badar",
         name: "Badar Bukhari",
         email: "baddarbukhari@gmail.com",
-        passwordHash: hashPassword("B@dar85299211"),
+        passwordHash: hashPassword(resolveAdminBootstrapPassword()),
         role: "admin",
         status: "active",
         plan: "Enterprise",
@@ -126,9 +134,11 @@ async function getUsers() {
         id: "usr_user_default",
         name: "Sarah Malik",
         email: "user@salesagent.ai",
-        passwordHash: hashPassword("user123"),
+        // Random, not a fixed guessable literal — this demo account is inactive
+        // until an admin sets a real password for it from the Users page.
+        passwordHash: hashPassword(import_crypto.default.randomBytes(9).toString("base64url")),
         role: "user",
-        status: "active",
+        status: "suspended",
         plan: "Pro",
         company: "Digital Growth Hub",
         phone: "+92 321 9876543",
