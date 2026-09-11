@@ -12,6 +12,15 @@ import {
 } from "../src/server/tool-matcher.js";
 import { synthesizeSalesPrompt } from "../src/server/services/prompt-service.js";
 import { buildCompactPublicQuery } from "../src/server/ai.js";
+import {
+  isBareAffirmation,
+  detectPendingOffer,
+  collectAllowedUrls,
+  flattenMarkdownLinks,
+  enforceKnownLinks,
+  stripLeadingContinuationFragment,
+  stripRepeatedOffer,
+} from "../src/server/services/reply-guard.js";
 
 const toolsData: Tool[] = JSON.parse(
   fs.readFileSync(path.resolve(process.cwd(), "data", "tools.json"), "utf-8")
@@ -540,6 +549,65 @@ async function runRegressionSuite() {
       compact.includes("docs.google.com"),
       "Compact query must still contain the real link even with a long prompt body"
     );
+  });
+
+  // =========================================================================
+  // SCENARIO 8: REPLY GUARDS — the exact failures from the Sep-11 ClipShield chat
+  //   - agent asked "aap kahen toh main link bhej doon?" 3 turns running while
+  //     the customer kept replying "G" / "Link bhjo"
+  //   - final link it sent was a markdown placeholder: [..](https://example.com/..)
+  //   - two replies started mid-sentence ("ko bypass kar sake. Ye video ki ...")
+  // =========================================================================
+  test("8.1 isBareAffirmation recognizes short WhatsApp confirmations", () => {
+    for (const yes of ["G", "g", "haan", "ji bhai", "ok", "bhejo", "haan bhejo", "theek hai"]) {
+      assert.ok(isBareAffirmation(yes), `"${yes}" must count as a bare affirmation`);
+    }
+    for (const no of ["G clipshield ka kya rate hai", "nahi rehne do", "kitne ka hai"]) {
+      assert.ok(!isBareAffirmation(no), `"${no}" must NOT count as a bare affirmation`);
+    }
+  });
+
+  test("8.2 detectPendingOffer reads what the agent last offered to send", () => {
+    assert.strictEqual(
+      detectPendingOffer("Aap kahen toh main setup guide aur download link abhi share kar deta hoon?"),
+      "link"
+    );
+    assert.strictEqual(
+      detectPendingOffer("Payment details bhej doon jazzcash ke?"),
+      "payment"
+    );
+    assert.strictEqual(detectPendingOffer("Zabardast tool hai bhai"), null);
+  });
+
+  test("8.3 enforceKnownLinks rewrites a placeholder/markdown link to the real configured URL", () => {
+    const real = clipTool.links!.find(l => l.url)!.url;
+    const flattened = flattenMarkdownLinks(
+      "Jee bilkul, yeh lein: [ClipShield Setup Guide & Download](https://example.com/clipshield-setup)"
+    );
+    assert.ok(!/\]\(/.test(flattened), "markdown link syntax must be flattened");
+    const guarded = enforceKnownLinks(flattened, collectAllowedUrls([clipTool])).text;
+    assert.ok(guarded.includes(real), "placeholder host must be replaced with the real configured link");
+    assert.ok(!guarded.includes("example.com"), "no placeholder host may survive");
+  });
+
+  test("8.4 enforceKnownLinks removes an invented link when the product has none", () => {
+    const res = enforceKnownLinks("Yeh raha link: https://clipshield-download.net/setup", []);
+    assert.ok(!res.text.includes("clipshield-download.net"), "invented link must be stripped when nothing is allowed");
+    assert.ok(res.removed >= 1, "removal must be reported");
+  });
+
+  test("8.5 stripLeadingContinuationFragment drops a reply that starts mid-sentence", () => {
+    const bad = "ko bypass kar sake. Ye video ki pitch, frame rate, aur metadata ko slightly modify kar deta hai bina visual quality disturb kiye.";
+    const fixed = stripLeadingContinuationFragment(bad);
+    assert.ok(fixed.startsWith("Ye video ki pitch"), `fragment must be removed, got: "${fixed.slice(0, 40)}"`);
+  });
+
+  test("8.6 stripRepeatedOffer deletes the re-asked question once the customer said yes", () => {
+    const lastAgent = "Aap ko ClipShield ka setup link aur details bhej doon?";
+    const reply = "Jee bilkul.\nAap kahen toh main setup guide aur download link abhi share kar deta hoon?";
+    const out = stripRepeatedOffer(reply, lastAgent);
+    assert.ok(!/share kar deta hoon\?/.test(out), "the repeated offer question must be dropped");
+    assert.ok(out.includes("Jee bilkul"), "the rest of the reply is kept");
   });
 
   for (const t of testQueue) {

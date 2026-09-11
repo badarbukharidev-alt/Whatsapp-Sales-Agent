@@ -16,9 +16,15 @@ const PLACEHOLDER_HOST_REGEX =
 const AFFIRMATION_WORD_REGEX =
   /^(?:g|gg|gee|ji|jee|jii|ha|haan|han|hn|hnji|hanji|jihan|ok|oky|okay|okk|k|acha|achaa|achha|theek|thek|thik|sahi|yes|ya|yeah|yep|yup|sure|done|zaroor|bilkul|bhejo|bhej|bhejdo|bhejde|bhejein|bhejen|send|dedo|dedein|krdo|kardo|kar|do|karo|please|plz|pls|bhai|bro|sir)$/i;
 
-/** Offer verbs an agent uses when proposing to send something ("bhej doon?"). */
-const OFFER_VERB_REGEX =
-  /(?:bhej(?:un|oon|on|u|ou)?|bhejta|bhejdun|bhej\s*d(?:oon|un|u)|send\s*kar\s*(?:doon|dun)|share\s*kar\s*(?:doon|dun)|de\s*(?:doon|dun)|kar\s*(?:doon|dun)|batau|bata\s*(?:doon|dun)|chahiye|chahye)/i;
+/** Trailing filler words that don't disqualify an otherwise-bare "yes". */
+const AFFIRMATION_FILLER_REGEX = /^(?:hai|hain|hy|he|na|nah|yr|yaar|jani|jaan|zra|zara|abhi|to|tou)$/i;
+
+/** Offer verbs an agent uses when proposing to send something ("bhej doon?", "share kar deta hoon"). */
+const OFFER_VERB_SOURCE =
+  "bhej(?:un|oon|on|u|ou)?|bhejta|bhejdun|bhej\\s*d(?:oon|un|u|ta)|" +
+  "(?:send|share|de|kar|bhej|bata)\\s*(?:kar\\s*)?(?:d(?:oon|un|u|e|ee)|deta|deti)\\s*(?:h(?:oon|u|un|o|ai))?|" +
+  "batau|bata\\s*(?:doon|dun)|chahiye|chahye|karun|karoon";
+const OFFER_VERB_REGEX = new RegExp(`(?:${OFFER_VERB_SOURCE})`, "i");
 
 /** Roman Urdu particles / clitics that cannot legally start a sentence. */
 const CONTINUATION_STARTER_REGEX =
@@ -39,7 +45,16 @@ export function isBareAffirmation(text: string): boolean {
     .split(/\s+/)
     .filter(Boolean);
   if (words.length === 0 || words.length > 4) return false;
-  return words.every((w) => AFFIRMATION_WORD_REGEX.test(w));
+  let sawAffirmation = false;
+  for (const w of words) {
+    if (AFFIRMATION_WORD_REGEX.test(w)) {
+      sawAffirmation = true;
+      continue;
+    }
+    if (AFFIRMATION_FILLER_REGEX.test(w)) continue;
+    return false;
+  }
+  return sawAffirmation;
 }
 
 /**
@@ -52,8 +67,11 @@ export function detectPendingOffer(lastAgentText?: string | null): PendingOffer 
   const isOffer = text.includes("?") || OFFER_VERB_REGEX.test(text);
   if (!isOffer) return null;
 
-  const near = (subject: RegExp) =>
-    new RegExp(`${subject.source}[^.?!\n]{0,60}${OFFER_VERB_REGEX.source}|${OFFER_VERB_REGEX.source}[^.?!\n]{0,60}${subject.source}`, "i").test(text);
+  const verb = `(?:${OFFER_VERB_SOURCE})`;
+  const near = (subject: RegExp) => {
+    const s = `(?:${subject.source})`;
+    return new RegExp(`${s}[^.?!\\n]{0,60}${verb}|${verb}[^.?!\\n]{0,60}${s}`, "i").test(text);
+  };
 
   if (near(/(?:payment\s*details|account\s*(?:number|details|title)|jazz\s*cash|jazzcash|easy\s*paisa|easypaisa|raast)/)) {
     return "payment";
@@ -172,15 +190,21 @@ export function stripLeadingContinuationFragment(text: string): string {
     return text;
   }
 
+  // Only act on the unambiguous tell: the reply opens with a Roman-Urdu particle
+  // / clitic that can never legally start a sentence ("ko bypass kar sake. ...").
+  // Anything else — a lowercase word that is a plausible opener — is left alone
+  // so we never eat a legitimate short reply.
+  if (!CONTINUATION_STARTER_REGEX.test(trimmed)) return text;
+
   const terminator = trimmed.search(/[.!?]\s/);
   if (terminator < 0) return text;
 
   const rest = trimmed.slice(terminator + 1).trimStart();
-  if (rest.length < 25) return text;
+  if (rest.length < 20) return text;
 
-  const startsWithParticle = CONTINUATION_STARTER_REGEX.test(trimmed);
-  const fragment = trimmed.slice(0, terminator);
-  if (!startsWithParticle && fragment.length > 90) return text;
+  // The dropped fragment must be short — a real leading sentence that merely
+  // happens to be lowercased would be much longer than a truncation stub.
+  if (terminator > 80) return text;
 
   return rest;
 }

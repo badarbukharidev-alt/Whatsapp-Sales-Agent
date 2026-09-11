@@ -65,6 +65,7 @@ export default function Tools() {
   const [editObjectionNeedTime, setEditObjectionNeedTime] = useState("");
   const [editObjectionCompetitor, setEditObjectionCompetitor] = useState("");
   const [editSections, setEditSections] = useState<ToolSection[]>([]);
+  const [editSingleDynamicText, setEditSingleDynamicText] = useState("");
   const [editLinks, setEditLinks] = useState<ToolLink[]>([]);
   const [editRawDraft, setEditRawDraft] = useState("");
 
@@ -220,6 +221,8 @@ export default function Tools() {
     setEditLimitations((tool.limitations || []).join("\n"));
     setEditImages(tool.images || []);
     setEditSections(tool.sections ? JSON.parse(JSON.stringify(tool.sections)) : []);
+    const singleText = (tool.sections || []).map(s => (s.content || s.title).trim()).filter(Boolean).join("\n\n");
+    setEditSingleDynamicText(singleText);
     setEditLinks(tool.links ? JSON.parse(JSON.stringify(tool.links)) : []);
     setEditRawDraft(tool.rawDraft || "");
 
@@ -387,7 +390,9 @@ export default function Tools() {
         how_to_use: editHowToUse.trim(),
         limitations: editLimitations.split("\n").map(l => l.trim()).filter(Boolean),
         images: editImages,
-        sections: editSections,
+        sections: editSingleDynamicText.trim()
+          ? [{ id: "sec_1", title: "Constant Dynamic Knowledge Message", content: editSingleDynamicText.trim() }]
+          : [],
         links: editLinks,
         rawDraft: editRawDraft,
         templateMessage: {
@@ -1424,64 +1429,24 @@ export default function Tools() {
                     )}
                   </div>
 
-                  {/* Dynamic Sections Section */}
+                  {/* Single Constant Dynamic Message Section */}
                   <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <span className="text-xs font-bold text-slate-800 uppercase tracking-wider block">
-                          Knowledge Sections ({editSections.length})
-                        </span>
-                        <p className="text-[11px] text-slate-500">
-                          Comprehensive topics and detailed guides specific to this tool.
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={handleAddSection}
-                        className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-all shadow-2xs flex items-center gap-1.5"
-                      >
-                        <Plus className="w-3.5 h-3.5" />
-                        Add Section
-                      </button>
+                    <div>
+                      <span className="text-xs font-bold text-slate-800 uppercase tracking-wider block">
+                        Constant Dynamic Section Message
+                      </span>
+                      <p className="text-[11px] text-slate-500">
+                        Enter your tool's single constant dynamic message here (as lengthy as needed). This message contains complete tool details, tutorial URLs, pricing, and WhatsApp channel link.
+                      </p>
                     </div>
 
-                    {editSections.length === 0 ? (
-                      <div className="p-6 text-center bg-slate-50 rounded-xl border border-dashed border-slate-300 text-slate-400">
-                        <p className="text-xs">No dynamic sections created yet. Click "Add Section" to create one.</p>
-                      </div>
-                    ) : (
-                      <div className="space-y-3">
-                        {editSections.map((sec, idx) => (
-                          <div key={idx} className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-2">
-                            <div className="flex items-center justify-between gap-2">
-                              <input
-                                type="text"
-                                value={sec.title}
-                                onChange={(e) => handleUpdateSection(idx, "title", e.target.value)}
-                                placeholder="Section Title (e.g. 9-Layer Anti-Content ID System)"
-                                className="w-full font-bold text-xs text-slate-900 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-emerald-500"
-                              />
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteSection(idx)}
-                                className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors shrink-0"
-                                title="Delete section"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-
-                            <textarea
-                              value={sec.content}
-                              onChange={(e) => handleUpdateSection(idx, "content", e.target.value)}
-                              rows={4}
-                              placeholder="Full detailed information, steps, policies, or technical specifications..."
-                              className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs text-slate-800 outline-none focus:border-emerald-500 font-sans resize-y"
-                            />
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                    <textarea
+                      value={editSingleDynamicText}
+                      onChange={(e) => setEditSingleDynamicText(e.target.value)}
+                      rows={12}
+                      placeholder="Paste your tool's constant dynamic message here..."
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3.5 text-xs text-slate-800 font-sans outline-none focus:border-emerald-500 focus:bg-white resize-y leading-relaxed shadow-2xs font-mono"
+                    />
                   </div>
 
                   {/* Raw Draft Preservation Accordion */}

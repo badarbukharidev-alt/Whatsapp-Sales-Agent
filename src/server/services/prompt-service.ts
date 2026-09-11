@@ -189,11 +189,11 @@ CRITICAL RULES (ABSOLUTELY NO ROBOTIC BOT BEHAVIOR & ZERO HALLUCINATIONS):
         t.links.forEach((l) => toolLines.push(`  - ${l.title}: ${l.url} ${l.note ? `(${l.note})` : ""}`));
       }
 
-      // DYNAMIC SECTIONS (Vast & Unabridged)
+      // SINGLE CONSTANT DYNAMIC SECTION MESSAGE
       if (t.sections && t.sections.length > 0) {
-        toolLines.push(`Detailed Dynamic Sections:`);
+        toolLines.push(`Constant Dynamic Section Message:`);
         for (const sec of t.sections) {
-          toolLines.push(`[SECTION: ${sec.title}]\n${sec.content}`);
+          toolLines.push(sec.content || sec.title);
         }
       }
 

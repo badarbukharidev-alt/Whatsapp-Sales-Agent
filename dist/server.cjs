@@ -1172,7 +1172,7 @@ function buildCompactPublicQuery(prompt, systemPrompt) {
     const priceMatch = prompt.match(/(?:Pricing|Regular Price|List Price):\s*([^\n]+)/i);
     const featuresMatch = prompt.match(/Key Features:\s*\n([\s\S]*?)(?=\n[A-Z]|\n===|$)/i);
     const linksMatch = prompt.match(/Official Links \& Downloads:\s*\n([\s\S]*?)(?=\n[A-Z]|\n===|$)/i);
-    const sectionsMatch = prompt.match(/\[SECTION:[^\]]+\]\s*\n([\s\S]*?)(?=\n\[SECTION|\n===|\n[A-Z]|$)/i);
+    const sectionsMatch = prompt.match(/(?:Constant Dynamic Section Message|\[SECTION:[^\]]+\])\s*\n([\s\S]*?)(?=\n\[SECTION|\n===|\n[A-Z]|$)/i);
     const desc = descMatch ? descMatch[1].slice(0, 140).trim() : "";
     const price = priceMatch ? priceMatch[1].slice(0, 80).trim() : "";
     const feat = featuresMatch ? featuresMatch[1].split("\n").filter(Boolean).slice(0, 2).map((f) => f.replace(/^[\*\-]\s*/, "")).join("; ").slice(0, 160) : "";
@@ -3366,10 +3366,9 @@ ${t.how_to_use}`);
         t.links.forEach((l) => toolLines.push(`  - ${l.title}: ${l.url} ${l.note ? `(${l.note})` : ""}`));
       }
       if (t.sections && t.sections.length > 0) {
-        toolLines.push(`Detailed Dynamic Sections:`);
+        toolLines.push(`Constant Dynamic Section Message:`);
         for (const sec of t.sections) {
-          toolLines.push(`[SECTION: ${sec.title}]
-${sec.content}`);
+          toolLines.push(sec.content || sec.title);
         }
       }
       if (t.faq && t.faq.length > 0) {
@@ -3462,6 +3461,133 @@ ${turns.join("\n")}` : "",
 }
 var init_prompt_service = __esm({
   "src/server/services/prompt-service.ts"() {
+  }
+});
+
+// src/server/services/reply-guard.ts
+function isBareAffirmation(text) {
+  if (!text) return false;
+  const words = text.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ").split(/\s+/).filter(Boolean);
+  if (words.length === 0 || words.length > 4) return false;
+  let sawAffirmation = false;
+  for (const w of words) {
+    if (AFFIRMATION_WORD_REGEX.test(w)) {
+      sawAffirmation = true;
+      continue;
+    }
+    if (AFFIRMATION_FILLER_REGEX.test(w)) continue;
+    return false;
+  }
+  return sawAffirmation;
+}
+function detectPendingOffer(lastAgentText) {
+  if (!lastAgentText) return null;
+  const text = lastAgentText.toLowerCase();
+  const isOffer = text.includes("?") || OFFER_VERB_REGEX.test(text);
+  if (!isOffer) return null;
+  const verb = `(?:${OFFER_VERB_SOURCE})`;
+  const near = (subject) => {
+    const s = `(?:${subject.source})`;
+    return new RegExp(`${s}[^.?!\\n]{0,60}${verb}|${verb}[^.?!\\n]{0,60}${s}`, "i").test(text);
+  };
+  if (near(/(?:payment\s*details|account\s*(?:number|details|title)|jazz\s*cash|jazzcash|easy\s*paisa|easypaisa|raast)/)) {
+    return "payment";
+  }
+  if (near(/(?:link|links|download|setup\s*guide|trial|portal)/)) return "link";
+  if (near(/(?:details|tafseel|tafsil|features|specs)/)) return "details";
+  return null;
+}
+function collectAllowedUrls(tools) {
+  const urls = [];
+  for (const t of tools || []) {
+    for (const l of t.links || []) {
+      const url = (l?.url || "").trim();
+      if (url && !urls.includes(url)) urls.push(url);
+    }
+  }
+  return urls;
+}
+function normalizeUrl(url) {
+  return url.trim().replace(/[).,;:!?"'\]]+$/, "").replace(/^https?:\/\//i, "").replace(/^www\./i, "").replace(/\/+$/, "").toLowerCase();
+}
+function hostOf(url) {
+  return normalizeUrl(url).split("/")[0];
+}
+function flattenMarkdownLinks(text) {
+  if (!text) return text;
+  return text.replace(/\[([^\]\n]{1,80})\]\(\s*((?:https?:\/\/|www\.)[^\s)]+)\s*\)/gi, (_m, label, url) => {
+    const clean = String(label).trim().replace(/[:\-–]\s*$/, "");
+    return clean ? `${clean}: ${url}` : String(url);
+  }).replace(/<((?:https?:\/\/|www\.)[^\s>]+)>/gi, "$1");
+}
+function enforceKnownLinks(text, allowedUrls) {
+  if (!text) return { text, replaced: 0, removed: 0 };
+  const allowed = (allowedUrls || []).map((u) => u.trim()).filter(Boolean);
+  const allowedNormalized = allowed.map(normalizeUrl);
+  const allowedHosts = allowed.map(hostOf);
+  let replaced = 0;
+  let removed = 0;
+  let out = text.replace(URL_REGEX, (raw) => {
+    const trailing = raw.match(/[).,;:!?"'\]]+$/)?.[0] || "";
+    const url = trailing ? raw.slice(0, raw.length - trailing.length) : raw;
+    const normalized = normalizeUrl(url);
+    const exactIndex = allowedNormalized.indexOf(normalized);
+    if (exactIndex >= 0 && !PLACEHOLDER_HOST_REGEX.test(url)) {
+      return allowed[exactIndex] + trailing;
+    }
+    const hostIndex = allowedHosts.indexOf(hostOf(url));
+    if (hostIndex >= 0) {
+      replaced++;
+      return allowed[hostIndex] + trailing;
+    }
+    if (allowed.length > 0) {
+      replaced++;
+      return allowed[0] + trailing;
+    }
+    removed++;
+    return "";
+  });
+  if (removed > 0) {
+    out = out.replace(/[ \t]*[:\-–]\s*(?=\n|$)/g, "").replace(/\(\s*\)/g, "").replace(/[ \t]{2,}/g, " ").replace(/[ \t]+(?=[.,!?])/g, "");
+  }
+  return { text: out.trim(), replaced, removed };
+}
+function stripLeadingContinuationFragment(text) {
+  if (!text) return text;
+  const trimmed = text.trimStart();
+  const firstChar = trimmed[0];
+  if (!firstChar || firstChar !== firstChar.toLowerCase() || !/[a-z]/i.test(firstChar)) {
+    return text;
+  }
+  if (!CONTINUATION_STARTER_REGEX.test(trimmed)) return text;
+  const terminator = trimmed.search(/[.!?]\s/);
+  if (terminator < 0) return text;
+  const rest = trimmed.slice(terminator + 1).trimStart();
+  if (rest.length < 20) return text;
+  if (terminator > 80) return text;
+  return rest;
+}
+function stripRepeatedOffer(text, lastAgentText) {
+  const pending = detectPendingOffer(lastAgentText);
+  if (!pending || !text) return text;
+  const lines = text.split(/\n/);
+  const kept = lines.filter((line) => {
+    if (!line.includes("?")) return true;
+    return detectPendingOffer(line) !== pending;
+  });
+  const result = kept.join("\n").trim();
+  return result.length > 0 ? result : text;
+}
+var URL_REGEX, PLACEHOLDER_HOST_REGEX, AFFIRMATION_WORD_REGEX, AFFIRMATION_FILLER_REGEX, OFFER_VERB_SOURCE, OFFER_VERB_REGEX, CONTINUATION_STARTER_REGEX;
+var init_reply_guard = __esm({
+  "src/server/services/reply-guard.ts"() {
+    URL_REGEX = /(?:https?:\/\/|www\.)[^\s<>()\[\]{}"'`]+/gi;
+    PLACEHOLDER_HOST_REGEX = /(?:example\.(?:com|org|net)|yourdomain|your-?site|placeholder|dummy|test\.com|xyz\.com|abc\.com|link\.com|sample\.com|domain\.com)/i;
+    AFFIRMATION_WORD_REGEX = /^(?:g|gg|gee|ji|jee|jii|ha|haan|han|hn|hnji|hanji|jihan|ok|oky|okay|okk|k|acha|achaa|achha|theek|thek|thik|sahi|yes|ya|yeah|yep|yup|sure|done|zaroor|bilkul|bhejo|bhej|bhejdo|bhejde|bhejein|bhejen|send|dedo|dedein|krdo|kardo|kar|do|karo|please|plz|pls|bhai|bro|sir)$/i;
+    AFFIRMATION_FILLER_REGEX = /^(?:hai|hain|hy|he|na|nah|yr|yaar|jani|jaan|zra|zara|abhi|to|tou)$/i;
+    OFFER_VERB_SOURCE = "bhej(?:un|oon|on|u|ou)?|bhejta|bhejdun|bhej\\s*d(?:oon|un|u|ta)|(?:send|share|de|kar|bhej|bata)\\s*(?:kar\\s*)?(?:d(?:oon|un|u|e|ee)|deta|deti)\\s*(?:h(?:oon|u|un|o|ai))?|batau|bata\\s*(?:doon|dun)|chahiye|chahye|karun|karoon";
+    OFFER_VERB_REGEX = new RegExp(`(?:${OFFER_VERB_SOURCE})`, "i");
+    CONTINUATION_STARTER_REGEX = /^(?:ko|ka|ki|ke|se|me|mein|par|pe|aur|ya|taake|takay|takke|jis|jise|jin|jo|hai|hain|tha|thi|the|kar|karta|karti|karte|karne|karna|kiya|deta|deti|dete|diya|raha|rahi|rahe|wala|wali|wale|bhi|to|ho|hota|hoti|hote|nahi|na|kyunke|kyunki|lekin|magar|phir|is|us|iska|uska|jab|agar)\b/i;
   }
 });
 
@@ -3717,6 +3843,19 @@ Title: ${p.accountTitle}${p.instructions ? `
       };
     }
   }
+  const lastAgentText = [...recentMessages].reverse().find((m) => m.role === "agent")?.content || null;
+  const affirmedPendingLink = isBareAffirmation(latestCustomerText) && detectPendingOffer(lastAgentText) === "link";
+  const primaryLink = lockedTool?.links?.find((l) => (l?.url || "").trim())?.url?.trim() || "";
+  if ((explicitLinkRequest || affirmedPendingLink) && lockedTool && primaryLink && !templateMessage) {
+    const guide = lockedTool.name.toLowerCase().includes("clip") ? "Yahan se app download kar ke setup guide follow karein. Pehla video free test kar sakte hain." : "Yahan se account bana ke ek sample free generate kar ke dekh lein.";
+    await evaluateAndApplyCustomerStatus(cleanJid, customer, latestCustomerText, null, userId, buyingIntent);
+    return {
+      textMessages: [`Ye raha ${lockedTool.name} ka link:
+${primaryLink}`, guide],
+      imageToSend: null,
+      templateMessage
+    };
+  }
   const { prompt, systemPrompt } = synthesizeSalesPrompt({
     customer,
     matchedTools: match.matched,
@@ -3762,6 +3901,15 @@ Title: ${p.accountTitle}${p.instructions ? `
     }
   }
   text = cleanAndFixUrls(text, Boolean(templateMessage));
+  if (!templateMessage) {
+    const allowedUrls = collectAllowedUrls(
+      lockedTool ? [lockedTool, ...accountTools.filter((t) => t.id !== lockedTool.id)] : accountTools
+    );
+    text = flattenMarkdownLinks(text);
+    text = enforceKnownLinks(text, allowedUrls).text;
+  }
+  text = stripLeadingContinuationFragment(text);
+  text = stripRepeatedOffer(text, lastAgentText);
   if (templateMessage && (!text || text.length < 5)) {
     text = "Aap pehle test kar lein, jab satisfied hon toh batayega payment details share kar doonga.";
   }
@@ -3876,6 +4024,7 @@ var init_agent = __esm({
     init_whatsapp();
     init_usage();
     init_tool_matcher();
+    init_reply_guard();
     BUYING_INTENT_REGEX = /(?:\b(?:le?na|lena|leni|chahiye|chaiye|chahye)\b|\blink\b|\bprice\b|\brate\b|\bkitne?\b|\bkitna\b|final\s*price|\bpayment\b|jazz\s*cash|jazzcash|easy\s*paisa|easypaisa|\braast\b|account\s*(?:number|details|no)|\bpro\b|start\s*kar|shuru\s*kar|kharid|khareed|purchase|\bbuy\b|sub\s*len|order\s*kar|paise?\s*(?:bhej|send|transfer|kaha))/i;
     EXPLICIT_PAYMENT_REGEX = /(?:payment\s*(?:details|method|info|kaise|karni|kar\s*d|number|account)|kaise?\s*pay|kahan?\s*(?:pay|paise|bhej)|account\s*(?:number|details|title|no)\b|jazz\s*cash|jazzcash|easy\s*paisa|easypaisa|\braast\b|bank\s*(?:details|account))/i;
     EXPLICIT_LINK_REGEX = /(?:\blink\b|\blinks\b|download|trial\s*(?:link|de)|website\s*(?:link|do)|\bportal\b)/i;

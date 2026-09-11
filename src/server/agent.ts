@@ -7,6 +7,15 @@ import { sendMessage, sendToolImage } from "./whatsapp.js";
 import { Customer, CustomerStatus, Tool } from "../types.js";
 import { checkAiReplyQuota, recordAiReply, recordUserMessage } from "./usage.js";
 import { recordStatedFacts, clampPriceFloors, extractMentionedFacts } from "./tool-matcher.js";
+import {
+  isBareAffirmation,
+  detectPendingOffer,
+  collectAllowedUrls,
+  flattenMarkdownLinks,
+  enforceKnownLinks,
+  stripLeadingContinuationFragment,
+  stripRepeatedOffer,
+} from "./services/reply-guard.js";
 
 // ---------------------------------------------------------------------------
 // Controlled-selling helpers: buying intent, explicit requests, role separation
@@ -445,6 +454,35 @@ async function generateResponse(
   }
   // ── END HARDCODED PAYMENT BYPASS ─────────────────────────────────────────
 
+  // ── DETERMINISTIC LINK DELIVERY ─────────────────────────────────────────
+  // The customer explicitly asked for the link, OR they just said "G / haan /
+  // bhejo" right after WE offered to send it. Either way there is nothing left
+  // to decide: send the real configured link once, with a one-line guide, and
+  // skip the AI. This is what stops the "aap kahen toh main bhej doon?" loop
+  // and guarantees the URL is never a hallucinated placeholder.
+  const lastAgentText = [...recentMessages].reverse().find((m) => m.role === "agent")?.content || null;
+  const affirmedPendingLink =
+    isBareAffirmation(latestCustomerText) && detectPendingOffer(lastAgentText) === "link";
+  const primaryLink = lockedTool?.links?.find((l) => (l?.url || "").trim())?.url?.trim() || "";
+
+  if (
+    (explicitLinkRequest || affirmedPendingLink) &&
+    lockedTool &&
+    primaryLink &&
+    !templateMessage // a template was NOT sent this turn (it already carries the link)
+  ) {
+    const guide = lockedTool.name.toLowerCase().includes("clip")
+      ? "Yahan se app download kar ke setup guide follow karein. Pehla video free test kar sakte hain."
+      : "Yahan se account bana ke ek sample free generate kar ke dekh lein.";
+    await evaluateAndApplyCustomerStatus(cleanJid, customer, latestCustomerText, null, userId, buyingIntent);
+    return {
+      textMessages: [`Ye raha ${lockedTool.name} ka link:\n${primaryLink}`, guide],
+      imageToSend: null,
+      templateMessage,
+    };
+  }
+  // ── END DETERMINISTIC LINK DELIVERY ─────────────────────────────────────
+
   // 8. Synthesize lean, controlled sales prompt (ONLY the locked product's data).
   const { prompt, systemPrompt } = synthesizeSalesPrompt({
     customer,
@@ -507,6 +545,21 @@ async function generateResponse(
 
   // CLEAN & FIX URLS: Repair mangled links, convert markdown links to plain URLs, and strip URLs if template was sent
   text = cleanAndFixUrls(text, Boolean(templateMessage));
+
+  // REPLY GUARDS (product-agnostic, applied to every reply):
+  //  - flatten any [text](url) markdown WhatsApp cannot render
+  //  - rewrite any invented / placeholder / truncated URL to a real configured one
+  //  - drop a leading half-sentence (the tell-tale sign of a prompt cut mid-line)
+  //  - if the customer already accepted our offer, don't ask the same question again
+  if (!templateMessage) {
+    const allowedUrls = collectAllowedUrls(
+      lockedTool ? [lockedTool, ...accountTools.filter((t) => t.id !== lockedTool!.id)] : accountTools
+    );
+    text = flattenMarkdownLinks(text);
+    text = enforceKnownLinks(text, allowedUrls).text;
+  }
+  text = stripLeadingContinuationFragment(text);
+  text = stripRepeatedOffer(text, lastAgentText);
 
   // If template was sent and AI reply became empty or trivial after URL stripping, provide clean short follow-up
   if (templateMessage && (!text || text.length < 5)) {
