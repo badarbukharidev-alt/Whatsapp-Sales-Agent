@@ -8,7 +8,16 @@ deployment:
     - /bin/cp -R dist $DEPLOYPATH
     - /bin/cp -R data_defaults $DEPLOYPATH
     - /bin/mkdir -p $DEPLOYPATH/data
-    - /bin/cp -u data/tools.json $DEPLOYPATH/data/ || /bin/cp data_defaults/tools.json $DEPLOYPATH/data/
+    # Seed the live catalog ONLY when it does not exist yet (-n = never clobber).
+    # This used to be "cp -u data/tools.json", which compares mtimes — and a git
+    # checkout always produces a newer file, so every single deploy overwrote the
+    # LIVE catalog with the repo copy. That silently wiped anything the admin had
+    # changed from the Tools page, including uploaded product image references
+    # (the image files in data/tool-images/ survived, but the tool no longer
+    # pointed at them, so the agent had no image to send).
+    # New tools added to data_defaults/tools.json are still merged into the live
+    # catalog on boot by initializeDataDirs() in server.ts, non-destructively.
+    - /bin/cp -n data_defaults/tools.json $DEPLOYPATH/data/tools.json || true
     - /bin/cp app.js $DEPLOYPATH
     - /bin/cp package.json $DEPLOYPATH
     - /bin/mkdir -p $DEPLOYPATH/tmp

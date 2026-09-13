@@ -24,6 +24,86 @@ export function isMetaLeak(text: string): boolean {
   return META_LEAK_REGEX.test(text);
 }
 
+/**
+ * Generic words that must never on their own decide which product image to
+ * send — mostly Roman Urdu glue words and the words used to ASK for an image.
+ */
+const IMAGE_MATCH_STOPWORDS = new Set([
+  "the", "and", "for", "with", "from", "this", "that", "your", "you", "how", "where", "what", "when",
+  "see", "get", "got", "can", "will", "its", "it", "is", "are", "was", "not", "any", "all", "into", "out",
+  "tool", "app", "software", "image", "images", "screenshot", "screen", "shot", "photo", "pic", "picture",
+  "kaise", "kese", "kahan", "kaha", "kidhar", "kya", "kyu", "hai", "hain", "ka", "ki", "ke", "ko", "mein",
+  "me", "se", "par", "pe", "aap", "bhai", "yeh", "ye", "wo", "woh", "kar", "karo", "karu", "karein", "krdo",
+  "do", "de", "den", "dein", "bhej", "bhejo", "bhejein", "dikhao", "dikha", "dikhaen", "please", "plz",
+  "mujhe", "mera", "meri", "main", "hun", "hoon", "ho", "na", "to", "ok", "acha", "milega", "milta",
+  "chahiye", "batao", "bata", "sakta", "sakte", "hoga", "hota",
+]);
+
+/**
+ * Splits text into the distinctive tokens used for image relevance matching,
+ * then expands a couple of domain synonyms so the customer's phrasing and the
+ * admin's image description find each other: "HWID" and "hardware id" are the
+ * same thing to a customer, but plain token overlap would miss it.
+ */
+function tokenizeForImageMatch(text: string): Set<string> {
+  const tokens = new Set<string>();
+  for (const raw of (text || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").split(/\s+/)) {
+    if (raw.length < 2) continue;
+    if (IMAGE_MATCH_STOPWORDS.has(raw)) continue;
+    tokens.add(raw);
+  }
+  if (tokens.has("hwid")) {
+    tokens.add("hardware");
+    tokens.add("id");
+  }
+  if (tokens.has("hardware") && tokens.has("id")) tokens.add("hwid");
+  return tokens;
+}
+
+/** Minimum overlapping distinctive tokens before an image is considered a real match. */
+const IMAGE_MATCH_MIN_SCORE = 2;
+
+export interface MatchableImage {
+  id?: string;
+  title?: string;
+  description?: string;
+  filename?: string;
+}
+
+/**
+ * Picks the uploaded product image that actually answers what the customer just
+ * asked, by matching their words against the image's own admin-written title and
+ * description (the upload form requires a description precisely so the agent can
+ * do this). Returns null when nothing is a convincing match, so a vague question
+ * never triggers a random image.
+ *
+ * This is what makes "HWID kahan se milega?" send the image the admin uploaded
+ * and described as "where to find the Hardware ID" — matching on the image's
+ * meaning rather than on the customer happening to say the word "screenshot".
+ */
+export function pickRelevantImage<T extends MatchableImage>(
+  customerText: string,
+  images?: T[] | null
+): { image: T; score: number } | null {
+  if (!images || images.length === 0 || !customerText) return null;
+
+  const customerTokens = tokenizeForImageMatch(customerText);
+  if (customerTokens.size === 0) return null;
+
+  let best: { image: T; score: number } | null = null;
+  for (const img of images) {
+    const meta = [img.title, img.description, img.filename].filter(Boolean).join(" ");
+    if (!meta.trim()) continue;
+    let score = 0;
+    for (const token of tokenizeForImageMatch(meta)) {
+      if (customerTokens.has(token)) score++;
+    }
+    if (!best || score > best.score) best = { image: img, score };
+  }
+
+  return best && best.score >= IMAGE_MATCH_MIN_SCORE ? best : null;
+}
+
 /** Obvious placeholder hosts a model invents when it has no real link. */
 const PLACEHOLDER_HOST_REGEX =
   /(?:example\.(?:com|org|net)|yourdomain|your-?site|placeholder|dummy|test\.com|xyz\.com|abc\.com|link\.com|sample\.com|domain\.com)/i;

@@ -21,6 +21,7 @@ import {
   stripLeadingContinuationFragment,
   stripRepeatedOffer,
   isMetaLeak,
+  pickRelevantImage,
 } from "../src/server/services/reply-guard.js";
 
 const toolsData: Tool[] = JSON.parse(
@@ -882,6 +883,72 @@ async function runRegressionSuite() {
     const compact = buildCompactPublicQuery(fakePrompt);
     assert.ok(compact.includes("img_1"), `Image id must survive into the compact query. Got:\n${compact}`);
     assert.ok(compact.includes("SEND_IMAGE"));
+  });
+
+  // =========================================================================
+  // SCENARIO 13: The reported failure — an image WAS uploaded for "where to
+  // find the Hardware ID", the customer asks about HWID, and nothing is sent.
+  // The old trigger only fired on the literal word "screenshot"/"dikhao", so a
+  // real question about what the image documents never reached it.
+  // =========================================================================
+  const hwidImage = {
+    id: "img_hwid",
+    filename: "clipshield_hwid_settings.png",
+    filepath: "data/tool-images/clipshield_hwid_settings.png",
+    url: "/tool-images/clipshield_hwid_settings.png",
+    title: "Where to find your Hardware ID",
+    description: "ClipShield Settings screen showing where the Hardware ID (HWID) is copied from for license activation",
+  };
+  const pricingImage = {
+    id: "img_pricing",
+    filename: "pricing.png",
+    filepath: "data/tool-images/pricing.png",
+    url: "/tool-images/pricing.png",
+    title: "License tiers",
+    description: "Monthly and lifetime license pricing table",
+  };
+
+  test("13.1 A question about the Hardware ID selects the HWID image (no 'screenshot' word needed)", () => {
+    for (const question of [
+      "hardware id kahan se milega?",
+      "HWID kaise nikalain bhai",
+      "mujhe apna hardware ID chahiye activation ke liye",
+    ]) {
+      const picked = pickRelevantImage(question, [pricingImage, hwidImage]);
+      assert.ok(picked, `Must match an image for: "${question}"`);
+      assert.strictEqual(picked!.image.id, "img_hwid", `Must pick the HWID image for: "${question}"`);
+    }
+  });
+
+  test("13.2 Picks the image that matches the question, not simply the first one", () => {
+    const picked = pickRelevantImage("lifetime license pricing dikhao", [hwidImage, pricingImage]);
+    assert.ok(picked);
+    assert.strictEqual(picked!.image.id, "img_pricing", "Must pick by relevance, not array order");
+  });
+
+  test("13.3 An unrelated message never drags in a random image", () => {
+    for (const question of ["assalam o alaikum", "ye tool kaam kaise karta hai", "discount mil sakta hai?"]) {
+      assert.strictEqual(
+        pickRelevantImage(question, [hwidImage, pricingImage]),
+        null,
+        `Must NOT attach an image for: "${question}"`
+      );
+    }
+  });
+
+  test("13.4 AUTO-IMAGE directive tells the agent the image is already attached", () => {
+    const { prompt } = synthesizeSalesPrompt({
+      customer: baseCustomer,
+      matchedTools: [clipTool],
+      allAccountToolsSummary: "- ClipShield",
+      recentMessages: baseCustomer.messages!,
+      latestCustomerText: "hardware id kahan se milega",
+      settings: { aiAgentEnabled: true, language: "Roman Urdu" } as any,
+      lockedProductName: clipTool.name,
+      autoImageAttached: "Where to find your Hardware ID",
+    });
+    assert.ok(prompt.includes("AUTO-IMAGE ATTACHED"), "Must announce the auto-attached image");
+    assert.ok(/Do NOT promise to send it later/i.test(prompt), "Must stop the agent promising a later send");
   });
 
   for (const t of testQueue) {

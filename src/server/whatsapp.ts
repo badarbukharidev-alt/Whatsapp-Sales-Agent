@@ -318,6 +318,36 @@ export async function sendMessage(jid: string, text: string, userId?: string) {
   }
 }
 
+/**
+ * Resolves a stored tool-image reference to a real file on disk, tolerating the
+ * several shapes it can take: an absolute path, a cwd-relative path using either
+ * separator (tools.json is committed, so a Windows-written "data\tool-images\x.png"
+ * can be read back on Linux), or the public URL form "/tool-images/x.png".
+ * Falls back to looking the filename up directly in the images directory, so a
+ * stored path that drifted still sends instead of silently failing.
+ */
+async function resolveToolImagePath(imagePath: string): Promise<string | null> {
+  const raw = (imagePath || "").trim();
+  if (!raw) return null;
+
+  const normalized = raw.replace(/\\/g, "/").replace(/^\/+/, "");
+  const candidates = [
+    ...(path.isAbsolute(raw) ? [raw] : []),
+    path.join(process.cwd(), normalized),
+    path.join(process.cwd(), "data", "tool-images", path.basename(normalized)),
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      await fs.access(candidate);
+      return candidate;
+    } catch {
+      // try the next shape
+    }
+  }
+  return null;
+}
+
 export async function sendToolImage(jid: string, imagePath: string, caption?: string, userId?: string): Promise<boolean> {
   const session = getUserWASession(userId);
   const targetSock = session.sock || (userId ? getUserWASession("usr_admin_badar").sock : null);
@@ -328,12 +358,12 @@ export async function sendToolImage(jid: string, imagePath: string, caption?: st
   }
   try {
     const formattedJid = jid.includes("@") ? jid : `${jid}@s.whatsapp.net`;
-    const fullPath = path.isAbsolute(imagePath) ? imagePath : path.join(process.cwd(), imagePath);
+    const fullPath = await resolveToolImagePath(imagePath);
 
-    try {
-      await fs.access(fullPath);
-    } catch {
-      console.warn(`[WhatsApp:${userId || "default"}] Tool image file not found on disk at: ${fullPath}`);
+    if (!fullPath) {
+      console.warn(
+        `[WhatsApp:${userId || "default"}] Tool image file not found on disk for "${imagePath}" (tried absolute, cwd-relative, and data/tool-images/<filename>).`
+      );
       return false;
     }
 

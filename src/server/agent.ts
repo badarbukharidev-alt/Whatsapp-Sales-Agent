@@ -16,6 +16,7 @@ import {
   stripLeadingContinuationFragment,
   stripRepeatedOffer,
   isMetaLeak,
+  pickRelevantImage,
 } from "./services/reply-guard.js";
 
 // ---------------------------------------------------------------------------
@@ -532,17 +533,39 @@ async function generateResponse(
   // model). This is the same "don't trust the model with something we can
   // just do in code" pattern as the link/payment delivery above, and it's
   // what makes uploaded tool images actually get sent at all.
+  const toolImages = (lockedTool?.images || []).filter((img) => img?.filepath || img?.url);
   const wantsScreenshot = SCREENSHOT_REQUEST_REGEX.test(latestCustomerText);
-  const availableImage = lockedTool?.images?.find((img) => img?.filepath || img?.url);
-  if (wantsScreenshot && lockedTool && availableImage) {
-    const imagePath = availableImage.filepath || availableImage.url;
+  // Match the question against each image's own admin-written title/description,
+  // so an image uploaded as "where to find the Hardware ID" is sent when someone
+  // asks "HWID kahan se milega?" — without them ever saying "screenshot".
+  const relevantImage = pickRelevantImage(latestCustomerText, toolImages)?.image || null;
+
+  if (lockedTool && (wantsScreenshot || relevantImage)) {
+    console.log(
+      `[Agent:${userId}] Image check for ${cleanJid}: tool="${lockedTool.name}" uploadedImages=${toolImages.length} ` +
+        `explicitRequest=${wantsScreenshot} semanticMatch=${relevantImage ? `"${relevantImage.id}"` : "none"}`
+    );
+  }
+
+  // (a) Plain "show me" request — nothing to reason about, send the picture.
+  if (wantsScreenshot && lockedTool && toolImages.length > 0) {
+    const chosen = relevantImage || toolImages[0];
+    const label = (chosen.title || "").trim();
     await evaluateAndApplyCustomerStatus(cleanJid, customer, latestCustomerText, null, userId, buyingIntent);
     return {
-      textMessages: [`Han bhai, ye dekho ${lockedTool.name} ka interface 👇`],
-      imageToSend: imagePath,
+      textMessages: [label ? `Han bhai, ye dekho 👇\n${label}` : `Han bhai, ye dekho ${lockedTool.name} ka interface 👇`],
+      imageToSend: chosen.filepath || chosen.url,
       templateMessage,
     };
   }
+
+  // (b) The question itself is what an image documents. Here the customer wants
+  // a real ANSWER, not just a picture — so let the AI explain in words and
+  // attach the matching image to that same reply.
+  const autoAttachImage = !wantsScreenshot && relevantImage ? relevantImage.filepath || relevantImage.url : null;
+  const autoAttachImageLabel = relevantImage
+    ? (relevantImage.title || relevantImage.description || "").trim().slice(0, 120)
+    : "";
   // ── END DETERMINISTIC IMAGE DELIVERY ────────────────────────────────────
 
   // 8. Synthesize lean, controlled sales prompt (ONLY the locked product's data).
@@ -562,6 +585,7 @@ async function generateResponse(
     explicitLinkRequest,
     templateJustSent: Boolean(templateMessage),
     wantsAlternative,
+    autoImageAttached: autoAttachImage ? autoAttachImageLabel || "product image" : undefined,
   });
 
   console.log(`[Agent:${userId}] Querying AI for ${cleanJid} (Locked: ${lockedTool?.name || (match.isUnknownProduct ? `Unknown:${match.queryProduct}` : 'CatalogOverview')}${buyingIntent ? ' | HighIntent' : ''}${templateMessage ? ' | TemplateFirst' : ''})...`);
@@ -588,6 +612,12 @@ async function generateResponse(
     const matchedImage = lockedTool?.images?.find((img) => img.id === ref || img.filename === ref);
     imageToSend = matchedImage ? matchedImage.filepath || matchedImage.url : null;
     text = text.replace(imageTagMatch[0], "").trim();
+  }
+
+  // The question matched an uploaded image: attach it even though the model
+  // didn't ask for it (it usually won't, especially on the fallback model).
+  if (!imageToSend && autoAttachImage) {
+    imageToSend = autoAttachImage;
   }
 
   // 7. Evaluate & apply customer status transition (buying intent nudges Interested)

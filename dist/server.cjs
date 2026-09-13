@@ -3387,7 +3387,8 @@ function synthesizeSalesPrompt(params) {
     explicitPaymentRequest,
     explicitLinkRequest,
     templateJustSent,
-    wantsAlternative
+    wantsAlternative,
+    autoImageAttached
   } = params;
   const memory = customer.memorySummary;
   const isReturningCustomer = Boolean(
@@ -3593,6 +3594,11 @@ ${t.how_to_use}`);
   if (wantsAlternative) {
     controlLines.push(`The customer asked for an alternative/comparison \u2014 you MAY briefly compare with another catalog product here, then return focus to what fits their need.`);
   }
+  if (autoImageAttached) {
+    controlLines.push(
+      `AUTO-IMAGE ATTACHED: The product image "${autoImageAttached}" is ALREADY being attached to this very reply automatically. Answer the customer's question in words AND refer to the image naturally ("ye dekho", "screenshot mein dekh lein"). Do NOT promise to send it later, do NOT say you cannot send images, and do NOT output a [SEND_IMAGE:] tag.`
+    );
+  }
   const controlDirectives = controlLines.length > 0 ? `[SALES CONTROL DIRECTIVES]
 ${controlLines.join("\n")}` : "";
   const promptParts = [
@@ -3621,6 +3627,36 @@ var init_prompt_service = __esm({
 function isMetaLeak(text) {
   if (!text) return false;
   return META_LEAK_REGEX.test(text);
+}
+function tokenizeForImageMatch(text) {
+  const tokens = /* @__PURE__ */ new Set();
+  for (const raw of (text || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").split(/\s+/)) {
+    if (raw.length < 2) continue;
+    if (IMAGE_MATCH_STOPWORDS.has(raw)) continue;
+    tokens.add(raw);
+  }
+  if (tokens.has("hwid")) {
+    tokens.add("hardware");
+    tokens.add("id");
+  }
+  if (tokens.has("hardware") && tokens.has("id")) tokens.add("hwid");
+  return tokens;
+}
+function pickRelevantImage(customerText, images) {
+  if (!images || images.length === 0 || !customerText) return null;
+  const customerTokens = tokenizeForImageMatch(customerText);
+  if (customerTokens.size === 0) return null;
+  let best = null;
+  for (const img of images) {
+    const meta = [img.title, img.description, img.filename].filter(Boolean).join(" ");
+    if (!meta.trim()) continue;
+    let score = 0;
+    for (const token of tokenizeForImageMatch(meta)) {
+      if (customerTokens.has(token)) score++;
+    }
+    if (!best || score > best.score) best = { image: img, score };
+  }
+  return best && best.score >= IMAGE_MATCH_MIN_SCORE ? best : null;
 }
 function isBareAffirmation(text) {
   if (!text) return false;
@@ -3735,11 +3771,114 @@ function stripRepeatedOffer(text, lastAgentText) {
   const result = kept.join("\n").trim();
   return result.length > 0 ? result : text;
 }
-var URL_REGEX, META_LEAK_REGEX, PLACEHOLDER_HOST_REGEX, AFFIRMATION_WORD_REGEX, AFFIRMATION_FILLER_REGEX, OFFER_VERB_SOURCE, OFFER_VERB_REGEX, CONTINUATION_STARTER_REGEX;
+var URL_REGEX, META_LEAK_REGEX, IMAGE_MATCH_STOPWORDS, IMAGE_MATCH_MIN_SCORE, PLACEHOLDER_HOST_REGEX, AFFIRMATION_WORD_REGEX, AFFIRMATION_FILLER_REGEX, OFFER_VERB_SOURCE, OFFER_VERB_REGEX, CONTINUATION_STARTER_REGEX;
 var init_reply_guard = __esm({
   "src/server/services/reply-guard.ts"() {
     URL_REGEX = /(?:https?:\/\/|www\.)[^\s<>()\[\]{}"'`]+/gi;
     META_LEAK_REGEX = /(?:\bgot it\b[^.!?]{0,40}(?:ready for|next message)|what did (?:he|she|they) say|what'?s the message (?:from|the customer)|message (?:from )?(?:the )?customer that i (?:need|have) to respond|your message (?:got|seems) cut off|could you resend|please resend|as an ai\b|i(?:'m| am) an ai\b|i don'?t have (?:access|context)|no reset,? no repeated name|i(?:'ll| will) reply (?:directly|now)\s*$)/i;
+    IMAGE_MATCH_STOPWORDS = /* @__PURE__ */ new Set([
+      "the",
+      "and",
+      "for",
+      "with",
+      "from",
+      "this",
+      "that",
+      "your",
+      "you",
+      "how",
+      "where",
+      "what",
+      "when",
+      "see",
+      "get",
+      "got",
+      "can",
+      "will",
+      "its",
+      "it",
+      "is",
+      "are",
+      "was",
+      "not",
+      "any",
+      "all",
+      "into",
+      "out",
+      "tool",
+      "app",
+      "software",
+      "image",
+      "images",
+      "screenshot",
+      "screen",
+      "shot",
+      "photo",
+      "pic",
+      "picture",
+      "kaise",
+      "kese",
+      "kahan",
+      "kaha",
+      "kidhar",
+      "kya",
+      "kyu",
+      "hai",
+      "hain",
+      "ka",
+      "ki",
+      "ke",
+      "ko",
+      "mein",
+      "me",
+      "se",
+      "par",
+      "pe",
+      "aap",
+      "bhai",
+      "yeh",
+      "ye",
+      "wo",
+      "woh",
+      "kar",
+      "karo",
+      "karu",
+      "karein",
+      "krdo",
+      "do",
+      "de",
+      "den",
+      "dein",
+      "bhej",
+      "bhejo",
+      "bhejein",
+      "dikhao",
+      "dikha",
+      "dikhaen",
+      "please",
+      "plz",
+      "mujhe",
+      "mera",
+      "meri",
+      "main",
+      "hun",
+      "hoon",
+      "ho",
+      "na",
+      "to",
+      "ok",
+      "acha",
+      "milega",
+      "milta",
+      "chahiye",
+      "batao",
+      "bata",
+      "sakta",
+      "sakte",
+      "hoga",
+      "hota"
+    ]);
+    IMAGE_MATCH_MIN_SCORE = 2;
     PLACEHOLDER_HOST_REGEX = /(?:example\.(?:com|org|net)|yourdomain|your-?site|placeholder|dummy|test\.com|xyz\.com|abc\.com|link\.com|sample\.com|domain\.com)/i;
     AFFIRMATION_WORD_REGEX = /^(?:g|gg|gee|ji|jee|jii|ha|haan|han|hn|hnji|hanji|jihan|ok|oky|okay|okk|k|acha|achaa|achha|theek|thek|thik|sahi|yes|ya|yeah|yep|yup|sure|done|zaroor|bilkul|bhejo|bhej|bhejdo|bhejde|bhejein|bhejen|send|dedo|dedein|krdo|kardo|kar|do|karo|please|plz|pls|bhai|bro|sir)$/i;
     AFFIRMATION_FILLER_REGEX = /^(?:hai|hain|hy|he|na|nah|yr|yaar|jani|jaan|zra|zara|abhi|to|tou)$/i;
@@ -4029,17 +4168,27 @@ ${primaryLink}`, guide],
       templateMessage
     };
   }
+  const toolImages = (lockedTool?.images || []).filter((img) => img?.filepath || img?.url);
   const wantsScreenshot = SCREENSHOT_REQUEST_REGEX.test(latestCustomerText);
-  const availableImage = lockedTool?.images?.find((img) => img?.filepath || img?.url);
-  if (wantsScreenshot && lockedTool && availableImage) {
-    const imagePath = availableImage.filepath || availableImage.url;
+  const relevantImage = pickRelevantImage(latestCustomerText, toolImages)?.image || null;
+  if (lockedTool && (wantsScreenshot || relevantImage)) {
+    console.log(
+      `[Agent:${userId}] Image check for ${cleanJid}: tool="${lockedTool.name}" uploadedImages=${toolImages.length} explicitRequest=${wantsScreenshot} semanticMatch=${relevantImage ? `"${relevantImage.id}"` : "none"}`
+    );
+  }
+  if (wantsScreenshot && lockedTool && toolImages.length > 0) {
+    const chosen = relevantImage || toolImages[0];
+    const label = (chosen.title || "").trim();
     await evaluateAndApplyCustomerStatus(cleanJid, customer, latestCustomerText, null, userId, buyingIntent);
     return {
-      textMessages: [`Han bhai, ye dekho ${lockedTool.name} ka interface \u{1F447}`],
-      imageToSend: imagePath,
+      textMessages: [label ? `Han bhai, ye dekho \u{1F447}
+${label}` : `Han bhai, ye dekho ${lockedTool.name} ka interface \u{1F447}`],
+      imageToSend: chosen.filepath || chosen.url,
       templateMessage
     };
   }
+  const autoAttachImage = !wantsScreenshot && relevantImage ? relevantImage.filepath || relevantImage.url : null;
+  const autoAttachImageLabel = relevantImage ? (relevantImage.title || relevantImage.description || "").trim().slice(0, 120) : "";
   const { prompt, systemPrompt } = synthesizeSalesPrompt({
     customer,
     matchedTools: match.matched,
@@ -4055,7 +4204,8 @@ ${primaryLink}`, guide],
     explicitPaymentRequest,
     explicitLinkRequest,
     templateJustSent: Boolean(templateMessage),
-    wantsAlternative
+    wantsAlternative,
+    autoImageAttached: autoAttachImage ? autoAttachImageLabel || "product image" : void 0
   });
   console.log(`[Agent:${userId}] Querying AI for ${cleanJid} (Locked: ${lockedTool?.name || (match.isUnknownProduct ? `Unknown:${match.queryProduct}` : "CatalogOverview")}${buyingIntent ? " | HighIntent" : ""}${templateMessage ? " | TemplateFirst" : ""})...`);
   const rawReply = await askAI(prompt, systemPrompt, userId);
@@ -4073,6 +4223,9 @@ ${primaryLink}`, guide],
     const matchedImage = lockedTool?.images?.find((img) => img.id === ref || img.filename === ref);
     imageToSend = matchedImage ? matchedImage.filepath || matchedImage.url : null;
     text = text.replace(imageTagMatch[0], "").trim();
+  }
+  if (!imageToSend && autoAttachImage) {
+    imageToSend = autoAttachImage;
   }
   await evaluateAndApplyCustomerStatus(cleanJid, customer, latestCustomerText, extractedAiStatus, userId, buyingIntent);
   text = stripFabricatedCustomerTurns(text).replace(/^["']|["']$/g, "").trim();
@@ -4268,7 +4421,11 @@ function setupToolsRoutes(app) {
       const imageObject = {
         id: `img_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
         filename: uniqueFilename,
-        filepath: import_path9.default.join("data", "tool-images", uniqueFilename),
+        // Always forward slashes: tools.json is committed to git, so a path
+        // written on Windows (data\tool-images\x.png) must still resolve when
+        // the same file is read on the Linux server, where a backslash is a
+        // literal filename character and the lookup would silently fail.
+        filepath: `data/tool-images/${uniqueFilename}`,
         url: `/tool-images/${uniqueFilename}`,
         title: title?.trim() || "",
         description: description.trim(),
@@ -5540,6 +5697,24 @@ async function sendMessage(jid, text, userId) {
     console.error(`[WhatsApp:${userId || "default"}] Error delivering message to ${jid}:`, error);
   }
 }
+async function resolveToolImagePath(imagePath) {
+  const raw = (imagePath || "").trim();
+  if (!raw) return null;
+  const normalized = raw.replace(/\\/g, "/").replace(/^\/+/, "");
+  const candidates = [
+    ...import_path11.default.isAbsolute(raw) ? [raw] : [],
+    import_path11.default.join(process.cwd(), normalized),
+    import_path11.default.join(process.cwd(), "data", "tool-images", import_path11.default.basename(normalized))
+  ];
+  for (const candidate of candidates) {
+    try {
+      await import_promises8.default.access(candidate);
+      return candidate;
+    } catch {
+    }
+  }
+  return null;
+}
 async function sendToolImage(jid, imagePath, caption, userId) {
   const session = getUserWASession(userId);
   const targetSock = session.sock || (userId ? getUserWASession("usr_admin_badar").sock : null);
@@ -5549,11 +5724,11 @@ async function sendToolImage(jid, imagePath, caption, userId) {
   }
   try {
     const formattedJid = jid.includes("@") ? jid : `${jid}@s.whatsapp.net`;
-    const fullPath = import_path11.default.isAbsolute(imagePath) ? imagePath : import_path11.default.join(process.cwd(), imagePath);
-    try {
-      await import_promises8.default.access(fullPath);
-    } catch {
-      console.warn(`[WhatsApp:${userId || "default"}] Tool image file not found on disk at: ${fullPath}`);
+    const fullPath = await resolveToolImagePath(imagePath);
+    if (!fullPath) {
+      console.warn(
+        `[WhatsApp:${userId || "default"}] Tool image file not found on disk for "${imagePath}" (tried absolute, cwd-relative, and data/tool-images/<filename>).`
+      );
       return false;
     }
     const imageBuffer = await import_promises8.default.readFile(fullPath);

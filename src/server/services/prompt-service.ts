@@ -23,6 +23,12 @@ export interface PromptSynthesisParams {
   templateJustSent?: boolean;
   /** Customer explicitly asked for an alternative / comparison. */
   wantsAlternative?: boolean;
+  /**
+   * A matching uploaded product image is being attached to this reply
+   * automatically (label/description of it). The reply should refer to it
+   * instead of promising to send one later.
+   */
+  autoImageAttached?: string;
 }
 
 export interface SynthesizedPrompt {
@@ -54,6 +60,7 @@ export function synthesizeSalesPrompt(params: PromptSynthesisParams): Synthesize
     explicitLinkRequest,
     templateJustSent,
     wantsAlternative,
+    autoImageAttached,
   } = params;
 
   const memory = customer.memorySummary;
@@ -308,6 +315,11 @@ CRITICAL RULES (ABSOLUTELY NO ROBOTIC BOT BEHAVIOR & ZERO HALLUCINATIONS):
   }
   if (wantsAlternative) {
     controlLines.push(`The customer asked for an alternative/comparison — you MAY briefly compare with another catalog product here, then return focus to what fits their need.`);
+  }
+  if (autoImageAttached) {
+    controlLines.push(
+      `AUTO-IMAGE ATTACHED: The product image "${autoImageAttached}" is ALREADY being attached to this very reply automatically. Answer the customer's question in words AND refer to the image naturally ("ye dekho", "screenshot mein dekh lein"). Do NOT promise to send it later, do NOT say you cannot send images, and do NOT output a [SEND_IMAGE:] tag.`
+    );
   }
   const controlDirectives = controlLines.length > 0 ? `[SALES CONTROL DIRECTIVES]\n${controlLines.join("\n")}` : "";
 

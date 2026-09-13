@@ -76,7 +76,11 @@ export function setupToolsRoutes(app: Express) {
       const imageObject: ToolImage = {
         id: `img_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
         filename: uniqueFilename,
-        filepath: path.join("data", "tool-images", uniqueFilename),
+        // Always forward slashes: tools.json is committed to git, so a path
+        // written on Windows (data\tool-images\x.png) must still resolve when
+        // the same file is read on the Linux server, where a backslash is a
+        // literal filename character and the lookup would silently fail.
+        filepath: `data/tool-images/${uniqueFilename}`,
         url: `/tool-images/${uniqueFilename}`,
         title: title?.trim() || "",
         description: description.trim(),
