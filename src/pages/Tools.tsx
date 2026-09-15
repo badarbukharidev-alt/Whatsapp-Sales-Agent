@@ -23,7 +23,7 @@ import {
   Link as LinkIcon,
   ExternalLink
 } from "lucide-react";
-import { Tool, ToolImage, Customer, ToolSection, ToolLink } from "../types";
+import { Tool, ToolImage, Customer, ToolSection, ToolLink, ToolPlan } from "../types";
 import ConfirmModal from "../components/ConfirmModal";
 
 export default function Tools() {
@@ -63,6 +63,8 @@ export default function Tools() {
   const [editNegotiationNotes, setEditNegotiationNotes] = useState("");
   const [editSlotsRemaining, setEditSlotsRemaining] = useState("");
   const [editSlotsNote, setEditSlotsNote] = useState("");
+  // Purchasable plans — the authoritative prices the agent is allowed to quote.
+  const [editPlans, setEditPlans] = useState<ToolPlan[]>([]);
   const [editObjectionTooExpensive, setEditObjectionTooExpensive] = useState("");
   const [editObjectionNeedTime, setEditObjectionNeedTime] = useState("");
   const [editObjectionCompetitor, setEditObjectionCompetitor] = useState("");
@@ -225,6 +227,7 @@ export default function Tools() {
       typeof tool.pricing?.slots_remaining === "number" ? String(tool.pricing.slots_remaining) : ""
     );
     setEditSlotsNote(tool.pricing?.slots_note || "");
+    setEditPlans(Array.isArray(tool.plans) ? tool.plans.map((p) => ({ ...p })) : []);
     setEditObjectionTooExpensive(tool.objection_responses?.too_expensive || "");
     setEditObjectionNeedTime(tool.objection_responses?.need_time || "");
     setEditObjectionCompetitor(tool.objection_responses?.comparing_competitor || "");
@@ -408,6 +411,10 @@ export default function Tools() {
           slots_remaining: editSlotsRemaining.trim() !== "" ? parseInt(editSlotsRemaining.trim(), 10) : undefined,
           slots_note: editSlotsNote.trim() || undefined,
         },
+        // Only keep rows that actually have a name and a price.
+        plans: editPlans
+          .filter((p) => (p.name || "").trim() && (p.pricePkr || p.priceUsd))
+          .map((p) => ({ ...p, name: (p.name || "").trim() })),
         objection_responses: {
           ...(editingTool.objection_responses || {}),
           too_expensive: editObjectionTooExpensive.trim() || undefined,
@@ -959,6 +966,116 @@ export default function Tools() {
                       <option value="active">Active (AI sells this tool)</option>
                       <option value="inactive">Inactive (AI ignores this tool)</option>
                     </select>
+                  </div>
+
+                  {/* Purchasable Plans — what the agent is allowed to quote */}
+                  <div className="p-3 bg-emerald-50/60 rounded-xl border border-emerald-200 space-y-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <span className="text-[11px] font-bold text-slate-800 uppercase">Plans &amp; Prices</span>
+                        <p className="text-[10px] text-slate-500 mt-0.5">
+                          The agent quotes these and nothing else. When a customer wants to buy, all plans are shown
+                          together before asking which one they want.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setEditPlans((prev) => [...prev, { name: "", pricePkr: undefined, billingCycle: "monthly" }])
+                        }
+                        className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[11px] font-bold flex items-center gap-1 shrink-0 transition-colors"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        Add plan
+                      </button>
+                    </div>
+
+                    {editPlans.length === 0 ? (
+                      <p className="text-[10px] text-slate-500 italic bg-white/70 border border-emerald-100 rounded-lg p-2">
+                        No plans set. The agent will fall back to reading the price out of the fields below — add plans
+                        here to make them exact.
+                      </p>
+                    ) : (
+                      <div className="space-y-2">
+                        {editPlans.map((plan, idx) => (
+                          <div
+                            key={idx}
+                            className="bg-white border border-emerald-200 rounded-lg p-2 grid grid-cols-12 gap-2 items-center"
+                          >
+                            <input
+                              type="text"
+                              value={plan.name || ""}
+                              onChange={(e) =>
+                                setEditPlans((prev) =>
+                                  prev.map((p, i) => (i === idx ? { ...p, name: e.target.value } : p))
+                                )
+                              }
+                              placeholder="1 Month"
+                              className="col-span-4 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-xs outline-none focus:border-emerald-500"
+                            />
+                            <input
+                              type="number"
+                              min={0}
+                              value={plan.pricePkr ?? ""}
+                              onChange={(e) =>
+                                setEditPlans((prev) =>
+                                  prev.map((p, i) =>
+                                    i === idx
+                                      ? { ...p, pricePkr: e.target.value === "" ? undefined : Number(e.target.value) }
+                                      : p
+                                  )
+                                )
+                              }
+                              placeholder="Price PKR"
+                              className="col-span-3 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-xs font-mono outline-none focus:border-emerald-500"
+                            />
+                            <input
+                              type="number"
+                              min={0}
+                              value={plan.minNegotiablePkr ?? ""}
+                              onChange={(e) =>
+                                setEditPlans((prev) =>
+                                  prev.map((p, i) =>
+                                    i === idx
+                                      ? {
+                                          ...p,
+                                          minNegotiablePkr:
+                                            e.target.value === "" ? undefined : Number(e.target.value),
+                                        }
+                                      : p
+                                  )
+                                )
+                              }
+                              placeholder="Floor"
+                              title="Lowest you will ever go for this plan"
+                              className="col-span-2 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-xs font-mono outline-none focus:border-emerald-500"
+                            />
+                            <select
+                              value={plan.billingCycle || "monthly"}
+                              onChange={(e) =>
+                                setEditPlans((prev) =>
+                                  prev.map((p, i) => (i === idx ? { ...p, billingCycle: e.target.value } : p))
+                                )
+                              }
+                              className="col-span-2 bg-slate-50 border border-slate-200 rounded-lg px-1.5 py-1.5 text-[11px] outline-none focus:border-emerald-500"
+                            >
+                              <option value="monthly">Monthly</option>
+                              <option value="yearly">Yearly</option>
+                              <option value="lifetime">Lifetime</option>
+                              <option value="one_time">One time</option>
+                            </select>
+                            <button
+                              type="button"
+                              onClick={() => setEditPlans((prev) => prev.filter((_, i) => i !== idx))}
+                              className="col-span-1 p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors justify-self-end"
+                              title="Remove this plan"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   {/* Pricing Configuration */}
