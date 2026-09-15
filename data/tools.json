@@ -1,0 +1,378 @@
+[
+    {
+        "id": "1788274681354",
+        "name": "VoiceDelta",
+        "description": "VoiceDelta is an advanced AI voice generation platform designed for content creators, YouTubers, faceless channels, and podcasters who need ultra-realistic AI voiceovers and instant voice cloning.",
+        "category": "AI Tools",
+        "status": "active",
+        "pricePkr": "1199",
+        "priceUsd": "5",
+        "aliases": [
+            "voicedelta",
+            "voice delta",
+            "voice-delta",
+            "voicedalta",
+            "voicedelata",
+            "voisdelta",
+            "vois delta",
+            "voice over tool",
+            "voice tool",
+            "voiceover tool",
+            "voiceover software",
+            "ai voice generator",
+            "ai voice tool",
+            "voice cloning tool",
+            "voice cloner",
+            "text to speech tool",
+            "tts tool"
+        ],
+        "keywords": [
+            "voice",
+            "voices",
+            "voiceover",
+            "voice over",
+            "voice tool",
+            "voice over tool",
+            "ai voice",
+            "voice cloning",
+            "voice clone",
+            "clone",
+            "cloning",
+            "tts",
+            "text to speech",
+            "realistic voice",
+            "audio generation"
+        ],
+        "features": [
+            "3,600+ distinct studio-quality AI voices across 140+ languages",
+            "Access to official ElevenLabs, ChatGPT/OpenAI, Gemini, and Microsoft voice models",
+            "Instant 1-minute voice cloning with 99%+ fidelity using any clean audio recording",
+            "Text-to-speech generation powered by multiple elite voice engines",
+            "Advanced voice controls for speed, pitch variation, emotion, and pacing",
+            "Pro plan benefits: unlimited daily voice generation, unlimited custom voice clones, and priority GPU processing"
+        ],
+        "sales_points": [
+            "Offers an ultra-affordable Pro plan at Rs. 1,199/month (or /mo) with unlimited generations vs + on ElevenLabs",
+            "Consolidates multiple premium voice engines (ElevenLabs, OpenAI, Gemini, Microsoft) in a single easy portal",
+            "Over 99% voice cloning accuracy from just 1 minute of clear speech",
+            "Full commercial rights included for YouTube monetization and client work",
+            "Local payment support in PKR via JazzCash, EasyPaisa, Raast, and Bank Transfer"
+        ],
+        "use_cases": [
+            "Faceless YouTube channels (history, facts, horror, documentaries)",
+            "TikTok, Instagram Reels, and YouTube Shorts voiceovers",
+            "Audiobooks, podcasts, and digital course creation",
+            "Personalized voice cloning for automated content workflows"
+        ],
+        "requirements": [
+            "Clean 1-minute audio recording for high-fidelity custom voice cloning"
+        ],
+        "limitations": [
+            "Free Plan: Maximum 1,000 characters per generation",
+            "Pro Plan: Unlimited daily voice generation with priority GPU speed"
+        ],
+        "how_to_use": "1. Log into the platform dashboard.\n2. Choose from 3,600+ AI voices or upload a 1-minute audio sample to clone your own voice.\n3. Paste your script, adjust tone and pacing, and click Generate.\n4. Download your high-definition MP3 audio file immediately.",
+        "links": [
+            {
+                "title": "VoiceDelta Web Portal",
+                "url": "https://voicedelta.ai",
+                "note": "Online web portal for generation and custom voice cloning"
+            }
+        ],
+        "sections": [
+            {
+                "id": "sec_1",
+                "title": "Constant Dynamic Knowledge Message",
+                "content": "VoiceDelta features 3,600+ AI voices across 140+ languages. It combines the official voice models of ElevenLabs, ChatGPT/OpenAI, Google Gemini, and Microsoft Azure into a unified portal. You can clone any voice with 99%+ accuracy using just 60 seconds of clear recorded audio.\n\nPricing & Value:\n- Official Pro Plan: Rs. 1,199/month (special discounted price of Rs. 1,000 for same-day payment).\n- Includes unlimited daily voiceovers and unlimited custom voice clone slots.\n- Compared to ElevenLabs direct subscription (+/mo or Rs. 6,500+), VoiceDelta provides the exact same voices at an 80% discount with local manual PKR payment."
+            }
+        ],
+        "pricing": {
+            "min_negotiable_pkr": 1000,
+            "min_negotiable_usd": 4,
+            "negotiation_notes": "Can offer min_negotiable_pkr (Rs. 1,000) for same-day payment or immediate account setup."
+        },
+        "objection_responses": {
+            "too_expensive": "Explain that Rs. 1,199/month comes down to just Rs. 40/day for unlimited AI voices and cloning vs + (Rs. 6,500+) on ElevenLabs.",
+            "need_time": "Offer to share sample voice demos or answer any specific workflow questions.",
+            "comparing_competitor": "Highlight all top models (ElevenLabs, OpenAI, Gemini) in one place with instant local PKR payment."
+        },
+        "faq": [
+            {
+                "question": "How accurate is VoiceDelta voice cloning?",
+                "answer": "With a clean 1-minute audio recording, VoiceDelta delivers over 99% voice resemblance."
+            },
+            {
+                "question": "Are ElevenLabs models included?",
+                "answer": "Yes, official ElevenLabs, OpenAI, Gemini, and Microsoft voice models are all integrated."
+            },
+            {
+                "question": "Is Pro generation unlimited?",
+                "answer": "Yes, Pro users have unlimited daily voice generation and custom cloning slots."
+            }
+        ],
+        "images": [],
+        "related_tools": [
+            "ClipShield"
+        ],
+        "priority": 1,
+        "plans": [
+            {
+                "id": "plan_monthly",
+                "name": "1 Month",
+                "pricePkr": 1199,
+                "priceUsd": 5,
+                "minNegotiablePkr": 1000,
+                "billingCycle": "monthly",
+                "isActive": true
+            }
+        ]
+    },
+    {
+        "id": "1788311665125",
+        "name": "ClipShield – YouTube Copyright Claim Remover",
+        "description": "ClipShield is a high-performance desktop application built for content creators to download, edit, and repurpose YouTube videos without triggering copyright claims. It downloads HD streams, automatically identifies viral hooks, reframes videos to 9:16 vertical format, and applies 9 layers of advanced protection to make videos undetectable by YouTube Content ID.",
+        "category": "AI Tools",
+        "status": "active",
+        "pricePkr": "1500",
+        "priceUsd": "6",
+        "plans": [
+            {
+                "id": "plan_monthly",
+                "name": "1 Month",
+                "pricePkr": 1500,
+                "priceUsd": 6,
+                "minNegotiablePkr": 1000,
+                "billingCycle": "monthly",
+                "note": "Includes 1 free trial video before purchase",
+                "isActive": true
+            },
+            {
+                "id": "plan_lifetime",
+                "name": "Lifetime",
+                "pricePkr": 3500,
+                "minNegotiablePkr": 2800,
+                "billingCycle": "lifetime",
+                "note": "One-time payment, lifetime updates included",
+                "isActive": true
+            }
+        ],
+        "aliases": [
+            "clipshield – youtube copyright claim remover",
+            "clipshield",
+            "clipshieldyoutubecopyrightclaimremover",
+            "clipshield youtube copyright claim remover",
+            "clip shield",
+            "clip-shield",
+            "clipshied",
+            "clipsheild",
+            "clip sheild",
+            "clip sheeld",
+            "clipsheeld",
+            "copyright claim remover",
+            "copyright removal",
+            "copyright remover",
+            "copyright claim removal",
+            "youtube copyright remover",
+            "youtube copyright removal",
+            "copyright claim",
+            "copyright bypass",
+            "claim remover",
+            "claims remover",
+            "claim removal",
+            "claims removal",
+            "content id bypass",
+            "content id remover",
+            "copyright tool",
+            "copyright software"
+        ],
+        "keywords": [
+            "copyright",
+            "copyright removal",
+            "copyright remover",
+            "claim remover",
+            "claim removal",
+            "claims remover",
+            "claims removal",
+            "claim",
+            "claims",
+            "copyright claim",
+            "bypass",
+            "content id",
+            "youtube copyright",
+            "video downloader",
+            "repurpose",
+            "viral hooks",
+            "reframing",
+            "youtube videos"
+        ],
+        "features": [
+            "Direct HD Video Downloader: Paste any YouTube URL and download HD streams instantly without IP bans",
+            "AI Viral Hook Finder: Scans long-form video to automatically identify the most viral, engaging clips",
+            "Smart 9:16 Reframing: Converts landscape videos (16:9) to vertical shorts (9:16) with face-centering",
+            "9-Layer Content ID Protection: Applies audio pitch, micro-speed, color grade, metadata spoofing, and crop filters",
+            "Super Fast Local Processing: All rendering runs 100% locally on your computer with zero cloud upload delays",
+            "99.8% Claim-Free Success Rate: Proven track record avoiding copyright claims and channel strikes"
+        ],
+        "sales_points": [
+            "100% Private & Offline: Operates locally on your PC so your video assets remain completely private",
+            "Eliminates hours of manual editing and bypasses Content ID automatically",
+            "Flexible Pricing: Monthly License at Rs. 1,500 (negotiable down to Rs. 1,000 - 1,200) and Lifetime License at Rs. 3,500 (negotiable down to Rs. 2,800 - 3,000)",
+            "Lifetime updates included with Lifetime License with zero recurring fees",
+            "Includes 1 free trial video to test niche compatibility before paying",
+            "Instant activation via WhatsApp upon sharing your Hardware ID (HWID)"
+        ],
+        "use_cases": [
+            "Repurposing YouTube videos for Shorts, TikTok, and Instagram Reels without copyright claims",
+            "Finding viral moments in podcasts, interviews, and long-form videos",
+            "Drama and movie recap channels avoiding automated Content ID takedowns",
+            "YouTube automation and faceless channel monetization"
+        ],
+        "requirements": [
+            "Windows PC",
+            "Hardware ID (HWID) copied from application settings for license activation"
+        ],
+        "limitations": [
+            "Requires license key for full unlimited video processing",
+            "Free version includes 1 trial video test"
+        ],
+        "how_to_use": "1. Download the application & read setup guide from: https://docs.google.com/document/d/1Y4dAxV-JO_scOKUW_2gXk5Mv4c59nQQvOBETKpCALF0/edit?usp=sharing\n2. Open ClipShield, go to Settings, and copy your Hardware ID (HWID).\n3. Send your HWID to us on WhatsApp to activate your license.\n4. Paste your license key into ClipShield and start repurposing copyright-free videos.",
+        "links": [
+            {
+                "title": "Official App Download & Setup Guide",
+                "url": "https://docs.google.com/document/d/1Y4dAxV-JO_scOKUW_2gXk5Mv4c59nQQvOBETKpCALF0/edit?usp=sharing",
+                "note": "Official Google Doc with direct app download link, free trial test instructions, and setup steps"
+            }
+        ],
+        "sections": [
+            {
+                "id": "sec_1",
+                "title": "Constant Dynamic Knowledge Message",
+                "content": "💯Copyright Removal Tool Full Working\nRemove YouTube Video Copyright also Convert YouTube Video into Shorts Using Ai\n\nHere is 🔰Copyright Removal Tool Link with tutorial \n\n1️⃣  Download Software 👇👇👇\nhttps://docs.google.com/document/d/1Y4dAxV-JO_scOKUW_2gXk5Mv4c59nQQvOBETKpCALF0/edit?usp=sharing\n\n2️⃣ See Tutorial Video https://youtu.be/9tmoZPbgD84\n3️⃣It Gives only 1 Trial then you need to Buy License Key\n4️⃣1 Month Key 1500 Pkr Just\n5️⃣LifeTime Key 3500 Pkr\n\n\nFollow the BU Labs💻 channel on WhatsApp: https://whatsapp.com/channel/0029VbD0TwiFy72GJkpVaA20"
+            }
+        ],
+        "pricing": {
+            "min_negotiable_pkr": 1000,
+            "min_negotiable_usd": 5,
+            "negotiation_notes": "Can offer min_negotiable_pkr (Rs. 1,000 for monthly or Rs. 2,800 for lifetime) for immediate payment today."
+        },
+        "objection_responses": {
+            "too_expensive": "Explain that avoiding a single copyright strike or saving dozens of hours in manual video editing saves way more money than the license cost.",
+            "need_time": "Remind them they can download the app right now from the doc link and test 1 free trial video to verify it works.",
+            "comparing_competitor": "Emphasize ClipShield 9-layer anti-Content ID protection and 100% local PC offline processing speed."
+        },
+        "faq": [
+            {
+                "question": "Can I test it before buying?",
+                "answer": "Yes! You can download the app from our setup document and process 1 free trial video."
+            },
+            {
+                "question": "Does it work on Windows?",
+                "answer": "Yes, ClipShield runs on Windows PC with high-speed local processing."
+            },
+            {
+                "question": "What is the Lifetime price?",
+                "answer": "Lifetime license is Rs. 3,500 one-time (with special discount to Rs. 2,800 - 3,000 for immediate payment)."
+            }
+        ],
+        "images": [
+            {
+                "category": "social_proof",
+                "what_it_does_not_prove": "that every customer gets the same result, or any specific number of views or subscribers",
+                "customer_signals": [
+                    "skeptical",
+                    "scam",
+                    "legitimacy",
+                    "trust",
+                    "genuine",
+                    "doubt",
+                    "proof",
+                    "feedback",
+                    "testimonial"
+                ],
+                "priority": 3,
+                "cooldown_minutes": 60,
+                "max_per_conversation": 1,
+                "id": "img_1789481561620_ks6qy",
+                "filename": "1789481561619_img_20260914_231841_189_jpg.jpeg",
+                "filepath": "data/tool-images/1789481561619_img_20260914_231841_189_jpg.jpeg",
+                "url": "/tool-images/1789481561619_img_20260914_231841_189_jpg.jpeg",
+                "title": "Customer feedback — new channel result",
+                "description": "Real customer WhatsApp feedback screenshot. Customer apne naye YouTube channel ka analytics bhej raha hai — 213 subscribers, 115.7K views, 341 hours watch time. Ye genuine buyer ka message hai jo ClipShield use kar raha hai. Use this when customer is skeptical, scam ka dar hai, poochta hai ke genuine hai ya nahi, real log use karte hain ya nahi, ya trust/bharosa ka masla hai.",
+                "toolId": "1788311665125",
+                "userId": "usr_admin_badar",
+                "createdAt": "2026-09-15T14:12:41.620Z"
+            },
+            {
+                "category": "analytics",
+                "what_it_does_not_prove": "that ClipShield caused this revenue, or that any customer will earn this amount — it is one channel over about 8 months",
+                "customer_signals": [
+                    "results",
+                    "earning",
+                    "monetization",
+                    "revenue",
+                    "stats",
+                    "proof",
+                    "analytics"
+                ],
+                "priority": 2,
+                "cooldown_minutes": 60,
+                "max_per_conversation": 1,
+                "id": "img_1789481795539_39aon",
+                "filename": "1789481795505_img_20260914_232314_309_jpg.jpeg",
+                "filepath": "data/tool-images/1789481795505_img_20260914_232314_309_jpg.jpeg",
+                "url": "/tool-images/1789481795505_img_20260914_232314_309_jpg.jpeg",
+                "title": "YouTube earnings example",
+                "description": "YouTube Studio revenue screenshot — $6.2K estimated revenue Jan 14 se Sep 12 tak (lagbhag 8 months), 93.6% Watch Page ads aur 6.4% YouTube Premium se. Use this when customer poochta hai earning, monetization, revenue, paisa kitna banta hai, ya kya is se kamai hoti hai.",
+                "toolId": "1788311665125",
+                "userId": "usr_admin_badar",
+                "createdAt": "2026-09-15T14:16:35.539Z"
+            },
+            {
+                "category": "analytics",
+                "what_it_does_not_prove": "that these numbers are typical or guaranteed for any new customer",
+                "customer_signals": [
+                    "views",
+                    "reach",
+                    "growth",
+                    "results",
+                    "performance",
+                    "stats",
+                    "analytics"
+                ],
+                "priority": 2,
+                "cooldown_minutes": 30,
+                "max_per_conversation": 1,
+                "id": "img_1789481885271_md4g2",
+                "filename": "1789481885270_img_20260914_231711_340_jpg.jpeg",
+                "filepath": "data/tool-images/1789481885270_img_20260914_231711_340_jpg.jpeg",
+                "url": "/tool-images/1789481885270_img_20260914_231711_340_jpg.jpeg",
+                "title": "Reach & views example (7 days)",
+                "description": "Creator analytics screenshot — 7 days mein 1.1M views, 153,103 engagement, $103.11 approximate earnings, 48 net followers. Use this when customer poochta hai views ayenge, reach kitni hoti hai, growth hoti hai ya nahi, ya content chalta hai ya nahi.",
+                "toolId": "1788311665125",
+                "userId": "usr_admin_badar",
+                "createdAt": "2026-09-15T14:18:05.271Z"
+            }
+        ],
+        "related_tools": [
+            "VoiceDelta"
+        ],
+        "priority": 2,
+        "templateMessage": {
+            "enabled": true,
+            "content": "💯Copyright Removal Tool Full Working\nRemove YouTube Video Copyright also Convert YouTube Video into Shorts Using Ai\n\nHere is 🔰Copyright Removal Tool Link with tutorial\n\n1️⃣  Download Software 👇👇👇\nhttps://docs.google.com/document/d/1Y4dAxV-JO_scOKUW_2gXk5Mv4c59nQQvOBETKpCALF0/edit?usp=sharing\n\n2️⃣ See Tutorial Video https://youtu.be/9tmoZPbgD84\n3️⃣It Gives only 1 Trial then you need to Buy License Key\n4️⃣1 Month Key 1500 Pkr Just\n5️⃣LifeTime Key 3500 Pkr\n\n\nFollow the BU Labs💻 channel on WhatsApp: https://whatsapp.com/channel/0029VbD0TwiFy72GJkpVaA20",
+            "sendOnce": true,
+            "variablesEnabled": false
+        },
+        "conversationCount": 0,
+        "rawDraft": "",
+        "sales": {
+            "pain_points": [],
+            "secondary_selling_points": [],
+            "value_arguments": [],
+            "discovery_questions": [],
+            "common_objections": [],
+            "buying_signals": []
+        },
+        "userId": "usr_admin_badar"
+    }
+]

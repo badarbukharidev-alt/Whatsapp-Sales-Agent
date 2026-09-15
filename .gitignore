@@ -4,14 +4,14 @@ node_modules/
 *.log
 scratch/
 
-# Runtime data. This directory holds the live product catalog, customer
-# conversations, payment accounts, users and usage — none of it belongs in the
-# repository. It is created on first boot and seeded from data_defaults/.
-data/
+# Runtime data: customer conversations, payment accounts, users, usage and
+# campaign state are created on first boot and must never be committed.
+# The product catalog is the one deliberate exception (tracked below).
+data/*
+!data/tools.json
 
-# Seeded defaults: only non-sensitive app configuration is tracked here.
-# Anything holding real business, customer, payment or credential data is not.
-data_defaults/tools.json
+# Seeded defaults: only the product catalog and non-sensitive app config are
+# tracked. Anything holding real customer, payment or credential data is not.
 data_defaults/customers.json
 data_defaults/settings.json
 data_defaults/users.json
