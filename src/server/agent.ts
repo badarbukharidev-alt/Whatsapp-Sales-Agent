@@ -16,7 +16,18 @@ import {
   stripLeadingContinuationFragment,
   stripRepeatedOffer,
   isMetaLeak,
+  enforceCatalogPrices,
+  enforceKnownPaymentDetails,
+  stripRoboticPhrasing,
 } from "./services/reply-guard.js";
+import {
+  getToolPlans,
+  formatPlanLines,
+  formatPlansForPrompt,
+  buildPlanOfferMessage,
+  collectAllowedPriceAmounts,
+  shortToolName,
+} from "./services/pricing-service.js";
 import { inferConversationState, memoryPatchFromState } from "./services/conversation-state.js";
 import { selectImageForTurn, recordImageSent, describeImageForPrompt } from "./services/image-intelligence.js";
 
@@ -562,6 +573,61 @@ async function generateResponse(
   }
   // ── END HARDCODED PAYMENT BYPASS ─────────────────────────────────────────
 
+  // ── DETERMINISTIC PLAN LISTING ──────────────────────────────────────────
+  // The moment someone wants to buy or activate, they get the ACTUAL plan table
+  // from the catalog — all of it, in one message. The AI is never asked to
+  // recall a price, and the agent never asks "which plan?" before the customer
+  // has been shown what the plans even are.
+  const toolPlans = lockedTool ? getToolPlans(lockedTool) : [];
+  const lastAgentMessage = [...recentMessages].reverse().find((m) => m.role === "agent")?.content || "";
+  const plansJustListed = toolPlans.length > 0 && toolPlans.every((p) => lastAgentMessage.includes(String(p.pricePkr ?? "")));
+
+  const wantsToBuyOrActivate =
+    convoState.signals.providedHwid !== null ||
+    convoState.signals.wantsLicense ||
+    convoState.signals.asksPrice ||
+    convoState.signals.comparesPlans ||
+    ["hwid_provided", "awaiting_license", "activation", "price_inquiry", "comparing_plans", "ready_to_buy"].includes(
+      convoState.stage
+    );
+
+  if (
+    lockedTool &&
+    wantsToBuyOrActivate &&
+    !convoState.known.selectedPlan &&
+    !plansJustListed &&
+    !templateMessage
+  ) {
+    if (toolPlans.length > 0) {
+      const offer = buildPlanOfferMessage({
+        tool: lockedTool,
+        plans: toolPlans,
+        gotHwid: Boolean(convoState.signals.providedHwid),
+        variantSeed: customer.messages?.length || 0,
+      });
+
+      await customerService.updateCustomerMemory(
+        cleanJid,
+        { quotedPrices: { ...quotedPrices, [lockedTool.name]: formatPlanLines(toolPlans).replace(/\n/g, " | ") } },
+        userId
+      );
+      await evaluateAndApplyCustomerStatus(cleanJid, customer, latestCustomerText, null, userId, buyingIntent);
+      return { textMessages: [offer], imageToSend: null, templateMessage };
+    }
+
+    // No price configured at all — say so plainly instead of inventing one.
+    console.warn(`[Agent:${userId}] No pricing configured for "${lockedTool.name}" — cannot quote.`);
+    await evaluateAndApplyCustomerStatus(cleanJid, customer, latestCustomerText, null, userId, buyingIntent);
+    return {
+      textMessages: [
+        `${shortToolName(lockedTool)} ka updated rate abhi confirm kar ke bhejta hoon — thori dair dein.`,
+      ],
+      imageToSend: null,
+      templateMessage,
+    };
+  }
+  // ── END DETERMINISTIC PLAN LISTING ──────────────────────────────────────
+
   // ── DETERMINISTIC LINK DELIVERY ─────────────────────────────────────────
   // The customer explicitly asked for the link, OR they just said "G / haan /
   // bhejo" right after WE offered to send it. Either way there is nothing left
@@ -658,6 +724,11 @@ async function generateResponse(
     journeyStage: convoState.stage,
     nextAction: convoState.nextAction,
     doNotRepeat: convoState.doNotRepeat,
+    pricingBlock: lockedTool ? formatPlansForPrompt(lockedTool, toolPlans) : undefined,
+    recentAgentLines: recentMessages
+      .filter((m) => m.role === "agent")
+      .slice(-3)
+      .map((m) => m.content),
   });
 
   console.log(`[Agent:${userId}] Querying AI for ${cleanJid} (Locked: ${lockedTool?.name || (match.isUnknownProduct ? `Unknown:${match.queryProduct}` : 'CatalogOverview')}${buyingIntent ? ' | HighIntent' : ''}${templateMessage ? ' | TemplateFirst' : ''})...`);
@@ -775,6 +846,45 @@ async function generateResponse(
 
   // 9. Clamp price floors in code to guarantee non-negotiable floor holds
   text = clampPriceFloors(text, match.matched.length > 0 ? match.matched : accountTools);
+
+  // 9b. PRICE INTEGRITY — delete any figure the model produced that the catalog
+  // does not actually contain, so a hallucinated rate can never reach a customer.
+  if (lockedTool) {
+    const allowedAmounts = collectAllowedPriceAmounts(lockedTool, toolPlans);
+    const priceCheck = enforceCatalogPrices(text, allowedAmounts);
+    if (priceCheck.removed.length > 0) {
+      console.warn(
+        `[Agent:${userId}] Removed price(s) not in the catalog: ${priceCheck.removed.join(", ")} (allowed: ${allowedAmounts.join(", ")})`
+      );
+      text = priceCheck.text;
+      // If stripping the invented price emptied the reply, fall back to the real
+      // plan table rather than sending nothing.
+      if (text.trim().length < 5 && toolPlans.length > 0) {
+        text = `${shortToolName(lockedTool)} ke rates ye hain:\n${formatPlanLines(toolPlans)}`;
+      }
+    }
+  }
+
+  // 9b-ii. PAYMENT INTEGRITY — an account number the admin never configured is
+  // a fabrication the customer would send real money to. Remove it.
+  {
+    const configuredAccounts = (settings.paymentMethods || [])
+      .filter((p: any) => p.isActive !== false)
+      .map((p: any) => String(p.accountNumber || ""));
+    const paymentCheck = enforceKnownPaymentDetails(text, configuredAccounts);
+    if (paymentCheck.removed.length > 0) {
+      console.warn(
+        `[Agent:${userId}] Removed unconfigured payment identifier(s): ${paymentCheck.removed.join(", ")}`
+      );
+      text = paymentCheck.text;
+      if (text.trim().length < 5) {
+        text = "Payment details abhi confirm kar ke bhejta hoon.";
+      }
+    }
+  }
+
+  // 9c. Strip scripted "AI assistant" filler and the repeated-"bhai" tic.
+  text = stripRoboticPhrasing(text, lastAgentMessage);
 
   // 10. Split response into natural WhatsApp bubbles
   let messages: string[] = [];

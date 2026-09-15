@@ -3424,7 +3424,9 @@ function synthesizeSalesPrompt(params) {
     autoImageAttached,
     journeyStage,
     nextAction,
-    doNotRepeat
+    doNotRepeat,
+    pricingBlock,
+    recentAgentLines
   } = params;
   const memory = customer.memorySummary;
   const isReturningCustomer = Boolean(
@@ -3492,7 +3494,17 @@ CRITICAL RULES (ABSOLUTELY NO ROBOTIC BOT BEHAVIOR & ZERO HALLUCINATIONS):
    - A feature is what the software DOES. A screenshot is an EXAMPLE of one result. Neither is a promise.
    - NEVER say or imply: guaranteed views, guaranteed viral, guaranteed monetization, guaranteed income, "100% no copyright claim", or that any outcome is certain. Say what the tool helps with and what still depends on their content.
    - Never present the software as making copyright infringement legal or as immunity from enforcement. Encourage using content they have the rights to use.
-21. LEAD SOURCE:
+21. PRICES COME FROM THE CATALOG, NEVER FROM YOU:
+   - You have NO memory of prices. The only numbers that exist are the ones in the [PRICING] block. Never state, estimate, round, convert or "recall" any other figure \u2014 not even one you saw earlier in your own training.
+   - When someone asks the price or is ready to buy, list EVERY plan together in one message. NEVER ask "which plan do you want?" before you have actually shown them the plans.
+   - Same rule for payment accounts: only the numbers in [OFFICIAL PAYMENT ACCOUNTS]. If none are given, say the details are being confirmed \u2014 never invent an account, IBAN or wallet number.
+22. SOUND LIKE A PERSON, NOT A SCRIPT:
+   - Do not reuse your own previous sentence patterns or openings (see [YOUR OWN LAST REPLIES]). Say it a different way each time.
+   - BANNED, they read as machine-generated: "taake main aage process start karoon", "aap ki kya madad kar sakta hoon", "agar aap ko koi aur sawal hai", "feel free to ask", "let me know if you need anything".
+   - Use "bhai" when it lands naturally \u2014 roughly one message in three, never twice in the same message, and not at the start of every reply.
+   - Answer simple questions in one line. Don't explain things nobody asked about, and don't restate what they just told you.
+   - Move the conversation forward yourself instead of waiting to be asked \u2014 but only add ONE relevant thing (a benefit, proof, the trial, the next step), not all of them at once.
+23. LEAD SOURCE:
    - Only use acquisition/onboarding framing if the conversation actually shows they are new. If the system does not know where they came from, do NOT guess or claim to know.`;
   const memoryLines = [];
   memoryLines.push(`[CUSTOMER CONTEXT & PROFILE]`);
@@ -3666,10 +3678,14 @@ ${controlLines.join("\n")}` : "";
     );
   }
   const journeyBlock = journeyLines.length > 0 ? journeyLines.join("\n") : "";
+  const recentSelf = recentAgentLines && recentAgentLines.length > 0 ? `[YOUR OWN LAST REPLIES \u2014 do NOT reuse these sentence patterns, openings or phrasing again]
+${recentAgentLines.map((l) => `  - ${l.replace(/\s+/g, " ").slice(0, 160)}`).join("\n")}` : "";
   const promptParts = [
     memoryLines.join("\n"),
     journeyBlock,
+    pricingBlock || "",
     toolLines.join("\n\n"),
+    recentSelf,
     paymentLines.length > 0 ? paymentLines.join("\n") : "",
     negotiationGuard,
     controlDirectives,
@@ -3693,6 +3709,68 @@ var init_prompt_service = __esm({
 function isMetaLeak(text) {
   if (!text) return false;
   return META_LEAK_REGEX.test(text);
+}
+function parseAmount(raw) {
+  return parseInt(raw.replace(/[,\s]/g, ""), 10);
+}
+function splitSentences(text) {
+  return text.split(/(?<!\bRs\.)(?<!\bPKR\.)(?<!\bNo\.)(?<=[.!?])\s+|\n/).filter((s) => s && s.length > 0);
+}
+function enforceCatalogPrices(text, allowedAmounts) {
+  if (!text || !allowedAmounts || allowedAmounts.length === 0) return { text, removed: [] };
+  const allowed = new Set(allowedAmounts);
+  const min = Math.min(...allowedAmounts);
+  const max = Math.max(...allowedAmounts);
+  const removed = [];
+  const kept = splitSentences(text).filter((sentence) => {
+    REPLY_PRICE_REGEX.lastIndex = 0;
+    for (const m of sentence.matchAll(REPLY_PRICE_REGEX)) {
+      const amount = parseAmount(m[1] || m[2]);
+      if (!Number.isFinite(amount)) continue;
+      if (allowed.has(amount)) continue;
+      if (amount >= min && amount <= max) continue;
+      removed.push(amount);
+      return false;
+    }
+    return true;
+  });
+  return { text: kept.join(" ").replace(/\s{2,}/g, " ").trim(), removed };
+}
+function normalizeIdentifier(value) {
+  return value.replace(/[\s-]/g, "").toLowerCase();
+}
+function enforceKnownPaymentDetails(text, allowedIdentifiers) {
+  if (!text) return { text, removed: [] };
+  const allowed = new Set((allowedIdentifiers || []).filter(Boolean).map(normalizeIdentifier));
+  const removed = [];
+  const kept = splitSentences(text).filter((sentence) => {
+    PAYMENT_IDENTIFIER_REGEX.lastIndex = 0;
+    for (const m of sentence.matchAll(PAYMENT_IDENTIFIER_REGEX)) {
+      const found = m[0];
+      if (/(?:rs\.?|pkr|rupees)\s*$/i.test(sentence.slice(0, m.index))) continue;
+      if (allowed.has(normalizeIdentifier(found))) continue;
+      removed.push(found);
+      return false;
+    }
+    return true;
+  });
+  return { text: kept.join(" ").replace(/\s{2,}/g, " ").trim(), removed };
+}
+function stripRoboticPhrasing(text, previousAgentText) {
+  if (!text) return text;
+  let out = text;
+  for (const re of ROBOTIC_PHRASES) {
+    out = out.replace(re, "");
+  }
+  const bhaiMatches = [...out.matchAll(/\bbhai\b/gi)];
+  if (bhaiMatches.length > 1) {
+    let seen = 0;
+    out = out.replace(/\s*\bbhai\b/gi, (m) => seen++ === 0 ? m : "");
+  }
+  if (previousAgentText && /^\s*\W*bhai\b/i.test(previousAgentText)) {
+    out = out.replace(/^\s*\W*bhai\b[,\s]*/i, "");
+  }
+  return out.replace(/[ \t]{2,}/g, " ").replace(/\s+([.,!?])/g, "$1").replace(/\n{3,}/g, "\n\n").trim();
 }
 function isBareAffirmation(text) {
   if (!text) return false;
@@ -3807,17 +3885,160 @@ function stripRepeatedOffer(text, lastAgentText) {
   const result = kept.join("\n").trim();
   return result.length > 0 ? result : text;
 }
-var URL_REGEX, META_LEAK_REGEX, PLACEHOLDER_HOST_REGEX, AFFIRMATION_WORD_REGEX, AFFIRMATION_FILLER_REGEX, OFFER_VERB_SOURCE, OFFER_VERB_REGEX, CONTINUATION_STARTER_REGEX;
+var URL_REGEX, META_LEAK_REGEX, REPLY_PRICE_REGEX, PAYMENT_IDENTIFIER_REGEX, ROBOTIC_PHRASES, PLACEHOLDER_HOST_REGEX, AFFIRMATION_WORD_REGEX, AFFIRMATION_FILLER_REGEX, OFFER_VERB_SOURCE, OFFER_VERB_REGEX, CONTINUATION_STARTER_REGEX;
 var init_reply_guard = __esm({
   "src/server/services/reply-guard.ts"() {
     URL_REGEX = /(?:https?:\/\/|www\.)[^\s<>()\[\]{}"'`]+/gi;
     META_LEAK_REGEX = /(?:\bgot it\b[^.!?]{0,40}(?:ready for|next message)|what did (?:he|she|they) say|what'?s the message (?:from|the customer)|message (?:from )?(?:the )?customer that i (?:need|have) to respond|your message (?:got|seems) cut off|could you resend|please resend|as an ai\b|i(?:'m| am) an ai\b|i don'?t have (?:access|context)|no reset,? no repeated name|i(?:'ll| will) reply (?:directly|now)\s*$)/i;
+    REPLY_PRICE_REGEX = /(?:rs\.?|pkr|rupees)\s*([0-9][0-9,]{2,8})|([0-9][0-9,]{2,8})\s*(?:rs\b|pkr\b|rupees\b)/gi;
+    PAYMENT_IDENTIFIER_REGEX = /\b(?:PK\d{2}[A-Z0-9]{16,20}|0\d{3}[-\s]?\d{7}|\d{11,20})\b/gi;
+    ROBOTIC_PHRASES = [
+      /\s*ta+ke\s+main\s+aage\s+(?:ka\s+)?process\s+start\s+kar\s*(?:oon|un|u|sakoon|sakun)\b[^.!?]*/gi,
+      /\s*ta+ke\s+main\s+aap\s*k[ia]\s+(?:madad|help)\s+kar\s*(?:oon|un|u|sakoon)\b[^.!?]*/gi,
+      /\b(?:main\s+)?aap\s*k[ii]\s+kya\s+madad\s+kar\s+sakta\s+h(?:oon|u|un)\b[^.!?]*/gi,
+      /\bkis\s+cheez\s+(?:ke\s+bar[ae]y?\s+mein\s+)?poch?na\s+h(?:ai|a)\b[^.!?]*/gi,
+      /\bagar\s+aap\s*k[oe]\s+(?:koi\s+)?(?:aur\s+)?sawal\s+h(?:ai|o)[^.!?]*/gi,
+      /\bfeel\s+free\s+to\s+ask\b[^.!?]*/gi,
+      /\blet\s+me\s+know\s+if\s+you\s+(?:have\s+any|need)\b[^.!?]*/gi,
+      /\bhow\s+(?:may|can)\s+i\s+(?:assist|help)\s+you\b[^.!?]*/gi
+    ];
     PLACEHOLDER_HOST_REGEX = /(?:example\.(?:com|org|net)|yourdomain|your-?site|placeholder|dummy|test\.com|xyz\.com|abc\.com|link\.com|sample\.com|domain\.com)/i;
     AFFIRMATION_WORD_REGEX = /^(?:g|gg|gee|ji|jee|jii|ha|haan|han|hn|hnji|hanji|jihan|ok|oky|okay|okk|k|acha|achaa|achha|theek|thek|thik|sahi|yes|ya|yeah|yep|yup|sure|done|zaroor|bilkul|bhejo|bhej|bhejdo|bhejde|bhejein|bhejen|send|dedo|dedein|krdo|kardo|kar|do|karo|please|plz|pls|bhai|bro|sir)$/i;
     AFFIRMATION_FILLER_REGEX = /^(?:hai|hain|hy|he|na|nah|yr|yaar|jani|jaan|zra|zara|abhi|to|tou)$/i;
     OFFER_VERB_SOURCE = "bhej(?:un|oon|on|u|ou)?|bhejta|bhejdun|bhej\\s*d(?:oon|un|u|ta)|(?:send|share|de|kar|bhej|bata)\\s*(?:kar\\s*)?(?:d(?:oon|un|u|e|ee)|deta|deti)\\s*(?:h(?:oon|u|un|o|ai))?|batau|bata\\s*(?:doon|dun)|chahiye|chahye|karun|karoon";
     OFFER_VERB_REGEX = new RegExp(`(?:${OFFER_VERB_SOURCE})`, "i");
     CONTINUATION_STARTER_REGEX = /^(?:ko|ka|ki|ke|se|me|mein|par|pe|aur|ya|taake|takay|takke|jis|jise|jin|jo|hai|hain|tha|thi|the|kar|karta|karti|karte|karne|karna|kiya|deta|deti|dete|diya|raha|rahi|rahe|wala|wali|wale|bhi|to|ho|hota|hoti|hote|nahi|na|kyunke|kyunki|lekin|magar|phir|is|us|iska|uska|jab|agar)\b/i;
+  }
+});
+
+// src/server/services/pricing-service.ts
+function catalogText(tool) {
+  return [
+    tool.pricing?.negotiation_notes,
+    ...tool.sales_points || [],
+    ...(tool.faq || []).flatMap((f) => [f.question, f.answer]),
+    ...(tool.sections || []).map((s) => s.content),
+    tool.description
+  ].filter(Boolean).join("\n");
+}
+function toAmount(raw) {
+  if (!raw) return void 0;
+  const n = parseInt(String(raw).replace(/[,\s]/g, ""), 10);
+  return Number.isFinite(n) && n > 0 ? n : void 0;
+}
+function findLabelledPrice(text, label) {
+  const patterns = [
+    new RegExp(`${label}[^.\\n]{0,60}?${MONEY}`, "i"),
+    new RegExp(`${MONEY}[^.\\n]{0,40}?${label}`, "i")
+  ];
+  for (const re of patterns) {
+    const m = text.match(re);
+    const amount = toAmount(m?.[1]);
+    if (amount) return amount;
+  }
+  return void 0;
+}
+function findLabelledFloor(text, label) {
+  const direct = text.match(new RegExp(`${MONEY}\\s*(?:for|ke\\s*li?ye)\\s*${label}`, "i"));
+  const fromDirect = toAmount(direct?.[1]);
+  if (fromDirect) return fromDirect;
+  const range = text.match(
+    new RegExp(`${label}[^.\\n]{0,80}?(?:down\\s*to|negotiable\\s*(?:down\\s*)?to|discount\\s*to)\\s*${MONEY}`, "i")
+  );
+  return toAmount(range?.[1]);
+}
+function getToolPlans(tool) {
+  if (!tool) return [];
+  const configured = (tool.plans || []).filter((p) => p && p.isActive !== false && (p.pricePkr || p.priceUsd));
+  if (configured.length > 0) {
+    return configured.map((p) => ({ ...p, name: (p.name || "Plan").trim() }));
+  }
+  const plans = [];
+  const basePkr = toAmount(tool.pricePkr);
+  const baseUsd = toAmount(tool.priceUsd);
+  if (basePkr || baseUsd) {
+    plans.push({
+      id: "derived_base",
+      name: "1 Month",
+      pricePkr: basePkr,
+      priceUsd: baseUsd,
+      minNegotiablePkr: tool.pricing?.min_negotiable_pkr,
+      billingCycle: "monthly"
+    });
+  }
+  const text = catalogText(tool);
+  const lifetimePkr = findLabelledPrice(text, "lifetime");
+  if (lifetimePkr && lifetimePkr !== basePkr) {
+    plans.push({
+      id: "derived_lifetime",
+      name: "Lifetime",
+      pricePkr: lifetimePkr,
+      minNegotiablePkr: findLabelledFloor(text, "lifetime"),
+      billingCycle: "lifetime"
+    });
+  }
+  return plans;
+}
+function shortToolName(tool) {
+  const name = (tool?.name || "").trim();
+  return name.split(/\s+[–—-]\s+/)[0].trim() || name;
+}
+function formatPrice(plan) {
+  if (plan.pricePkr) return `Rs. ${plan.pricePkr.toLocaleString("en-US")}`;
+  if (plan.priceUsd) return `$${plan.priceUsd}`;
+  return "price on request";
+}
+function formatPlanLines(plans) {
+  return plans.map((p) => `${p.name} \u2014 ${formatPrice(p)}`).join("\n");
+}
+function formatPlansForPrompt(tool, plans) {
+  if (plans.length === 0) {
+    return `[PRICING] No price is configured for ${shortToolName(tool)}. You must NOT state, guess or estimate any price. Say you'll confirm the rate and move on.`;
+  }
+  const lines = plans.map((p) => {
+    const floor = p.minNegotiablePkr ? ` | absolute floor Rs. ${p.minNegotiablePkr.toLocaleString("en-US")}` : "";
+    return `  - ${p.name}: ${formatPrice(p)}${floor}${p.note ? ` (${p.note})` : ""}`;
+  });
+  return [
+    `[PRICING \u2014 THE ONLY PRICES THAT EXIST. Never state any number not listed here.]`,
+    ...lines,
+    `When the customer asks about price or is ready to buy, list ALL of these plans together \u2014 never ask which plan they want before showing them what the plans are.`
+  ].join("\n");
+}
+function buildPlanOfferMessage(params) {
+  const { tool, plans, gotHwid = false, variantSeed = 0 } = params;
+  const name = shortToolName(tool);
+  const openers = gotHwid ? ["Perfect bhai \u{1F44D} Device ID mil gaya.", "Shukriya, Device ID note kar liya \u{1F44D}", "Mil gaya Device ID \u{1F44D}"] : ["Ye rahe available plans:", "Do options hain:", "Rates ye hain:"];
+  const opener = openers[Math.abs(variantSeed) % openers.length];
+  const intro = plans.length > 1 ? `${opener} ${name} ke ${plans.length} plans available hain:` : `${opener} ${name} ka rate ye hai:`;
+  const closer = plans.length > 1 ? "Aap kis wali key lena chahte ho?" : "Confirm kar dein to aage barhate hain.";
+  return `${intro}
+${formatPlanLines(plans)}
+
+${closer}`;
+}
+function collectAllowedPriceAmounts(tool, plans) {
+  const amounts = /* @__PURE__ */ new Set();
+  for (const p of plans) {
+    if (p.pricePkr) amounts.add(p.pricePkr);
+    if (p.minNegotiablePkr) amounts.add(p.minNegotiablePkr);
+  }
+  const base = toAmount(tool?.pricePkr);
+  if (base) amounts.add(base);
+  if (tool?.pricing?.min_negotiable_pkr) amounts.add(tool.pricing.min_negotiable_pkr);
+  const scannable = `${catalogText(tool)}
+${tool?.templateMessage?.content || ""}`;
+  for (const m of scannable.matchAll(CURRENCY_ANCHORED)) {
+    const amount = toAmount(m[1] || m[2]);
+    if (amount) amounts.add(amount);
+  }
+  return [...amounts];
+}
+var MONEY, CURRENCY_ANCHORED;
+var init_pricing_service = __esm({
+  "src/server/services/pricing-service.ts"() {
+    MONEY = "(?:rs\\.?|pkr|rupees)?\\s*([0-9][0-9,]{1,8})";
+    CURRENCY_ANCHORED = /(?:rs\.?|pkr|rupees)\s*([0-9][0-9,]{2,8})|([0-9][0-9,]{2,8})\s*(?:rs\b|pkr\b|rupees\b)/gi;
   }
 });
 
@@ -4614,6 +4835,38 @@ Title: ${p.accountTitle}${p.instructions ? `
       templateMessage
     };
   }
+  const toolPlans = lockedTool ? getToolPlans(lockedTool) : [];
+  const lastAgentMessage = [...recentMessages].reverse().find((m) => m.role === "agent")?.content || "";
+  const plansJustListed = toolPlans.length > 0 && toolPlans.every((p) => lastAgentMessage.includes(String(p.pricePkr ?? "")));
+  const wantsToBuyOrActivate = convoState.signals.providedHwid !== null || convoState.signals.wantsLicense || convoState.signals.asksPrice || convoState.signals.comparesPlans || ["hwid_provided", "awaiting_license", "activation", "price_inquiry", "comparing_plans", "ready_to_buy"].includes(
+    convoState.stage
+  );
+  if (lockedTool && wantsToBuyOrActivate && !convoState.known.selectedPlan && !plansJustListed && !templateMessage) {
+    if (toolPlans.length > 0) {
+      const offer = buildPlanOfferMessage({
+        tool: lockedTool,
+        plans: toolPlans,
+        gotHwid: Boolean(convoState.signals.providedHwid),
+        variantSeed: customer.messages?.length || 0
+      });
+      await customerService.updateCustomerMemory(
+        cleanJid,
+        { quotedPrices: { ...quotedPrices, [lockedTool.name]: formatPlanLines(toolPlans).replace(/\n/g, " | ") } },
+        userId
+      );
+      await evaluateAndApplyCustomerStatus(cleanJid, customer, latestCustomerText, null, userId, buyingIntent);
+      return { textMessages: [offer], imageToSend: null, templateMessage };
+    }
+    console.warn(`[Agent:${userId}] No pricing configured for "${lockedTool.name}" \u2014 cannot quote.`);
+    await evaluateAndApplyCustomerStatus(cleanJid, customer, latestCustomerText, null, userId, buyingIntent);
+    return {
+      textMessages: [
+        `${shortToolName(lockedTool)} ka updated rate abhi confirm kar ke bhejta hoon \u2014 thori dair dein.`
+      ],
+      imageToSend: null,
+      templateMessage
+    };
+  }
   const lastAgentText = [...recentMessages].reverse().find((m) => m.role === "agent")?.content || null;
   const affirmedPendingLink = isBareAffirmation(latestCustomerText) && detectPendingOffer(lastAgentText) === "link";
   const primaryLink = lockedTool?.links?.find((l) => (l?.url || "").trim())?.url?.trim() || "";
@@ -4675,7 +4928,9 @@ ${label}` : `Han bhai, ye dekho ${lockedTool.name} ka interface \u{1F447}`],
     autoImageAttached: autoAttachImage ? autoAttachImageBriefing : void 0,
     journeyStage: convoState.stage,
     nextAction: convoState.nextAction,
-    doNotRepeat: convoState.doNotRepeat
+    doNotRepeat: convoState.doNotRepeat,
+    pricingBlock: lockedTool ? formatPlansForPrompt(lockedTool, toolPlans) : void 0,
+    recentAgentLines: recentMessages.filter((m) => m.role === "agent").slice(-3).map((m) => m.content)
   });
   console.log(`[Agent:${userId}] Querying AI for ${cleanJid} (Locked: ${lockedTool?.name || (match.isUnknownProduct ? `Unknown:${match.queryProduct}` : "CatalogOverview")}${buyingIntent ? " | HighIntent" : ""}${templateMessage ? " | TemplateFirst" : ""})...`);
   const rawReply = await askAI(prompt, systemPrompt, userId);
@@ -4744,6 +4999,34 @@ ${label}` : `Han bhai, ye dekho ${lockedTool.name} ka interface \u{1F447}`],
     }
   }
   text = clampPriceFloors(text, match.matched.length > 0 ? match.matched : accountTools);
+  if (lockedTool) {
+    const allowedAmounts = collectAllowedPriceAmounts(lockedTool, toolPlans);
+    const priceCheck = enforceCatalogPrices(text, allowedAmounts);
+    if (priceCheck.removed.length > 0) {
+      console.warn(
+        `[Agent:${userId}] Removed price(s) not in the catalog: ${priceCheck.removed.join(", ")} (allowed: ${allowedAmounts.join(", ")})`
+      );
+      text = priceCheck.text;
+      if (text.trim().length < 5 && toolPlans.length > 0) {
+        text = `${shortToolName(lockedTool)} ke rates ye hain:
+${formatPlanLines(toolPlans)}`;
+      }
+    }
+  }
+  {
+    const configuredAccounts = (settings.paymentMethods || []).filter((p) => p.isActive !== false).map((p) => String(p.accountNumber || ""));
+    const paymentCheck = enforceKnownPaymentDetails(text, configuredAccounts);
+    if (paymentCheck.removed.length > 0) {
+      console.warn(
+        `[Agent:${userId}] Removed unconfigured payment identifier(s): ${paymentCheck.removed.join(", ")}`
+      );
+      text = paymentCheck.text;
+      if (text.trim().length < 5) {
+        text = "Payment details abhi confirm kar ke bhejta hoon.";
+      }
+    }
+  }
+  text = stripRoboticPhrasing(text, lastAgentMessage);
   let messages = [];
   if (text.includes("---MSG---")) {
     messages = text.split("---MSG---").map((m) => m.trim()).filter((m) => m.length > 0);
@@ -4847,6 +5130,7 @@ var init_agent = __esm({
     init_usage();
     init_tool_matcher();
     init_reply_guard();
+    init_pricing_service();
     init_conversation_state();
     init_image_intelligence();
     BUYING_INTENT_REGEX = /(?:\b(?:le?na|lena|leni|chahiye|chaiye|chahye)\b|\blink\b|\bprice\b|\brate\b|\bkitne?\b|\bkitna\b|final\s*price|\bpayment\b|jazz\s*cash|jazzcash|easy\s*paisa|easypaisa|\braast\b|account\s*(?:number|details|no)|\bpro\b|start\s*kar|shuru\s*kar|kharid|khareed|purchase|\bbuy\b|sub\s*len|order\s*kar|paise?\s*(?:bhej|send|transfer|kaha))/i;

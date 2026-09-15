@@ -24,6 +24,163 @@ export function isMetaLeak(text: string): boolean {
   return META_LEAK_REGEX.test(text);
 }
 
+/** A money amount carrying an explicit currency marker. */
+const REPLY_PRICE_REGEX =
+  /(?:rs\.?|pkr|rupees)\s*([0-9][0-9,]{2,8})|([0-9][0-9,]{2,8})\s*(?:rs\b|pkr\b|rupees\b)/gi;
+
+function parseAmount(raw: string): number {
+  return parseInt(raw.replace(/[,\s]/g, ""), 10);
+}
+
+/**
+ * Splits into sentence-ish chunks, keeping line breaks meaningful.
+ *
+ * The lookbehinds matter: "Rs." ends in a period, so a naive split would tear
+ * "Rs. 25,000" into two pieces and the currency marker would no longer sit next
+ * to the number — which silently defeats the price and payment guards below.
+ */
+function splitSentences(text: string): string[] {
+  return text
+    .split(/(?<!\bRs\.)(?<!\bPKR\.)(?<!\bNo\.)(?<=[.!?])\s+|\n/)
+    .filter((s) => s && s.length > 0);
+}
+
+export interface PriceEnforcementResult {
+  text: string;
+  /** Amounts that were not backed by the catalog and got removed. */
+  removed: number[];
+}
+
+/**
+ * Deletes any price the model invented.
+ *
+ * The catalog is the only place prices exist. An amount is accepted when it is
+ * one of the configured figures, or falls inside the configured negotiation band
+ * (so a legitimate in-range counter-offer survives). Anything else — a rate that
+ * simply is not ours — has its sentence dropped rather than being silently
+ * rewritten to a different number, because "correcting" an invented price to a
+ * nearby one is just a second guess.
+ */
+export function enforceCatalogPrices(text: string, allowedAmounts: number[]): PriceEnforcementResult {
+  if (!text || !allowedAmounts || allowedAmounts.length === 0) return { text, removed: [] };
+
+  const allowed = new Set(allowedAmounts);
+  const min = Math.min(...allowedAmounts);
+  const max = Math.max(...allowedAmounts);
+  const removed: number[] = [];
+
+  const kept = splitSentences(text).filter((sentence) => {
+    REPLY_PRICE_REGEX.lastIndex = 0;
+    for (const m of sentence.matchAll(REPLY_PRICE_REGEX)) {
+      const amount = parseAmount(m[1] || m[2]);
+      if (!Number.isFinite(amount)) continue;
+      if (allowed.has(amount)) continue;
+      if (amount >= min && amount <= max) continue; // inside the real negotiation band
+      removed.push(amount);
+      return false;
+    }
+    return true;
+  });
+
+  return { text: kept.join(" ").replace(/\s{2,}/g, " ").trim(), removed };
+}
+
+/**
+ * Things that look like somewhere to send money: a Pakistani mobile wallet
+ * number, an IBAN, or a long bank account number.
+ */
+const PAYMENT_IDENTIFIER_REGEX =
+  /\b(?:PK\d{2}[A-Z0-9]{16,20}|0\d{3}[-\s]?\d{7}|\d{11,20})\b/gi;
+
+function normalizeIdentifier(value: string): string {
+  return value.replace(/[\s-]/g, "").toLowerCase();
+}
+
+export interface PaymentEnforcementResult {
+  text: string;
+  /** Identifiers that were not configured and got removed. */
+  removed: string[];
+}
+
+/**
+ * Deletes any account/wallet/IBAN number that is not one of the configured
+ * payment accounts.
+ *
+ * Payment details exist in exactly one place — the settings the admin saved. A
+ * model handed no accounts will still cheerfully produce a plausible-looking
+ * one, and a customer cannot tell the difference, so anything unrecognised has
+ * its sentence dropped outright.
+ */
+export function enforceKnownPaymentDetails(text: string, allowedIdentifiers: string[]): PaymentEnforcementResult {
+  if (!text) return { text, removed: [] };
+
+  const allowed = new Set((allowedIdentifiers || []).filter(Boolean).map(normalizeIdentifier));
+  const removed: string[] = [];
+
+  const kept = splitSentences(text).filter((sentence) => {
+    PAYMENT_IDENTIFIER_REGEX.lastIndex = 0;
+    for (const m of sentence.matchAll(PAYMENT_IDENTIFIER_REGEX)) {
+      const found = m[0];
+      // Prices were already validated separately; don't treat them as accounts.
+      if (/(?:rs\.?|pkr|rupees)\s*$/i.test(sentence.slice(0, m.index))) continue;
+      if (allowed.has(normalizeIdentifier(found))) continue;
+      removed.push(found);
+      return false;
+    }
+    return true;
+  });
+
+  return { text: kept.join(" ").replace(/\s{2,}/g, " ").trim(), removed };
+}
+
+/**
+ * Stock "AI assistant" filler that makes a WhatsApp seller sound like software.
+ * These are removed outright — the surrounding sentence already carries the
+ * meaning, and a real seller simply would not say them.
+ */
+const ROBOTIC_PHRASES: RegExp[] = [
+  /\s*ta+ke\s+main\s+aage\s+(?:ka\s+)?process\s+start\s+kar\s*(?:oon|un|u|sakoon|sakun)\b[^.!?]*/gi,
+  /\s*ta+ke\s+main\s+aap\s*k[ia]\s+(?:madad|help)\s+kar\s*(?:oon|un|u|sakoon)\b[^.!?]*/gi,
+  /\b(?:main\s+)?aap\s*k[ii]\s+kya\s+madad\s+kar\s+sakta\s+h(?:oon|u|un)\b[^.!?]*/gi,
+  /\bkis\s+cheez\s+(?:ke\s+bar[ae]y?\s+mein\s+)?poch?na\s+h(?:ai|a)\b[^.!?]*/gi,
+  /\bagar\s+aap\s*k[oe]\s+(?:koi\s+)?(?:aur\s+)?sawal\s+h(?:ai|o)[^.!?]*/gi,
+  /\bfeel\s+free\s+to\s+ask\b[^.!?]*/gi,
+  /\blet\s+me\s+know\s+if\s+you\s+(?:have\s+any|need)\b[^.!?]*/gi,
+  /\bhow\s+(?:may|can)\s+i\s+(?:assist|help)\s+you\b[^.!?]*/gi,
+];
+
+/**
+ * Removes scripted filler and stops "bhai" being stapled onto every sentence.
+ * `previousAgentText` is used so the greeting-word doesn't repeat turn after
+ * turn, which is the fastest way a bot gives itself away.
+ */
+export function stripRoboticPhrasing(text: string, previousAgentText?: string | null): string {
+  if (!text) return text;
+  let out = text;
+
+  for (const re of ROBOTIC_PHRASES) {
+    out = out.replace(re, "");
+  }
+
+  // "bhai" more than once in a single reply reads as a tic.
+  const bhaiMatches = [...out.matchAll(/\bbhai\b/gi)];
+  if (bhaiMatches.length > 1) {
+    let seen = 0;
+    out = out.replace(/\s*\bbhai\b/gi, (m) => (seen++ === 0 ? m : ""));
+  }
+
+  // If the previous reply already opened with "bhai", don't open with it again.
+  if (previousAgentText && /^\s*\W*bhai\b/i.test(previousAgentText)) {
+    out = out.replace(/^\s*\W*bhai\b[,\s]*/i, "");
+  }
+
+  return out
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\s+([.,!?])/g, "$1")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 /**
  * Generic words that must never on their own decide which product image to
  * send — mostly Roman Urdu glue words and the words used to ASK for an image.

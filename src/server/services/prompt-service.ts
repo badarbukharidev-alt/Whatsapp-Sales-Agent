@@ -35,6 +35,10 @@ export interface PromptSynthesisParams {
   nextAction?: string;
   /** Things the customer already knows — must not be repeated. */
   doNotRepeat?: string[];
+  /** The authoritative plan/price table for the locked product. */
+  pricingBlock?: string;
+  /** The agent's own last few replies, so it can avoid reusing its phrasing. */
+  recentAgentLines?: string[];
 }
 
 export interface SynthesizedPrompt {
@@ -70,6 +74,8 @@ export function synthesizeSalesPrompt(params: PromptSynthesisParams): Synthesize
     journeyStage,
     nextAction,
     doNotRepeat,
+    pricingBlock,
+    recentAgentLines,
   } = params;
 
   const memory = customer.memorySummary;
@@ -142,7 +148,17 @@ CRITICAL RULES (ABSOLUTELY NO ROBOTIC BOT BEHAVIOR & ZERO HALLUCINATIONS):
    - A feature is what the software DOES. A screenshot is an EXAMPLE of one result. Neither is a promise.
    - NEVER say or imply: guaranteed views, guaranteed viral, guaranteed monetization, guaranteed income, "100% no copyright claim", or that any outcome is certain. Say what the tool helps with and what still depends on their content.
    - Never present the software as making copyright infringement legal or as immunity from enforcement. Encourage using content they have the rights to use.
-21. LEAD SOURCE:
+21. PRICES COME FROM THE CATALOG, NEVER FROM YOU:
+   - You have NO memory of prices. The only numbers that exist are the ones in the [PRICING] block. Never state, estimate, round, convert or "recall" any other figure — not even one you saw earlier in your own training.
+   - When someone asks the price or is ready to buy, list EVERY plan together in one message. NEVER ask "which plan do you want?" before you have actually shown them the plans.
+   - Same rule for payment accounts: only the numbers in [OFFICIAL PAYMENT ACCOUNTS]. If none are given, say the details are being confirmed — never invent an account, IBAN or wallet number.
+22. SOUND LIKE A PERSON, NOT A SCRIPT:
+   - Do not reuse your own previous sentence patterns or openings (see [YOUR OWN LAST REPLIES]). Say it a different way each time.
+   - BANNED, they read as machine-generated: "taake main aage process start karoon", "aap ki kya madad kar sakta hoon", "agar aap ko koi aur sawal hai", "feel free to ask", "let me know if you need anything".
+   - Use "bhai" when it lands naturally — roughly one message in three, never twice in the same message, and not at the start of every reply.
+   - Answer simple questions in one line. Don't explain things nobody asked about, and don't restate what they just told you.
+   - Move the conversation forward yourself instead of waiting to be asked — but only add ONE relevant thing (a benefit, proof, the trial, the next step), not all of them at once.
+23. LEAD SOURCE:
    - Only use acquisition/onboarding framing if the conversation actually shows they are new. If the system does not know where they came from, do NOT guess or claim to know.`;
 
   // 2. CUSTOMER MEMORY & CONTEXT BLOCK
@@ -369,11 +385,21 @@ CRITICAL RULES (ABSOLUTELY NO ROBOTIC BOT BEHAVIOR & ZERO HALLUCINATIONS):
   }
   const journeyBlock = journeyLines.length > 0 ? journeyLines.join("\n") : "";
 
+  // ANTI-REPETITION — show the agent its own recent wording so it varies.
+  const recentSelf =
+    recentAgentLines && recentAgentLines.length > 0
+      ? `[YOUR OWN LAST REPLIES — do NOT reuse these sentence patterns, openings or phrasing again]\n${recentAgentLines
+          .map((l) => `  - ${l.replace(/\s+/g, " ").slice(0, 160)}`)
+          .join("\n")}`
+      : "";
+
   // ASSEMBLE PROMPT
   const promptParts = [
     memoryLines.join("\n"),
     journeyBlock,
+    pricingBlock || "",
     toolLines.join("\n\n"),
+    recentSelf,
     paymentLines.length > 0 ? paymentLines.join("\n") : "",
     negotiationGuard,
     controlDirectives,

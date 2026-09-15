@@ -3,6 +3,20 @@ node_modules/
 .env.local
 *.log
 scratch/
-data/*
-!data/tools.json
-!data/plans.json
+
+# Runtime data. This directory holds the live product catalog, customer
+# conversations, payment accounts, users and usage — none of it belongs in the
+# repository. It is created on first boot and seeded from data_defaults/.
+data/
+
+# Seeded defaults: only non-sensitive app configuration is tracked here.
+# Anything holding real business, customer, payment or credential data is not.
+data_defaults/tools.json
+data_defaults/customers.json
+data_defaults/settings.json
+data_defaults/users.json
+data_defaults/audit_logs.json
+data_defaults/usage.json
+data_defaults/campaign.json
+data_defaults/deepgram_accounts.json
+data_defaults/github_config.json

@@ -5,6 +5,13 @@ import { Tool, Customer, ChatMessage } from "../src/types.js";
 import { inferConversationState, memoryPatchFromState } from "../src/server/services/conversation-state.js";
 import { selectImageForTurn } from "../src/server/services/image-intelligence.js";
 import {
+  getToolPlans,
+  formatPlanLines,
+  formatPlansForPrompt,
+  buildPlanOfferMessage,
+  collectAllowedPriceAmounts,
+} from "../src/server/services/pricing-service.js";
+import {
   matchTool,
   matchToolSync,
   getUnstatedFacts,
@@ -24,10 +31,20 @@ import {
   stripRepeatedOffer,
   isMetaLeak,
   pickRelevantImage,
+  enforceCatalogPrices,
+  enforceKnownPaymentDetails,
+  stripRoboticPhrasing,
 } from "../src/server/services/reply-guard.js";
 
+/**
+ * Tests run against a committed fixture catalog, never the live product
+ * database. `data/` holds real business data (negotiation floors, sales
+ * strategy, saved templates) and is deliberately not in the repository, so
+ * depending on it would both leak it and make these tests non-reproducible on
+ * a fresh clone.
+ */
 const toolsData: Tool[] = JSON.parse(
-  fs.readFileSync(path.resolve(process.cwd(), "data", "tools.json"), "utf-8")
+  fs.readFileSync(path.resolve(process.cwd(), "tests", "fixtures", "tools.sample.json"), "utf-8")
 );
 
 async function runRegressionSuite() {
@@ -118,7 +135,8 @@ async function runRegressionSuite() {
     assert.strictEqual(turn1Unstated.length, allFeatures.length, "Turn 1 should have all facts available");
 
     // Turn 1 reply states 2 facts
-    const turn1Reply = "VoiceDelta me 3,600+ AI voices hain aur instant 1-minute voice cloning milti hai 99% accuracy ke sath.";
+    const turn1Reply =
+      "VoiceDelta me thousands of studio-quality AI voices across many languages hain, aur instant voice cloning bhi milti hai ek short clean audio recording se.";
     const turn1Mentioned = extractMentionedFacts(turn1Reply, voiceTool);
     assert.ok(turn1Mentioned.length >= 1, "Turn 1 must identify mentioned facts");
     recordStatedFacts(customer, voiceTool.id, turn1Mentioned);
@@ -132,7 +150,8 @@ async function runRegressionSuite() {
     );
 
     // Turn 2 reply states fresh facts
-    const turn2Reply = "Isme official ElevenLabs aur ChatGPT/OpenAI voice models ka direct access milta hai, plus Pro me unlimited voice generation hai.";
+    const turn2Reply =
+      "Text-to-speech generation multiple voice engines ke sath milti hai, aur commercial rights bhi included hain monetized content ke liye.";
     const turn2Mentioned = extractMentionedFacts(turn2Reply, voiceTool);
     assert.ok(turn2Mentioned.length >= 1, "Turn 2 must identify newly mentioned facts");
     recordStatedFacts(customer, voiceTool.id, turn2Mentioned);
@@ -1218,6 +1237,187 @@ async function runRegressionSuite() {
     assert.strictEqual(patch.appInstalled, true);
     assert.ok(patch.hwid, "HWID must be persisted so it is never asked for twice");
     assert.ok(patch.journeyStage);
+  });
+
+  // =========================================================================
+  // SCENARIO 15: Pricing comes from the catalog, never from the model.
+  // Covers the activation, pricing, payment, objection and existing-user flows.
+  // =========================================================================
+  test("15.1 ACTIVATION: plans are derived from the real catalog (Monthly + Lifetime)", () => {
+    const plans = getToolPlans(clipTool);
+    assert.ok(plans.length >= 2, `ClipShield must expose both plans, got ${plans.length}`);
+
+    const monthly = plans.find((p) => /month/i.test(p.name));
+    const lifetime = plans.find((p) => /lifetime/i.test(p.name));
+    assert.ok(monthly && lifetime, "Both a monthly and a lifetime plan must be available");
+    assert.strictEqual(monthly!.pricePkr, 1500);
+    assert.strictEqual(lifetime!.pricePkr, 3500, "Lifetime price must be read from the catalog, not guessed");
+    assert.strictEqual(lifetime!.minNegotiablePkr, 2800, "Lifetime floor must come from the catalog too");
+
+    const lines = formatPlanLines(plans);
+    assert.ok(lines.includes("Rs. 1,500") && lines.includes("Rs. 3,500"), `Both prices listed together:\n${lines}`);
+  });
+
+  test("15.2 ACTIVATION: a tool with one plan does not invent a second one", () => {
+    const voice = toolsData.find((t) => /voice/i.test(t.name))!;
+    const plans = getToolPlans(voice);
+    assert.strictEqual(plans.length, 1, "VoiceDelta has a single configured price");
+    assert.strictEqual(plans[0].pricePkr, 1199);
+  });
+
+  test("15.3 ACTIVATION: structured plans[] override the derivation", () => {
+    const configured: Tool = {
+      ...clipTool,
+      plans: [
+        { name: "1 Month", pricePkr: 1800, billingCycle: "monthly" },
+        { name: "Lifetime", pricePkr: 4200, billingCycle: "lifetime" },
+        { name: "Retired", pricePkr: 999, isActive: false },
+      ],
+    };
+    const plans = getToolPlans(configured);
+    assert.strictEqual(plans.length, 2, "Inactive plans are excluded");
+    assert.strictEqual(plans[0].pricePkr, 1800);
+    assert.strictEqual(plans[1].pricePkr, 4200);
+  });
+
+  test("15.4 PRICING: a price the catalog does not contain is removed from the reply", () => {
+    const allowed = collectAllowedPriceAmounts(clipTool, getToolPlans(clipTool));
+    const reply = "Lifetime Rs. 3,500 hai. Aap ke liye special Rs. 25,000 kar deta hoon.";
+    const result = enforceCatalogPrices(reply, allowed);
+
+    assert.ok(result.removed.includes(25000), "The invented rate must be caught");
+    assert.ok(!result.text.includes("25,000"), "The invented rate must not survive");
+    assert.ok(result.text.includes("3,500"), "The real catalog price must survive");
+  });
+
+  test("15.5 PRICING: an in-band negotiation figure is left alone", () => {
+    const allowed = collectAllowedPriceAmounts(clipTool, getToolPlans(clipTool));
+    const reply = "Theek hai, Rs. 3,000 pe kar deta hoon agar aaj payment karein.";
+    const result = enforceCatalogPrices(reply, allowed);
+    assert.strictEqual(result.removed.length, 0, "A figure inside the configured band is legitimate");
+    assert.ok(result.text.includes("3,000"));
+  });
+
+  test("15.6 PRICING: a tool with no price configured yields no plans (so nothing can be quoted)", () => {
+    const priceless: Tool = {
+      ...clipTool,
+      pricePkr: undefined,
+      priceUsd: undefined,
+      pricing: {},
+      sales_points: [],
+      faq: [],
+      sections: [],
+      description: "A tool with no pricing configured at all.",
+      templateMessage: undefined,
+    };
+    assert.strictEqual(getToolPlans(priceless).length, 0);
+  });
+
+  // Synthetic numbers only — never the real configured accounts.
+  const FIXTURE_CONFIGURED_ACCOUNT = "03009998877";
+  const FIXTURE_INVENTED_ACCOUNT = "03451112233";
+
+  test("15.7 PAYMENT: an unconfigured account number is stripped from the reply", () => {
+    const reply = `Easypaisa ${FIXTURE_CONFIGURED_ACCOUNT} pe bhej dein. Ya JazzCash ${FIXTURE_INVENTED_ACCOUNT} pe bhi kar sakte hain.`;
+    const result = enforceKnownPaymentDetails(reply, [FIXTURE_CONFIGURED_ACCOUNT]);
+
+    assert.ok(result.removed.length >= 1, "The invented account must be caught");
+    assert.ok(!result.text.includes(FIXTURE_INVENTED_ACCOUNT), "The invented account must not survive");
+    assert.ok(result.text.includes(FIXTURE_CONFIGURED_ACCOUNT), "The configured account must survive");
+  });
+
+  test("15.8 PAYMENT: an invented IBAN is stripped", () => {
+    const result = enforceKnownPaymentDetails("Bank transfer PK36ABCD0000001123456702 pe kar dein.", [
+      FIXTURE_CONFIGURED_ACCOUNT,
+    ]);
+    assert.ok(!result.text.includes("PK36ABCD0000001123456702"), "An unconfigured IBAN must never be sent");
+  });
+
+  test("15.9 OBJECTION: robotic filler is removed, real content kept", () => {
+    const reply =
+      "Samajh sakta hoon bhai, lekin ye ek baar ka kharcha hai. Aap batayein taake main aage process start karoon.";
+    const cleaned = stripRoboticPhrasing(reply, null);
+
+    assert.ok(!/process start kar/i.test(cleaned), `Machine phrasing must go. Got: ${cleaned}`);
+    assert.ok(/ek baar ka kharcha/i.test(cleaned), "The substance must stay");
+  });
+
+  test("15.10 OBJECTION: 'bhai' is not repeated within one reply or across turns", () => {
+    const doubled = stripRoboticPhrasing("Bhai dekhein bhai ye best rate hai.", null);
+    assert.strictEqual((doubled.match(/bhai/gi) || []).length, 1, `Only one 'bhai' per reply: ${doubled}`);
+
+    const afterBhaiOpener = stripRoboticPhrasing("Bhai ye lifetime plan behtar rahega.", "Bhai ye rate final hai.");
+    assert.ok(!/^bhai/i.test(afterBhaiOpener), `Must not open with 'bhai' twice running: ${afterBhaiOpener}`);
+  });
+
+  test("15.11 EXISTING USER: HWID + licence request lists plans and never re-advertises", () => {
+    const state = inferConversationState({
+      latestCustomerText: "Hello ClipShield Team, I want to activate ClipShield Pro. My Device ID is CS-7788-AB12",
+      recentMessages: [],
+      memory: {},
+      lockedToolId: clipTool.id,
+    });
+
+    assert.strictEqual(state.shouldSendTemplate, false, "An activating customer must not get the advertisement");
+    assert.ok(state.signals.providedHwid, "The Device ID must be captured");
+    assert.strictEqual(state.known.selectedPlan, null, "No plan chosen yet — so the plans must be shown");
+
+    // This is the exact condition the agent uses to list every plan at once.
+    const shouldListPlans =
+      (state.signals.providedHwid !== null || state.signals.wantsLicense) && !state.known.selectedPlan;
+    assert.ok(shouldListPlans, "Plans must be listed before asking which one they want");
+  });
+
+  test("15.12 EXISTING USER: once a plan is chosen, the plan list is not repeated", () => {
+    const state = inferConversationState({
+      latestCustomerText: "Lifetime chahiye",
+      recentMessages: [],
+      memory: {},
+      lockedToolId: clipTool.id,
+    });
+    assert.strictEqual(state.known.selectedPlan, "lifetime");
+  });
+
+  test("15.12b ACTIVATION: the plan offer reads like the agreed example", () => {
+    const offer = buildPlanOfferMessage({
+      tool: clipTool,
+      plans: getToolPlans(clipTool),
+      gotHwid: true,
+      variantSeed: 0,
+    });
+
+    assert.ok(/Device ID mil gaya/i.test(offer), "Acknowledges the Device ID it was given");
+    assert.ok(/2 plans available/i.test(offer), "States how many plans there are");
+    assert.ok(offer.includes("1 Month — Rs. 1,500"), `Monthly line. Got:\n${offer}`);
+    assert.ok(offer.includes("Lifetime — Rs. 3,500"), `Lifetime line. Got:\n${offer}`);
+    assert.ok(/kis wali key lena chahte ho/i.test(offer), "Asks which plan AFTER showing them");
+    assert.ok(!/process start kar/i.test(offer), "No machine-sounding filler");
+
+    // The ask must come after the prices, never before.
+    assert.ok(
+      offer.indexOf("1,500") < offer.indexOf("kis wali key"),
+      "Plans must be shown before asking which one they want"
+    );
+  });
+
+  test("15.12c ACTIVATION: the opening line varies between turns", () => {
+    const plans = getToolPlans(clipTool);
+    const a = buildPlanOfferMessage({ tool: clipTool, plans, gotHwid: true, variantSeed: 0 });
+    const b = buildPlanOfferMessage({ tool: clipTool, plans, gotHwid: true, variantSeed: 1 });
+    assert.notStrictEqual(a, b, "Repeat conversations must not be word-for-word identical");
+  });
+
+  test("15.13 The prompt carries the catalog price table and forbids inventing numbers", () => {
+    const block = formatPlansForPrompt(clipTool, getToolPlans(clipTool));
+    assert.ok(block.includes("1,500") && block.includes("3,500"), "Both real prices must reach the model");
+    assert.ok(/never\s+state\s+any\s+number\s+not\s+listed/i.test(block), "Must forbid inventing prices");
+    assert.ok(/never ask which plan/i.test(block), "Must forbid asking before showing");
+  });
+
+  test("15.14 With no plans, the prompt tells the model it may not quote anything", () => {
+    const block = formatPlansForPrompt(clipTool, []);
+    assert.ok(/No price is configured/i.test(block));
+    assert.ok(/must NOT state, guess or estimate any price/i.test(block));
   });
 
   for (const t of testQueue) {

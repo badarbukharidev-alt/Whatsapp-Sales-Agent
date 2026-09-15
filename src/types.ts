@@ -126,6 +126,26 @@ export interface SentImageRecord {
   at: string;
 }
 
+/**
+ * One purchasable plan for a tool (e.g. "1 Month", "Lifetime"). This is the
+ * authoritative price record: the agent may only ever quote numbers that come
+ * from here (or, for catalogs that predate this field, from the deterministic
+ * derivation in pricing-service). The LLM never invents or recalls a price.
+ */
+export interface ToolPlan {
+  id?: string;
+  /** Customer-facing label, e.g. "1 Month" / "Lifetime". */
+  name: string;
+  pricePkr?: number;
+  priceUsd?: number;
+  /** Hard floor for this specific plan; the agent may never go below it. */
+  minNegotiablePkr?: number;
+  billingCycle?: "monthly" | "yearly" | "lifetime" | "one_time" | string;
+  /** Short note shown to the agent only (e.g. "includes free updates"). */
+  note?: string;
+  isActive?: boolean;
+}
+
 export interface ToolPricing {
   min_negotiable_pkr?: number;
   min_negotiable_usd?: number;
@@ -210,6 +230,12 @@ export interface Tool {
   pricePkr?: string;
   priceUsd?: string;
   pricing?: ToolPricing;
+  /**
+   * Purchasable plans. When present this is the single source of truth for what
+   * the agent may quote. When absent, pricing-service derives the plans from
+   * the other admin-authored catalog fields so older tools keep working.
+   */
+  plans?: ToolPlan[];
   objection_responses?: ToolObjectionResponses;
   related_tools?: string[];
   priority?: number;
