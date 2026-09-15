@@ -295,13 +295,16 @@ export async function connectToWhatsApp(userId = "usr_admin_badar", usePairingCo
   }
 }
 
-export async function sendMessage(jid: string, text: string, userId?: string) {
+/** Returns true when the message actually went out, so callers (e.g. the admin's
+ *  manual send from the dashboard) can report a real failure instead of silently
+ *  pretending it was delivered. */
+export async function sendMessage(jid: string, text: string, userId?: string): Promise<boolean> {
   const session = getUserWASession(userId);
   const targetSock = session.sock || (userId ? getUserWASession("usr_admin_badar").sock : null);
 
   if (!targetSock) {
     console.warn(`[WhatsApp:${userId || "default"}] Cannot send message: socket is not connected.`);
-    return;
+    return false;
   }
   try {
     const rawJid = jid.includes("@") ? jid : `${jid}@s.whatsapp.net`;
@@ -313,8 +316,10 @@ export async function sendMessage(jid: string, text: string, userId?: string) {
       setTimeout(() => sentMessageIds.delete(sent.key.id!), 60000);
     }
     console.log(`[WhatsApp:${userId || "default"}] Message successfully sent to ${formattedJid}`);
+    return true;
   } catch (error) {
     console.error(`[WhatsApp:${userId || "default"}] Error delivering message to ${jid}:`, error);
+    return false;
   }
 }
 

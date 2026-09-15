@@ -9,6 +9,7 @@ import {
 } from "./services/customer-service.js";
 import { getUserByToken } from "./auth.js";
 import { recordAiReply, recordUserMessage } from "./usage.js";
+import { sendMessage } from "./whatsapp.js";
 
 export { VALID_CUSTOMER_STATUSES, normalizeCustomerStatus, normalizeJid };
 
@@ -155,6 +156,37 @@ export function setupMemoryRoutes(app: Express) {
     } catch (error) {
       console.error("Failed to verify order:", error);
       res.status(500).json({ error: "Failed to verify order" });
+    }
+  });
+
+  // Admin sends a message to the customer by hand from the Conversations view.
+  // Goes out over the same WhatsApp session the agent uses and is stored in the
+  // same history, so the AI's next reply has the full context of what the admin
+  // already told them.
+  app.post("/api/customers/:phoneNumber/send", async (req, res) => {
+    try {
+      const user = await getUserByToken(req.headers.authorization);
+      const { phoneNumber } = req.params;
+      const text = typeof req.body?.text === "string" ? req.body.text.trim() : "";
+
+      if (!text) {
+        return res.status(400).json({ error: "Message text is required." });
+      }
+      if (text.length > 4000) {
+        return res.status(400).json({ error: "Message is too long (max 4000 characters)." });
+      }
+
+      const cleanJid = normalizeJid(phoneNumber);
+      const delivered = await sendMessage(cleanJid, text, user?.id);
+      if (delivered === false) {
+        return res.status(503).json({ error: "WhatsApp is not connected. Reconnect and try again." });
+      }
+
+      const customer = await customerService.saveMessage(cleanJid, "agent", text, user?.id);
+      res.json({ success: true, customer });
+    } catch (error) {
+      console.error("Failed to send manual message:", error);
+      res.status(500).json({ error: "Failed to send message" });
     }
   });
 

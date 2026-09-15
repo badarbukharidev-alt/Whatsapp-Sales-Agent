@@ -60,7 +60,27 @@ export default function Conversations() {
   const [actionLoading, setActionLoading] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
+  // Manual reply composer
+  const [composerText, setComposerText] = useState("");
+  const [isSending, setIsSending] = useState(false);
+  const [composerError, setComposerError] = useState<string | null>(null);
+  // The AI memory panel used to sit on top of the chat and push every message
+  // off-screen; it is now an opt-in side panel.
+  const [showDetails, setShowDetails] = useState(false);
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+
   const chatBottomRef = useRef<HTMLDivElement | null>(null);
+
+  // The 3s poll below runs from a mount-time closure. Reading `selectedPhone`
+  // directly in it would always see the value from the FIRST render (usually
+  // null), so every refresh would "helpfully" re-select the first customer and
+  // yank the admin out of the thread they had open. A ref always holds the
+  // current selection, so the auto-select can only ever fire when genuinely
+  // nothing is selected.
+  const selectedPhoneRef = useRef<string | null>(selectedPhone);
+  useEffect(() => {
+    selectedPhoneRef.current = selectedPhone;
+  }, [selectedPhone]);
 
   const fetchData = async () => {
     try {
@@ -70,10 +90,12 @@ export default function Conversations() {
       ]);
       setCustomers(custRes.data || []);
       setLists(listsRes.data || []);
-      
-      // Default to first customer if none selected
-      if (!selectedPhone && custRes.data && custRes.data.length > 0) {
-        setSelectedPhone(custRes.data[0].phoneNumber);
+
+      // Only auto-open a thread when the admin has not chosen one themselves.
+      if (!selectedPhoneRef.current && custRes.data && custRes.data.length > 0) {
+        const firstPhone = custRes.data[0].phoneNumber;
+        selectedPhoneRef.current = firstPhone;
+        setSelectedPhone(firstPhone);
       }
     } catch (err) {
       console.error("Failed to fetch conversation data:", err);
@@ -133,8 +155,35 @@ export default function Conversations() {
   }, [customers, searchQuery, statusFilter]);
 
   const handleSelectCustomer = (phone: string) => {
+    selectedPhoneRef.current = phone;
     setSelectedPhone(phone);
     setSearchParams({ phone });
+    setComposerError(null);
+  };
+
+  /** Admin replies by hand; the message goes out over the same WhatsApp session
+   *  the agent uses and lands in the same history the AI reads next turn. */
+  const handleSendManualMessage = async () => {
+    const text = composerText.trim();
+    if (!text || !selectedCustomer || isSending) return;
+
+    setIsSending(true);
+    setComposerError(null);
+    try {
+      const res = await axios.post(`/api/customers/${selectedCustomer.phoneNumber}/send`, { text });
+      if (res.data?.customer) {
+        // Trust the server's copy so the new message appears immediately.
+        setCustomers((prev) =>
+          prev.map((c) => (c.phoneNumber === selectedCustomer.phoneNumber ? res.data.customer : c))
+        );
+      }
+      setComposerText("");
+    } catch (err: any) {
+      const message = err?.response?.data?.error || "Could not send. Check the WhatsApp connection.";
+      setComposerError(message);
+    } finally {
+      setIsSending(false);
+    }
   };
 
   const handleUpdateStatus = async (newStatus: CustomerStatus) => {
@@ -449,6 +498,20 @@ export default function Conversations() {
                 ))}
               </select>
 
+              {/* Toggle the customer/memory details so the chat stays readable */}
+              <button
+                onClick={() => setShowDetails((v) => !v)}
+                className={`p-1.5 sm:px-2.5 sm:py-1.5 rounded-lg text-[11px] sm:text-xs font-bold transition-colors flex items-center gap-1 border ${
+                  showDetails
+                    ? "bg-slate-900 text-white border-slate-900"
+                    : "bg-slate-50 hover:bg-slate-100 text-slate-600 border-slate-200"
+                }`}
+                title={showDetails ? "Hide customer details" : "Show customer details & AI memory"}
+              >
+                <Info className="w-3.5 h-3.5" />
+                <span className="hidden md:inline">Details</span>
+              </button>
+
               {/* Assign Custom Lists Button */}
               <button
                 onClick={() => setIsAssignListsOpen(true)}
@@ -480,10 +543,12 @@ export default function Conversations() {
             </div>
           </div>
 
+          {/* Chat + optional details panel */}
+          <div className="flex-1 flex min-h-0 overflow-hidden">
           {/* Chat Messages Body */}
-          <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
-            {/* Customer Intelligence / Memory Card */}
-            <div className="bg-white/95 backdrop-blur-xs p-4 rounded-xl border border-slate-200/90 shadow-sm max-w-2xl mx-auto space-y-3">
+          <div className="flex-1 min-w-0 overflow-y-auto p-4 sm:p-6 space-y-4">
+            {/* Customer Intelligence / Memory Card — opt-in, so it never buries the chat */}
+            <div className={`bg-white/95 backdrop-blur-xs p-4 rounded-xl border border-slate-200/90 shadow-sm max-w-2xl mx-auto space-y-3 ${showDetails ? "" : "hidden"}`}>
               <div className="flex items-center justify-between text-xs font-bold text-slate-800 border-b border-slate-100 pb-2">
                 <div className="flex items-center gap-2">
                   <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
@@ -629,15 +694,23 @@ export default function Conversations() {
                           <span className="font-medium text-[9px]">{formatDateTime(msg.timestamp)}</span>
                         </div>
 
-                        <p className="leading-relaxed whitespace-pre-wrap">{msg.content}</p>
+                        {msg.content && <p className="leading-relaxed whitespace-pre-wrap">{msg.content}</p>}
 
                         {msg.imageUrl && (
                           <div className="pt-1.5">
-                            <img 
-                              src={msg.imageUrl} 
-                              alt="Attached Media" 
-                              className="max-h-48 rounded-lg border border-slate-200 object-cover" 
-                            />
+                            <button
+                              type="button"
+                              onClick={() => setLightboxUrl(msg.imageUrl!)}
+                              className="block rounded-lg overflow-hidden border border-slate-200 hover:opacity-90 transition-opacity"
+                              title="Click to view full size"
+                            >
+                              <img
+                                src={msg.imageUrl}
+                                alt="Sent attachment"
+                                loading="lazy"
+                                className="max-h-56 w-auto object-cover"
+                              />
+                            </button>
                           </div>
                         )}
                       </div>
@@ -649,10 +722,103 @@ export default function Conversations() {
             )}
           </div>
 
-          {/* Bottom Chat Bar Indicator */}
-          <div className="p-3 bg-white border-t border-slate-200 text-center text-xs text-slate-500 flex items-center justify-center gap-2">
-            <CheckCheck className="w-4 h-4 text-emerald-600" />
-            <span>Autonomous Sales Agent is actively managing this WhatsApp conversation.</span>
+          {/* Details side panel (desktop) */}
+          {showDetails && (
+            <aside className="hidden xl:block w-80 shrink-0 bg-white border-l border-slate-200 overflow-y-auto p-4 space-y-3">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+                  Customer details
+                </span>
+                <button
+                  onClick={() => setShowDetails(false)}
+                  className="p-1 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100"
+                  title="Hide details"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="text-[11px] text-slate-600 space-y-2">
+                <div>
+                  <span className="font-bold text-slate-700 block">Phone</span>
+                  {selectedCustomer.phoneNumber}
+                </div>
+                {selectedCustomer.name && (
+                  <div>
+                    <span className="font-bold text-slate-700 block">Name</span>
+                    {selectedCustomer.name}
+                  </div>
+                )}
+                <div>
+                  <span className="font-bold text-slate-700 block">Status</span>
+                  {selectedCustomer.status || "New Customer"} ({selectedCustomer.statusManagedBy || "AI managed"})
+                </div>
+                {selectedCustomer.summary && (
+                  <div>
+                    <span className="font-bold text-slate-700 block">AI summary</span>
+                    <span className="italic">"{selectedCustomer.summary}"</span>
+                  </div>
+                )}
+                {selectedCustomer.interestedTools && selectedCustomer.interestedTools.length > 0 && (
+                  <div>
+                    <span className="font-bold text-slate-700 block mb-1">Interested in</span>
+                    <div className="flex flex-wrap gap-1">
+                      {selectedCustomer.interestedTools.map((t, i) => (
+                        <span key={i} className="px-2 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded text-[10px] font-bold">
+                          {t}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <p className="text-[10px] text-slate-400 pt-2 border-t border-slate-100">
+                  Full memory &amp; audit trail is shown at the top of the chat when details are on.
+                </p>
+              </div>
+            </aside>
+          )}
+          </div>
+
+          {/* Manual reply composer — the admin can step into the conversation */}
+          <div className="bg-white border-t border-slate-200 shrink-0">
+            {composerError && (
+              <div className="px-3 sm:px-4 pt-2 text-[11px] text-rose-600 font-semibold flex items-center gap-1.5">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                {composerError}
+              </div>
+            )}
+            <div className="p-2.5 sm:p-3 flex items-end gap-2">
+              <textarea
+                value={composerText}
+                onChange={(e) => setComposerText(e.target.value)}
+                onKeyDown={(e) => {
+                  // Enter sends, Shift+Enter makes a new line.
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSendManualMessage();
+                  }
+                }}
+                rows={1}
+                placeholder="Type a reply as the seller…  (Enter to send, Shift+Enter for a new line)"
+                className="flex-1 resize-none max-h-32 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-xs text-slate-800 outline-none focus:border-emerald-500 focus:bg-white transition-colors"
+              />
+              <button
+                type="button"
+                onClick={handleSendManualMessage}
+                disabled={!composerText.trim() || isSending}
+                className="h-10 px-4 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors shrink-0"
+                title="Send this message to the customer on WhatsApp"
+              >
+                <Send className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">{isSending ? "Sending…" : "Send"}</span>
+              </button>
+            </div>
+            <div className="px-3 pb-2 text-[10px] text-slate-400 flex items-center gap-1.5">
+              <CheckCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+              <span>
+                The AI agent is still handling this conversation — anything you send here is added to its memory too.
+              </span>
+            </div>
           </div>
         </div>
       ) : (
@@ -662,6 +828,28 @@ export default function Conversations() {
           <p className="text-xs text-slate-500 max-w-sm text-center mt-1">
             Choose a customer from the left column to view their live WhatsApp dialogue, memory, and product interests.
           </p>
+        </div>
+      )}
+
+      {/* Image lightbox — click any attachment to see it full size */}
+      {lightboxUrl && (
+        <div
+          className="fixed inset-0 z-[60] bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setLightboxUrl(null)}
+        >
+          <button
+            onClick={() => setLightboxUrl(null)}
+            className="absolute top-4 right-4 p-2 text-white/80 hover:text-white bg-white/10 hover:bg-white/20 rounded-xl transition-colors"
+            title="Close"
+          >
+            <X className="w-5 h-5" />
+          </button>
+          <img
+            src={lightboxUrl}
+            alt="Attachment"
+            className="max-h-[90vh] max-w-[92vw] rounded-xl shadow-2xl object-contain"
+            onClick={(e) => e.stopPropagation()}
+          />
         </div>
       )}
 

@@ -1971,6 +1971,29 @@ function setupMemoryRoutes(app) {
       res.status(500).json({ error: "Failed to verify order" });
     }
   });
+  app.post("/api/customers/:phoneNumber/send", async (req, res) => {
+    try {
+      const user = await getUserByToken(req.headers.authorization);
+      const { phoneNumber } = req.params;
+      const text = typeof req.body?.text === "string" ? req.body.text.trim() : "";
+      if (!text) {
+        return res.status(400).json({ error: "Message text is required." });
+      }
+      if (text.length > 4e3) {
+        return res.status(400).json({ error: "Message is too long (max 4000 characters)." });
+      }
+      const cleanJid = normalizeJid(phoneNumber);
+      const delivered = await sendMessage(cleanJid, text, user?.id);
+      if (delivered === false) {
+        return res.status(503).json({ error: "WhatsApp is not connected. Reconnect and try again." });
+      }
+      const customer = await customerService.saveMessage(cleanJid, "agent", text, user?.id);
+      res.json({ success: true, customer });
+    } catch (error) {
+      console.error("Failed to send manual message:", error);
+      res.status(500).json({ error: "Failed to send message" });
+    }
+  });
   app.delete("/api/customers/:phoneNumber/messages", async (req, res) => {
     try {
       const user = await getUserByToken(req.headers.authorization);
@@ -2007,6 +2030,7 @@ var init_memory = __esm({
     init_customer_service();
     init_auth();
     init_usage();
+    init_whatsapp();
     getCustomersFile = () => import_path5.default.join(process.cwd(), "data", "customers.json");
   }
 });
@@ -4312,6 +4336,13 @@ function extractQuotedPriceSummary(templateContent) {
   const cleaned = matches.map((m) => m.replace(/[^\S\r\n]+/g, " ").trim()).filter(Boolean).slice(0, 4);
   return cleaned.join(" | ").slice(0, 200);
 }
+function toPublicImageUrl(imageRef) {
+  const raw = (imageRef || "").trim();
+  if (!raw) return void 0;
+  if (/^https?:\/\//i.test(raw)) return raw;
+  const filename = raw.replace(/\\/g, "/").split("/").filter(Boolean).pop();
+  return filename ? `/tool-images/${filename}` : void 0;
+}
 async function persistImageSend(cleanJid, memory, imageId, toolId, userId) {
   try {
     const imagesSent = recordImageSent(memory.imagesSent, imageId, toolId);
@@ -4454,9 +4485,9 @@ async function handleCustomerMessageBatch(phoneNumber, batch, name, userId = "us
   const replyParts = [];
   if (response.templateMessage) replyParts.push(response.templateMessage);
   replyParts.push(...response.textMessages);
-  const replyMemoryText = replyParts.join("\n\n") + (response.imageToSend ? `
-[Sent Image: ${response.imageToSend}]` : "");
-  await customerService.saveMessage(cleanJid, "agent", replyMemoryText, userId);
+  await customerService.saveMessage(cleanJid, "agent", replyParts.join("\n\n"), userId, {
+    imageUrl: toPublicImageUrl(response.imageToSend)
+  });
   await recordAiReply();
 }
 async function generateResponse(cleanJid, latestCustomerText, name, batch, userId = "usr_admin_badar") {
@@ -6153,7 +6184,7 @@ async function sendMessage(jid, text, userId) {
   const targetSock = session.sock || (userId ? getUserWASession("usr_admin_badar").sock : null);
   if (!targetSock) {
     console.warn(`[WhatsApp:${userId || "default"}] Cannot send message: socket is not connected.`);
-    return;
+    return false;
   }
   try {
     const rawJid = jid.includes("@") ? jid : `${jid}@s.whatsapp.net`;
@@ -6165,8 +6196,10 @@ async function sendMessage(jid, text, userId) {
       setTimeout(() => sentMessageIds.delete(sent.key.id), 6e4);
     }
     console.log(`[WhatsApp:${userId || "default"}] Message successfully sent to ${formattedJid}`);
+    return true;
   } catch (error) {
     console.error(`[WhatsApp:${userId || "default"}] Error delivering message to ${jid}:`, error);
+    return false;
   }
 }
 async function resolveToolImagePath(imagePath) {

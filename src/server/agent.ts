@@ -90,6 +90,20 @@ function extractQuotedPriceSummary(templateContent: string): string {
 }
 
 /**
+ * Turns a stored image reference (an on-disk path like
+ * "data/tool-images/x.png", or an already-public "/tool-images/x.png") into the
+ * URL the admin dashboard can actually render. `/tool-images` is served
+ * statically by the server, so only the filename matters.
+ */
+export function toPublicImageUrl(imageRef: string | null | undefined): string | undefined {
+  const raw = (imageRef || "").trim();
+  if (!raw) return undefined;
+  if (/^https?:\/\//i.test(raw)) return raw;
+  const filename = raw.replace(/\\/g, "/").split("/").filter(Boolean).pop();
+  return filename ? `/tool-images/${filename}` : undefined;
+}
+
+/**
  * Records that an image was actually delivered, so cooldown and per-conversation
  * caps hold across turns. Kept tolerant: a failure here must never stop a reply.
  */
@@ -342,12 +356,15 @@ async function handleCustomerMessageBatch(
   const delaySec = settings.responseDelaySeconds || 1.4;
   await sendResponse(cleanJid, response.textMessages, response.imageToSend, delaySec, userId, response.templateMessage);
 
-  // 5. Save agent reply immediately to permanent memory (template included for history)
+  // 5. Save agent reply immediately to permanent memory (template included for history).
+  // A delivered image is stored as a real imageUrl so the admin chat view renders
+  // the actual picture instead of a literal "[Sent Image: data/...]" line.
   const replyParts: string[] = [];
   if (response.templateMessage) replyParts.push(response.templateMessage);
   replyParts.push(...response.textMessages);
-  const replyMemoryText = replyParts.join("\n\n") + (response.imageToSend ? `\n[Sent Image: ${response.imageToSend}]` : "");
-  await customerService.saveMessage(cleanJid, "agent", replyMemoryText, userId);
+  await customerService.saveMessage(cleanJid, "agent", replyParts.join("\n\n"), userId, {
+    imageUrl: toPublicImageUrl(response.imageToSend),
+  });
   await recordAiReply();
 }
 
