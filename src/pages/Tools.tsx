@@ -100,6 +100,13 @@ export default function Tools() {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [imageTitle, setImageTitle] = useState("");
   const [imageDescription, setImageDescription] = useState("");
+  // Optional per-image sales intelligence
+  const [imageCategory, setImageCategory] = useState("");
+  const [imageSignals, setImageSignals] = useState("");
+  const [imagePriority, setImagePriority] = useState("");
+  const [imageCooldown, setImageCooldown] = useState("");
+  const [imageMaxPerChat, setImageMaxPerChat] = useState("");
+  const [imageDoesNotProve, setImageDoesNotProve] = useState("");
   const [isUploadingImage, setIsUploadingImage] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -340,6 +347,14 @@ export default function Tools() {
         title: imageTitle.trim(),
         description: imageDescription.trim(),
         toolId: editingTool.id,
+        salesMeta: {
+          category: imageCategory,
+          customer_signals: imageSignals,
+          priority: imagePriority,
+          cooldown_minutes: imageCooldown,
+          max_per_conversation: imageMaxPerChat,
+          what_it_does_not_prove: imageDoesNotProve,
+        },
       });
 
       if (res.data.success && res.data.image) {
@@ -348,6 +363,12 @@ export default function Tools() {
         setPreviewUrl(null);
         setImageTitle("");
         setImageDescription("");
+        setImageCategory("");
+        setImageSignals("");
+        setImagePriority("");
+        setImageCooldown("");
+        setImageMaxPerChat("");
+        setImageDoesNotProve("");
         if (fileInputRef.current) fileInputRef.current.value = "";
         showToast("Image uploaded and linked to tool.");
       }
@@ -1555,11 +1576,106 @@ export default function Tools() {
                           <textarea
                             value={imageDescription}
                             onChange={(e) => setImageDescription(e.target.value)}
-                            placeholder="e.g. This image shows the VoiceDelta voice cloning interface and sample voices."
+                            placeholder="e.g. WhatsApp screenshots of real buyers confirming the tool works."
                             rows={2}
                             className="w-full bg-white border border-slate-200 rounded-lg p-2 text-xs text-slate-800 outline-none focus:border-indigo-500 resize-none"
                           />
+                          <span className="text-[10px] text-slate-400 mt-0.5 block">
+                            Describe what it shows AND when it helps. The agent matches this semantically — it can send this
+                            proactively without the customer asking for a screenshot.
+                          </span>
                         </div>
+
+                        {/* Optional sales intelligence — all fields can be left blank */}
+                        <details className="pt-1">
+                          <summary className="text-[11px] font-bold text-indigo-600 cursor-pointer select-none">
+                            Sales settings (optional) — when to use it, and what it must not claim
+                          </summary>
+                          <div className="space-y-2 pt-2">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              <div>
+                                <label className="block text-[10px] font-bold text-slate-500 mb-1">Category</label>
+                                <select
+                                  value={imageCategory}
+                                  onChange={(e) => setImageCategory(e.target.value)}
+                                  className="w-full bg-white border border-slate-200 rounded-lg p-2 text-xs text-slate-800 outline-none focus:border-indigo-500"
+                                >
+                                  <option value="">— none —</option>
+                                  <option value="social_proof">Social proof / customer feedback</option>
+                                  <option value="analytics">Analytics / results example</option>
+                                  <option value="tutorial">Tutorial / how-to step</option>
+                                  <option value="feature">Feature or interface</option>
+                                  <option value="pricing">Pricing</option>
+                                </select>
+                              </div>
+                              <div>
+                                <label className="block text-[10px] font-bold text-slate-500 mb-1">
+                                  Customer signals (comma-separated)
+                                </label>
+                                <input
+                                  type="text"
+                                  value={imageSignals}
+                                  onChange={(e) => setImageSignals(e.target.value)}
+                                  placeholder="skeptical, scam, proof, views"
+                                  className="w-full bg-white border border-slate-200 rounded-lg p-2 text-xs text-slate-800 outline-none focus:border-indigo-500"
+                                />
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                              <div>
+                                <label className="block text-[10px] font-bold text-slate-500 mb-1">Priority</label>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  max={10}
+                                  value={imagePriority}
+                                  onChange={(e) => setImagePriority(e.target.value)}
+                                  placeholder="1"
+                                  className="w-full bg-white border border-slate-200 rounded-lg p-2 text-xs text-slate-800 outline-none focus:border-indigo-500 font-mono"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-[10px] font-bold text-slate-500 mb-1">Cooldown (min)</label>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  value={imageCooldown}
+                                  onChange={(e) => setImageCooldown(e.target.value)}
+                                  placeholder="30"
+                                  className="w-full bg-white border border-slate-200 rounded-lg p-2 text-xs text-slate-800 outline-none focus:border-indigo-500 font-mono"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-[10px] font-bold text-slate-500 mb-1">Max per chat</label>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  value={imageMaxPerChat}
+                                  onChange={(e) => setImageMaxPerChat(e.target.value)}
+                                  placeholder="1"
+                                  className="w-full bg-white border border-slate-200 rounded-lg p-2 text-xs text-slate-800 outline-none focus:border-indigo-500 font-mono"
+                                />
+                              </div>
+                            </div>
+
+                            <div>
+                              <label className="block text-[10px] font-bold text-slate-500 mb-1">
+                                What it must NOT be claimed to prove
+                              </label>
+                              <input
+                                type="text"
+                                value={imageDoesNotProve}
+                                onChange={(e) => setImageDoesNotProve(e.target.value)}
+                                placeholder="e.g. that this tool caused these views"
+                                className="w-full bg-white border border-slate-200 rounded-lg p-2 text-xs text-slate-800 outline-none focus:border-indigo-500"
+                              />
+                              <span className="text-[10px] text-slate-400 mt-0.5 block">
+                                Stops the agent turning an example into a guarantee.
+                              </span>
+                            </div>
+                          </div>
+                        </details>
                       </div>
                     </div>
 

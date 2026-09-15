@@ -29,6 +29,12 @@ export interface PromptSynthesisParams {
    * instead of promising to send one later.
    */
   autoImageAttached?: string;
+  /** Inferred sales-journey stage, internal only. */
+  journeyStage?: string;
+  /** The single most useful next move for this stage. */
+  nextAction?: string;
+  /** Things the customer already knows — must not be repeated. */
+  doNotRepeat?: string[];
 }
 
 export interface SynthesizedPrompt {
@@ -61,6 +67,9 @@ export function synthesizeSalesPrompt(params: PromptSynthesisParams): Synthesize
     templateJustSent,
     wantsAlternative,
     autoImageAttached,
+    journeyStage,
+    nextAction,
+    doNotRepeat,
   } = params;
 
   const memory = customer.memorySummary;
@@ -119,7 +128,22 @@ CRITICAL RULES (ABSOLUTELY NO ROBOTIC BOT BEHAVIOR & ZERO HALLUCINATIONS):
    - If "REAL LIVE AVAILABILITY" is shown above for this product, that count is genuine (the seller maintains it by hand) and you SHOULD use it to create real urgency: lead with it naturally ("bhai sirf X ID reh gaye hain is batch mein"), tie it to a clear next step (confirm now / HWID abhi bhej dein), and repeat it if the customer hesitates.
    - If "REAL LIVE AVAILABILITY" is NOT shown, this product has no live scarcity data: do NOT say "limited slots", "sirf X reh gaye hain", "jaldi karein warna khatam", or any stock/countdown claim — that would be fabricated urgency, banned by rule 13. Sell on value, not invented pressure.
 16. SEND REAL PRODUCT IMAGES:
-   - If "Uploaded Product Images" are listed above, you may attach one by outputting [SEND_IMAGE: <id>] using the exact id shown — do this whenever the customer asks for a screenshot, proof, or what the interface/dashboard looks like. Never claim to have sent an image without this tag, and never reference an id that isn't listed.`;
+   - If "Uploaded Product Images" are listed above, you may attach one by outputting [SEND_IMAGE: <id>] using the exact id shown — do this whenever the customer asks for a screenshot, proof, or what the interface/dashboard looks like. Never claim to have sent an image without this tag, and never reference an id that isn't listed.
+17. READ THE JOURNEY, DON'T RESTART IT:
+   - Use the [SALES JOURNEY] block. Someone who already installed the app and wants a licence must NEVER be sent the product advertisement, download link or tutorial again — acknowledge what they have and move to the next real step ("Perfect bhai, app install ho gaya. Device ID mil gaya — 1 Month chahiye ya Lifetime?").
+   - Never ask for something they already gave you, and never re-explain something they already know.
+18. ADVANCE THE CONVERSATION, DON'T JUST ANSWER:
+   - Answer the literal question, then add the one thing that actually helps them decide, then ask ONE natural question that moves forward. Never end on a dead full stop when a next step exists.
+   - Ask about their goal/channel/content when it is genuinely relevant, and tailor which feature you mention to that goal — never dump the whole feature list.
+19. OBJECTIONS — DIAGNOSE, DON'T DISCOUNT:
+   - On "mehnga hai": acknowledge it, find out what they're comparing against, reframe against what they're trying to earn/achieve, and mention the free trial. Only AFTER that, and only if the configured negotiation rules allow it, offer a real configured discount.
+   - Vary your wording every time. Never reuse the same objection sentence you already used in this conversation.
+20. NO GUARANTEES — FACT vs EXAMPLE vs CLAIM:
+   - A feature is what the software DOES. A screenshot is an EXAMPLE of one result. Neither is a promise.
+   - NEVER say or imply: guaranteed views, guaranteed viral, guaranteed monetization, guaranteed income, "100% no copyright claim", or that any outcome is certain. Say what the tool helps with and what still depends on their content.
+   - Never present the software as making copyright infringement legal or as immunity from enforcement. Encourage using content they have the rights to use.
+21. LEAD SOURCE:
+   - Only use acquisition/onboarding framing if the conversation actually shows they are new. If the system does not know where they came from, do NOT guess or claim to know.`;
 
   // 2. CUSTOMER MEMORY & CONTEXT BLOCK
   const memoryLines: string[] = [];
@@ -317,15 +341,38 @@ CRITICAL RULES (ABSOLUTELY NO ROBOTIC BOT BEHAVIOR & ZERO HALLUCINATIONS):
     controlLines.push(`The customer asked for an alternative/comparison — you MAY briefly compare with another catalog product here, then return focus to what fits their need.`);
   }
   if (autoImageAttached) {
+    // When image-intelligence supplies a full briefing it is already a complete
+    // directive; a bare label still gets the basic instruction.
     controlLines.push(
-      `AUTO-IMAGE ATTACHED: The product image "${autoImageAttached}" is ALREADY being attached to this very reply automatically. Answer the customer's question in words AND refer to the image naturally ("ye dekho", "screenshot mein dekh lein"). Do NOT promise to send it later, do NOT say you cannot send images, and do NOT output a [SEND_IMAGE:] tag.`
+      autoImageAttached.startsWith("AUTO-IMAGE ATTACHED:")
+        ? autoImageAttached
+        : `AUTO-IMAGE ATTACHED: The product image "${autoImageAttached}" is ALREADY being attached to this very reply automatically. Answer the customer's question in words AND refer to the image naturally ("ye dekho", "screenshot mein dekh lein"). Do NOT promise to send it later, do NOT say you cannot send images, and do NOT output a [SEND_IMAGE:] tag.`
     );
   }
   const controlDirectives = controlLines.length > 0 ? `[SALES CONTROL DIRECTIVES]\n${controlLines.join("\n")}` : "";
 
+  // SALES JOURNEY BLOCK — the internal read on where this customer is and what
+  // they already know. Never shown to the customer, only used to choose the
+  // most natural next reply (and to stop re-sending things they already have).
+  const journeyLines: string[] = [];
+  if (journeyStage || nextAction || (doNotRepeat && doNotRepeat.length > 0)) {
+    journeyLines.push(`[SALES JOURNEY — INTERNAL, NEVER MENTION THIS TO THE CUSTOMER]`);
+    if (journeyStage) journeyLines.push(`Customer's current stage: ${journeyStage}`);
+    if (nextAction) journeyLines.push(`Most useful next move: ${nextAction}`);
+    if (doNotRepeat && doNotRepeat.length > 0) {
+      journeyLines.push(`ALREADY KNOWN — DO NOT REPEAT:`);
+      doNotRepeat.forEach((d) => journeyLines.push(`  - ${d}`));
+    }
+    journeyLines.push(
+      `Never name or describe this stage to the customer. Just reply the way a human seller who already knew all of the above naturally would.`
+    );
+  }
+  const journeyBlock = journeyLines.length > 0 ? journeyLines.join("\n") : "";
+
   // ASSEMBLE PROMPT
   const promptParts = [
     memoryLines.join("\n"),
+    journeyBlock,
     toolLines.join("\n\n"),
     paymentLines.length > 0 ? paymentLines.join("\n") : "",
     negotiationGuard,

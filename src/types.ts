@@ -43,7 +43,71 @@ export interface SystemDiagnostics {
   platform: string;
 }
 
-export interface ToolImage {
+/**
+ * Sales-journey stages the agent infers from the conversation. Internal only —
+ * never shown to the customer. Used to decide what to say next, what NOT to
+ * repeat, and whether visual proof would help.
+ */
+export type SalesStage =
+  | "new_lead"
+  | "researching"
+  | "downloaded"
+  | "installed"
+  | "awaiting_license"
+  | "hwid_provided"
+  | "price_inquiry"
+  | "comparing_plans"
+  | "trust_check"
+  | "objection_price"
+  | "objection_other"
+  | "feature_inquiry"
+  | "niche_guidance"
+  | "results_inquiry"
+  | "proof_request"
+  | "ready_to_buy"
+  | "plan_monthly"
+  | "plan_lifetime"
+  | "awaiting_payment_details"
+  | "paid"
+  | "activation"
+  | "support"
+  | "returning_customer";
+
+/**
+ * Optional sales metadata an admin can attach to an uploaded image so the agent
+ * can decide — semantically, not by keyword — whether showing it would
+ * strengthen the current conversation. Every field is optional: images that
+ * only have the legacy `description` still work, the description is simply
+ * interpreted as the sales context itself.
+ */
+export interface ToolImageSalesMeta {
+  /** What this image is FOR, in plain words, e.g. "social proof from real buyers". */
+  purpose?: string;
+  /** Loose grouping, e.g. "social_proof" | "analytics" | "tutorial" | "feature" | "pricing". */
+  category?: string;
+  /** Free-text situations where showing it helps. */
+  sales_context?: string[];
+  /** Conditions/topics that should trigger it. */
+  use_when?: string[];
+  /** Conditions where it must NOT be sent. */
+  avoid_when?: string[];
+  /** Customer signals it answers, e.g. "skeptical", "asking for proof". */
+  customer_signals?: string[];
+  /** Stages where it is appropriate. */
+  sales_stage?: SalesStage[];
+  /** Higher wins when several images match. Default 1. */
+  priority?: number;
+  /** Minimum minutes before this same image may be sent again. Default 30. */
+  cooldown_minutes?: number;
+  /** Hard cap on sends per conversation. Default 1. */
+  max_per_conversation?: number;
+  /** What the image legitimately demonstrates. */
+  what_it_proves?: string;
+  /** Claims the agent must NOT derive from it (guardrail against overselling). */
+  what_it_does_not_prove?: string;
+}
+
+export interface ToolImage extends ToolImageSalesMeta {
   id: string;
   filename: string;
   filepath: string;
@@ -52,6 +116,14 @@ export interface ToolImage {
   description: string;
   toolId?: string;
   createdAt?: string;
+}
+
+/** One record of an image actually delivered to a customer, for cooldown/repeat protection. */
+export interface SentImageRecord {
+  imageId: string;
+  toolId?: string;
+  /** ISO timestamp of the send. */
+  at: string;
 }
 
 export interface ToolPricing {
@@ -184,6 +256,30 @@ export interface CustomerMemorySummary {
   currentProductName?: string;
   /** Tool ids whose onboarding template message has already been sent in this conversation. */
   templatesSent?: string[];
+
+  // --- Sales-journey awareness (inferred, internal only) -------------------
+  /** Where this customer currently is in the buying journey. */
+  journeyStage?: SalesStage;
+  /** Customer confirmed they downloaded the app — never re-send download info blindly. */
+  appDownloaded?: boolean;
+  /** Customer confirmed they installed the app. */
+  appInstalled?: boolean;
+  /** Customer used the free trial. */
+  trialUsed?: boolean;
+  /** Device ID / Hardware ID the customer supplied — never ask for it twice. */
+  hwid?: string;
+  /** Plan the customer settled on. */
+  selectedPlan?: "monthly" | "lifetime" | string;
+  /** True once real payment account details have been delivered. */
+  paymentDetailsSent?: boolean;
+  /** What the customer is trying to achieve (e.g. "faceless shorts channel"). */
+  customerGoal?: string;
+  /** Niche / content type they mentioned. */
+  nicheType?: string;
+  /** Where the lead came from, when it can actually be determined. */
+  leadSource?: "meta_ad" | "instagram" | "whatsapp" | "organic" | "direct" | "existing_user" | string;
+  /** Every image already delivered, for cooldown + anti-repeat enforcement. */
+  imagesSent?: SentImageRecord[];
 }
 
 export interface CustomerList {

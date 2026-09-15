@@ -4,7 +4,7 @@ import { toolService } from "./services/tool-service.js";
 import { synthesizeSalesPrompt } from "./services/prompt-service.js";
 import { getSettings } from "./settings.js";
 import { sendMessage, sendToolImage } from "./whatsapp.js";
-import { Customer, CustomerStatus, Tool } from "../types.js";
+import { Customer, CustomerStatus, SentImageRecord, Tool } from "../types.js";
 import { checkAiReplyQuota, recordAiReply, recordUserMessage } from "./usage.js";
 import { recordStatedFacts, clampPriceFloors, extractMentionedFacts } from "./tool-matcher.js";
 import {
@@ -16,8 +16,9 @@ import {
   stripLeadingContinuationFragment,
   stripRepeatedOffer,
   isMetaLeak,
-  pickRelevantImage,
 } from "./services/reply-guard.js";
+import { inferConversationState, memoryPatchFromState } from "./services/conversation-state.js";
+import { selectImageForTurn, recordImageSent, describeImageForPrompt } from "./services/image-intelligence.js";
 
 // ---------------------------------------------------------------------------
 // Controlled-selling helpers: buying intent, explicit requests, role separation
@@ -86,6 +87,26 @@ function extractQuotedPriceSummary(templateContent: string): string {
     .filter(Boolean)
     .slice(0, 4);
   return cleaned.join(" | ").slice(0, 200);
+}
+
+/**
+ * Records that an image was actually delivered, so cooldown and per-conversation
+ * caps hold across turns. Kept tolerant: a failure here must never stop a reply.
+ */
+async function persistImageSend(
+  cleanJid: string,
+  memory: { imagesSent?: SentImageRecord[] },
+  imageId: string,
+  toolId: string | undefined,
+  userId: string
+): Promise<void> {
+  try {
+    const imagesSent = recordImageSent(memory.imagesSent, imageId, toolId);
+    memory.imagesSent = imagesSent;
+    await customerService.updateCustomerMemory(cleanJid, { imagesSent }, userId);
+  } catch (err) {
+    console.error(`[Agent:${userId}] Could not record image send:`, err);
+  }
 }
 
 /**
@@ -419,11 +440,28 @@ async function generateResponse(
     };
   }
 
-  // 4. SAVED PRODUCT TEMPLATE MESSAGE — sent FIRST, exactly once, on first detection.
+  // 3b. DECISION LAYER — work out where this customer actually is before a
+  // single word is generated: what they already have, what they're asking for,
+  // and therefore what must NOT be repeated to them.
+  const convoState = inferConversationState({
+    latestCustomerText,
+    recentMessages,
+    memory,
+    lockedToolId: lockedTool?.id,
+  });
+  console.log(
+    `[Agent:${userId}] State for ${cleanJid}: stage="${convoState.stage}" ` +
+      `installed=${convoState.known.appInstalled} hwid=${convoState.known.hwid || "none"} ` +
+      `plan=${convoState.known.selectedPlan || "none"} | template: ${convoState.templateDecisionReason}`
+  );
+
+  // 4. SAVED PRODUCT TEMPLATE MESSAGE — sent FIRST, exactly once, and ONLY to a
+  // genuine new lead. A customer who already installed the app, handed over a
+  // Device ID, or is asking for a licence must never be advertised at again.
   let templateMessage: string | null = null;
   const templatesSent = [...(memory.templatesSent || [])];
   const quotedPrices: Record<string, string> = { ...(memory.quotedPrices || {}) };
-  if (lockedTool && directlyDetectedTool && directlyDetectedTool.id === lockedTool.id) {
+  if (lockedTool && directlyDetectedTool && directlyDetectedTool.id === lockedTool.id && convoState.shouldSendTemplate) {
     const tm = lockedTool.templateMessage;
     const alreadySent = templatesSent.includes(lockedTool.id);
     const sendOnce = tm?.sendOnce !== false; // default: send once
@@ -437,7 +475,9 @@ async function generateResponse(
     }
   }
 
-  // 5. Persist product-lock + template state to permanent memory.
+  // 5. Persist product-lock, template state and everything we learned about the
+  // customer this turn, so later turns never re-ask or re-explain it.
+  const journeyPatch = memoryPatchFromState(convoState);
   if (lockedTool) {
     await customerService.updateCustomerMemory(
       cleanJid,
@@ -447,9 +487,12 @@ async function generateResponse(
         lastToolDiscussed: lockedTool.name,
         templatesSent,
         quotedPrices,
+        ...journeyPatch,
       },
       userId
     );
+  } else if (Object.keys(journeyPatch).length > 0) {
+    await customerService.updateCustomerMemory(cleanJid, journeyPatch, userId);
   }
 
   // 6. Buying-intent & explicit-request detection.
@@ -475,8 +518,14 @@ async function generateResponse(
       for (const p of activePayments) {
         lines.push(`\n📱 *${p.provider}*\nAccount: ${p.accountNumber}\nTitle: ${p.accountTitle}${p.instructions ? `\n(${p.instructions})` : ""}`);
       }
-      lines.push("\nPayment ke baad screenshot + apna email / Hardware ID yahan share karein. Main activate kar deta hoon. ✅");
+      // Only ask for the Device ID if we don't already have it.
+      lines.push(
+        convoState.known.hwid
+          ? "\nPayment ke baad bas screenshot bhej dein — Device ID mere paas already hai, main activate kar deta hoon. ✅"
+          : "\nPayment ke baad screenshot + apna email / Hardware ID yahan share karein. Main activate kar deta hoon. ✅"
+      );
       const paymentReply = lines.join("\n");
+      await customerService.updateCustomerMemory(cleanJid, { paymentDetailsSent: true }, userId);
       await evaluateAndApplyCustomerStatus(cleanJid, customer, latestCustomerText, null, userId, buyingIntent);
       return {
         textMessages: [paymentReply],
@@ -525,32 +574,34 @@ async function generateResponse(
   }
   // ── END DETERMINISTIC LINK DELIVERY ─────────────────────────────────────
 
-  // ── DETERMINISTIC IMAGE DELIVERY ────────────────────────────────────────
-  // If the customer asks for a screenshot/proof/interface photo and this
-  // product actually has an uploaded image, send the REAL uploaded file —
-  // never wait on the AI to notice, decide, and correctly emit a
-  // [SEND_IMAGE: ...] tag (unreliable, especially on the public fallback
-  // model). This is the same "don't trust the model with something we can
-  // just do in code" pattern as the link/payment delivery above, and it's
-  // what makes uploaded tool images actually get sent at all.
+  // ── VISUAL PROOF INTELLIGENCE ───────────────────────────────────────────
+  // Images are sales evidence, not keyword triggers. The selector weighs what
+  // the customer said, what situation they're in (skeptical / asking about
+  // results / hunting for the Device ID), and what each image says it is FOR —
+  // then enforces cooldowns and per-conversation caps so proof never turns
+  // into spam. It returns nothing at all when a picture wouldn't genuinely help.
   const toolImages = (lockedTool?.images || []).filter((img) => img?.filepath || img?.url);
   const wantsScreenshot = SCREENSHOT_REQUEST_REGEX.test(latestCustomerText);
-  // Match the question against each image's own admin-written title/description,
-  // so an image uploaded as "where to find the Hardware ID" is sent when someone
-  // asks "HWID kahan se milega?" — without them ever saying "screenshot".
-  const relevantImage = pickRelevantImage(latestCustomerText, toolImages)?.image || null;
+  const imageSelection = selectImageForTurn({
+    images: toolImages,
+    state: convoState,
+    customerText: latestCustomerText,
+    sentHistory: memory.imagesSent,
+    explicitRequest: wantsScreenshot,
+  });
 
-  if (lockedTool && (wantsScreenshot || relevantImage)) {
+  if (lockedTool && toolImages.length > 0) {
     console.log(
-      `[Agent:${userId}] Image check for ${cleanJid}: tool="${lockedTool.name}" uploadedImages=${toolImages.length} ` +
-        `explicitRequest=${wantsScreenshot} semanticMatch=${relevantImage ? `"${relevantImage.id}"` : "none"}`
+      `[Agent:${userId}] Visual proof for ${cleanJid}: uploaded=${toolImages.length} explicitRequest=${wantsScreenshot} ` +
+        `chosen=${imageSelection ? `"${imageSelection.image.id}" (score ${imageSelection.score}: ${imageSelection.reason})` : "none"}`
     );
   }
 
   // (a) Plain "show me" request — nothing to reason about, send the picture.
-  if (wantsScreenshot && lockedTool && toolImages.length > 0) {
-    const chosen = relevantImage || toolImages[0];
+  if (wantsScreenshot && lockedTool && imageSelection) {
+    const chosen = imageSelection.image;
     const label = (chosen.title || "").trim();
+    await persistImageSend(cleanJid, memory, chosen.id, lockedTool.id, userId);
     await evaluateAndApplyCustomerStatus(cleanJid, customer, latestCustomerText, null, userId, buyingIntent);
     return {
       textMessages: [label ? `Han bhai, ye dekho 👇\n${label}` : `Han bhai, ye dekho ${lockedTool.name} ka interface 👇`],
@@ -559,13 +610,14 @@ async function generateResponse(
     };
   }
 
-  // (b) The question itself is what an image documents. Here the customer wants
-  // a real ANSWER, not just a picture — so let the AI explain in words and
-  // attach the matching image to that same reply.
-  const autoAttachImage = !wantsScreenshot && relevantImage ? relevantImage.filepath || relevantImage.url : null;
-  const autoAttachImageLabel = relevantImage
-    ? (relevantImage.title || relevantImage.description || "").trim().slice(0, 120)
-    : "";
+  // (b) The image would strengthen an answer the customer actually wants in
+  // words — trust doubts, results questions, "where is my Device ID". Let the
+  // AI explain, and attach the proof to that same reply.
+  const autoAttachSelection = !wantsScreenshot ? imageSelection : null;
+  const autoAttachImage = autoAttachSelection
+    ? autoAttachSelection.image.filepath || autoAttachSelection.image.url
+    : null;
+  const autoAttachImageBriefing = autoAttachSelection ? describeImageForPrompt(autoAttachSelection) : "";
   // ── END DETERMINISTIC IMAGE DELIVERY ────────────────────────────────────
 
   // 8. Synthesize lean, controlled sales prompt (ONLY the locked product's data).
@@ -585,7 +637,10 @@ async function generateResponse(
     explicitLinkRequest,
     templateJustSent: Boolean(templateMessage),
     wantsAlternative,
-    autoImageAttached: autoAttachImage ? autoAttachImageLabel || "product image" : undefined,
+    autoImageAttached: autoAttachImage ? autoAttachImageBriefing : undefined,
+    journeyStage: convoState.stage,
+    nextAction: convoState.nextAction,
+    doNotRepeat: convoState.doNotRepeat,
   });
 
   console.log(`[Agent:${userId}] Querying AI for ${cleanJid} (Locked: ${lockedTool?.name || (match.isUnknownProduct ? `Unknown:${match.queryProduct}` : 'CatalogOverview')}${buyingIntent ? ' | HighIntent' : ''}${templateMessage ? ' | TemplateFirst' : ''})...`);
@@ -614,10 +669,16 @@ async function generateResponse(
     text = text.replace(imageTagMatch[0], "").trim();
   }
 
-  // The question matched an uploaded image: attach it even though the model
+  // The situation warranted visual proof: attach it even though the model
   // didn't ask for it (it usually won't, especially on the fallback model).
   if (!imageToSend && autoAttachImage) {
     imageToSend = autoAttachImage;
+  }
+  // Record whatever actually goes out, so cooldown/anti-repeat works next turn.
+  if (imageToSend) {
+    const sentImage =
+      autoAttachSelection?.image || lockedTool?.images?.find((img) => (img.filepath || img.url) === imageToSend);
+    if (sentImage) await persistImageSend(cleanJid, memory, sentImage.id, lockedTool?.id, userId);
   }
 
   // 7. Evaluate & apply customer status transition (buying intent nudges Interested)

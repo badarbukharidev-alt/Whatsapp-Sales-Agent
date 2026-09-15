@@ -25,6 +25,48 @@ export async function getTools(userId?: string): Promise<Tool[]> {
   return toolService.getAccountTools(userId);
 }
 
+/** String-array fields on the image sales metadata, normalised from CSV or array input. */
+const IMAGE_META_LIST_FIELDS = ["sales_context", "use_when", "avoid_when", "customer_signals", "sales_stage"] as const;
+/** Free-text fields on the image sales metadata. */
+const IMAGE_META_TEXT_FIELDS = ["purpose", "category", "what_it_proves", "what_it_does_not_prove"] as const;
+
+/**
+ * Accepts the optional per-image sales metadata from the admin UI, keeping only
+ * known fields and coercing them into the shapes the selector expects. Anything
+ * unknown is dropped so a client can never inject arbitrary keys onto a tool.
+ */
+function sanitizeImageSalesMeta(raw: any): Partial<ToolImage> {
+  if (!raw || typeof raw !== "object") return {};
+  const meta: Record<string, any> = {};
+
+  for (const field of IMAGE_META_TEXT_FIELDS) {
+    const value = raw[field];
+    if (typeof value === "string" && value.trim()) meta[field] = value.trim();
+  }
+
+  for (const field of IMAGE_META_LIST_FIELDS) {
+    const value = raw[field];
+    const list = Array.isArray(value)
+      ? value
+      : typeof value === "string"
+        ? value.split(/[\n,]/)
+        : [];
+    const cleaned = list.map((v: any) => String(v).trim().toLowerCase()).filter(Boolean);
+    if (cleaned.length > 0) meta[field] = cleaned;
+  }
+
+  const priority = Number(raw.priority);
+  if (Number.isFinite(priority) && priority > 0) meta.priority = Math.min(10, Math.round(priority));
+
+  const cooldown = Number(raw.cooldown_minutes);
+  if (Number.isFinite(cooldown) && cooldown >= 0) meta.cooldown_minutes = Math.round(cooldown);
+
+  const maxPer = Number(raw.max_per_conversation);
+  if (Number.isFinite(maxPer) && maxPer > 0) meta.max_per_conversation = Math.round(maxPer);
+
+  return meta as Partial<ToolImage>;
+}
+
 export async function saveTools(tools: Tool[]) {
   for (const t of tools) {
     await toolService.saveTool(t, t.userId || "usr_admin_badar");
@@ -53,7 +95,7 @@ export function setupToolsRoutes(app: Express) {
   app.post("/api/tools/upload-image", async (req, res) => {
     try {
       const user = await getUserByToken(req.headers.authorization);
-      const { filename, data, title, description, toolId } = req.body;
+      const { filename, data, title, description, toolId, salesMeta } = req.body;
       if (!filename || !data || !description) {
         return res.status(400).json({ error: "Filename, image data, and description are required." });
       }
@@ -74,6 +116,10 @@ export function setupToolsRoutes(app: Express) {
       await fs.writeFile(targetPath, buffer);
 
       const imageObject: ToolImage = {
+        // Optional sales metadata (purpose, use_when, cooldown, what it does
+        // NOT prove, ...). Spread first so the core identity fields below can
+        // never be overwritten by whatever the client sent.
+        ...sanitizeImageSalesMeta(salesMeta),
         id: `img_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
         filename: uniqueFilename,
         // Always forward slashes: tools.json is committed to git, so a path

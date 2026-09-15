@@ -1294,6 +1294,14 @@ ${catalogMatch[1].trim().slice(0, 260)}` : "Store Catalog: 1. ClipShield (YouTub
   if (ctrlMatch && ctrlMatch[1]) {
     salesDirectives = `DIRECTIVE: ${ctrlMatch[1].trim().replace(/\n+/g, " | ")}`;
   }
+  let journeyBlock = "";
+  const journeyMatch = prompt.match(
+    /\[SALES JOURNEY[^\]]*\]\s*\n([\s\S]*?)(?=\n\[|\n===|\nCUSTOMER'S LATEST MESSAGE|\nCUSTOMER'S NEW MESSAGE|$)/i
+  );
+  if (journeyMatch && journeyMatch[1].trim()) {
+    journeyBlock = `[SALES JOURNEY \u2014 INTERNAL, never mention to the customer]
+${journeyMatch[1].trim()}`;
+  }
   let quotedRatesLine = "";
   const quotedMatch = prompt.match(/Previously Quoted Rates[^:]*:\s*([^\n]+)/i);
   if (quotedMatch && quotedMatch[1]) {
@@ -1325,6 +1333,7 @@ ${imagesMatch[1].trim()}`;
   }
   const bodyParts = [
     roleRules,
+    journeyBlock,
     toolSummary,
     availabilityLine,
     imagesBlock,
@@ -3388,7 +3397,10 @@ function synthesizeSalesPrompt(params) {
     explicitLinkRequest,
     templateJustSent,
     wantsAlternative,
-    autoImageAttached
+    autoImageAttached,
+    journeyStage,
+    nextAction,
+    doNotRepeat
   } = params;
   const memory = customer.memorySummary;
   const isReturningCustomer = Boolean(
@@ -3442,7 +3454,22 @@ CRITICAL RULES (ABSOLUTELY NO ROBOTIC BOT BEHAVIOR & ZERO HALLUCINATIONS):
    - If "REAL LIVE AVAILABILITY" is shown above for this product, that count is genuine (the seller maintains it by hand) and you SHOULD use it to create real urgency: lead with it naturally ("bhai sirf X ID reh gaye hain is batch mein"), tie it to a clear next step (confirm now / HWID abhi bhej dein), and repeat it if the customer hesitates.
    - If "REAL LIVE AVAILABILITY" is NOT shown, this product has no live scarcity data: do NOT say "limited slots", "sirf X reh gaye hain", "jaldi karein warna khatam", or any stock/countdown claim \u2014 that would be fabricated urgency, banned by rule 13. Sell on value, not invented pressure.
 16. SEND REAL PRODUCT IMAGES:
-   - If "Uploaded Product Images" are listed above, you may attach one by outputting [SEND_IMAGE: <id>] using the exact id shown \u2014 do this whenever the customer asks for a screenshot, proof, or what the interface/dashboard looks like. Never claim to have sent an image without this tag, and never reference an id that isn't listed.`;
+   - If "Uploaded Product Images" are listed above, you may attach one by outputting [SEND_IMAGE: <id>] using the exact id shown \u2014 do this whenever the customer asks for a screenshot, proof, or what the interface/dashboard looks like. Never claim to have sent an image without this tag, and never reference an id that isn't listed.
+17. READ THE JOURNEY, DON'T RESTART IT:
+   - Use the [SALES JOURNEY] block. Someone who already installed the app and wants a licence must NEVER be sent the product advertisement, download link or tutorial again \u2014 acknowledge what they have and move to the next real step ("Perfect bhai, app install ho gaya. Device ID mil gaya \u2014 1 Month chahiye ya Lifetime?").
+   - Never ask for something they already gave you, and never re-explain something they already know.
+18. ADVANCE THE CONVERSATION, DON'T JUST ANSWER:
+   - Answer the literal question, then add the one thing that actually helps them decide, then ask ONE natural question that moves forward. Never end on a dead full stop when a next step exists.
+   - Ask about their goal/channel/content when it is genuinely relevant, and tailor which feature you mention to that goal \u2014 never dump the whole feature list.
+19. OBJECTIONS \u2014 DIAGNOSE, DON'T DISCOUNT:
+   - On "mehnga hai": acknowledge it, find out what they're comparing against, reframe against what they're trying to earn/achieve, and mention the free trial. Only AFTER that, and only if the configured negotiation rules allow it, offer a real configured discount.
+   - Vary your wording every time. Never reuse the same objection sentence you already used in this conversation.
+20. NO GUARANTEES \u2014 FACT vs EXAMPLE vs CLAIM:
+   - A feature is what the software DOES. A screenshot is an EXAMPLE of one result. Neither is a promise.
+   - NEVER say or imply: guaranteed views, guaranteed viral, guaranteed monetization, guaranteed income, "100% no copyright claim", or that any outcome is certain. Say what the tool helps with and what still depends on their content.
+   - Never present the software as making copyright infringement legal or as immunity from enforcement. Encourage using content they have the rights to use.
+21. LEAD SOURCE:
+   - Only use acquisition/onboarding framing if the conversation actually shows they are new. If the system does not know where they came from, do NOT guess or claim to know.`;
   const memoryLines = [];
   memoryLines.push(`[CUSTOMER CONTEXT & PROFILE]`);
   if (customer.name || memory?.customerName) {
@@ -3596,13 +3623,28 @@ ${t.how_to_use}`);
   }
   if (autoImageAttached) {
     controlLines.push(
-      `AUTO-IMAGE ATTACHED: The product image "${autoImageAttached}" is ALREADY being attached to this very reply automatically. Answer the customer's question in words AND refer to the image naturally ("ye dekho", "screenshot mein dekh lein"). Do NOT promise to send it later, do NOT say you cannot send images, and do NOT output a [SEND_IMAGE:] tag.`
+      autoImageAttached.startsWith("AUTO-IMAGE ATTACHED:") ? autoImageAttached : `AUTO-IMAGE ATTACHED: The product image "${autoImageAttached}" is ALREADY being attached to this very reply automatically. Answer the customer's question in words AND refer to the image naturally ("ye dekho", "screenshot mein dekh lein"). Do NOT promise to send it later, do NOT say you cannot send images, and do NOT output a [SEND_IMAGE:] tag.`
     );
   }
   const controlDirectives = controlLines.length > 0 ? `[SALES CONTROL DIRECTIVES]
 ${controlLines.join("\n")}` : "";
+  const journeyLines = [];
+  if (journeyStage || nextAction || doNotRepeat && doNotRepeat.length > 0) {
+    journeyLines.push(`[SALES JOURNEY \u2014 INTERNAL, NEVER MENTION THIS TO THE CUSTOMER]`);
+    if (journeyStage) journeyLines.push(`Customer's current stage: ${journeyStage}`);
+    if (nextAction) journeyLines.push(`Most useful next move: ${nextAction}`);
+    if (doNotRepeat && doNotRepeat.length > 0) {
+      journeyLines.push(`ALREADY KNOWN \u2014 DO NOT REPEAT:`);
+      doNotRepeat.forEach((d) => journeyLines.push(`  - ${d}`));
+    }
+    journeyLines.push(
+      `Never name or describe this stage to the customer. Just reply the way a human seller who already knew all of the above naturally would.`
+    );
+  }
+  const journeyBlock = journeyLines.length > 0 ? journeyLines.join("\n") : "";
   const promptParts = [
     memoryLines.join("\n"),
+    journeyBlock,
     toolLines.join("\n\n"),
     paymentLines.length > 0 ? paymentLines.join("\n") : "",
     negotiationGuard,
@@ -3627,36 +3669,6 @@ var init_prompt_service = __esm({
 function isMetaLeak(text) {
   if (!text) return false;
   return META_LEAK_REGEX.test(text);
-}
-function tokenizeForImageMatch(text) {
-  const tokens = /* @__PURE__ */ new Set();
-  for (const raw of (text || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").split(/\s+/)) {
-    if (raw.length < 2) continue;
-    if (IMAGE_MATCH_STOPWORDS.has(raw)) continue;
-    tokens.add(raw);
-  }
-  if (tokens.has("hwid")) {
-    tokens.add("hardware");
-    tokens.add("id");
-  }
-  if (tokens.has("hardware") && tokens.has("id")) tokens.add("hwid");
-  return tokens;
-}
-function pickRelevantImage(customerText, images) {
-  if (!images || images.length === 0 || !customerText) return null;
-  const customerTokens = tokenizeForImageMatch(customerText);
-  if (customerTokens.size === 0) return null;
-  let best = null;
-  for (const img of images) {
-    const meta = [img.title, img.description, img.filename].filter(Boolean).join(" ");
-    if (!meta.trim()) continue;
-    let score = 0;
-    for (const token of tokenizeForImageMatch(meta)) {
-      if (customerTokens.has(token)) score++;
-    }
-    if (!best || score > best.score) best = { image: img, score };
-  }
-  return best && best.score >= IMAGE_MATCH_MIN_SCORE ? best : null;
 }
 function isBareAffirmation(text) {
   if (!text) return false;
@@ -3771,12 +3783,390 @@ function stripRepeatedOffer(text, lastAgentText) {
   const result = kept.join("\n").trim();
   return result.length > 0 ? result : text;
 }
-var URL_REGEX, META_LEAK_REGEX, IMAGE_MATCH_STOPWORDS, IMAGE_MATCH_MIN_SCORE, PLACEHOLDER_HOST_REGEX, AFFIRMATION_WORD_REGEX, AFFIRMATION_FILLER_REGEX, OFFER_VERB_SOURCE, OFFER_VERB_REGEX, CONTINUATION_STARTER_REGEX;
+var URL_REGEX, META_LEAK_REGEX, PLACEHOLDER_HOST_REGEX, AFFIRMATION_WORD_REGEX, AFFIRMATION_FILLER_REGEX, OFFER_VERB_SOURCE, OFFER_VERB_REGEX, CONTINUATION_STARTER_REGEX;
 var init_reply_guard = __esm({
   "src/server/services/reply-guard.ts"() {
     URL_REGEX = /(?:https?:\/\/|www\.)[^\s<>()\[\]{}"'`]+/gi;
     META_LEAK_REGEX = /(?:\bgot it\b[^.!?]{0,40}(?:ready for|next message)|what did (?:he|she|they) say|what'?s the message (?:from|the customer)|message (?:from )?(?:the )?customer that i (?:need|have) to respond|your message (?:got|seems) cut off|could you resend|please resend|as an ai\b|i(?:'m| am) an ai\b|i don'?t have (?:access|context)|no reset,? no repeated name|i(?:'ll| will) reply (?:directly|now)\s*$)/i;
-    IMAGE_MATCH_STOPWORDS = /* @__PURE__ */ new Set([
+    PLACEHOLDER_HOST_REGEX = /(?:example\.(?:com|org|net)|yourdomain|your-?site|placeholder|dummy|test\.com|xyz\.com|abc\.com|link\.com|sample\.com|domain\.com)/i;
+    AFFIRMATION_WORD_REGEX = /^(?:g|gg|gee|ji|jee|jii|ha|haan|han|hn|hnji|hanji|jihan|ok|oky|okay|okk|k|acha|achaa|achha|theek|thek|thik|sahi|yes|ya|yeah|yep|yup|sure|done|zaroor|bilkul|bhejo|bhej|bhejdo|bhejde|bhejein|bhejen|send|dedo|dedein|krdo|kardo|kar|do|karo|please|plz|pls|bhai|bro|sir)$/i;
+    AFFIRMATION_FILLER_REGEX = /^(?:hai|hain|hy|he|na|nah|yr|yaar|jani|jaan|zra|zara|abhi|to|tou)$/i;
+    OFFER_VERB_SOURCE = "bhej(?:un|oon|on|u|ou)?|bhejta|bhejdun|bhej\\s*d(?:oon|un|u|ta)|(?:send|share|de|kar|bhej|bata)\\s*(?:kar\\s*)?(?:d(?:oon|un|u|e|ee)|deta|deti)\\s*(?:h(?:oon|u|un|o|ai))?|batau|bata\\s*(?:doon|dun)|chahiye|chahye|karun|karoon";
+    OFFER_VERB_REGEX = new RegExp(`(?:${OFFER_VERB_SOURCE})`, "i");
+    CONTINUATION_STARTER_REGEX = /^(?:ko|ka|ki|ke|se|me|mein|par|pe|aur|ya|taake|takay|takke|jis|jise|jin|jo|hai|hain|tha|thi|the|kar|karta|karti|karte|karne|karna|kiya|deta|deti|dete|diya|raha|rahi|rahe|wala|wali|wale|bhi|to|ho|hota|hoti|hote|nahi|na|kyunke|kyunki|lekin|magar|phir|is|us|iska|uska|jab|agar)\b/i;
+  }
+});
+
+// src/server/services/conversation-state.ts
+function detectSignals(text) {
+  const t = text || "";
+  const hwidMatch = t.match(HWID_VALUE_REGEX);
+  const providedHwid = hwidMatch ? (hwidMatch[1] || hwidMatch[2] || "").trim() || null : null;
+  return {
+    saysDownloaded: DOWNLOADED_REGEX.test(t),
+    saysInstalled: INSTALLED_REGEX.test(t),
+    mentionsHwid: HWID_MENTION_REGEX.test(t),
+    // Only treat a token as a device id when the message is actually about one.
+    providedHwid: providedHwid && HWID_MENTION_REGEX.test(t) ? providedHwid : providedHwid && /^[A-Z]{2,5}-/.test(providedHwid) ? providedHwid : null,
+    wantsLicense: LICENSE_REQUEST_REGEX.test(t),
+    asksPrice: PRICE_INQUIRY_REGEX.test(t),
+    objectsToPrice: PRICE_OBJECTION_REGEX.test(t),
+    questionsLegitimacy: TRUST_OBJECTION_REGEX.test(t),
+    wantsProof: PROOF_REQUEST_REGEX.test(t),
+    asksAboutResults: RESULTS_INQUIRY_REGEX.test(t),
+    asksAboutNiche: NICHE_INQUIRY_REGEX.test(t),
+    asksAboutFeatures: FEATURE_INQUIRY_REGEX.test(t),
+    comparesPlans: PLAN_COMPARISON_REGEX.test(t),
+    choseMonthly: CHOSE_MONTHLY_REGEX.test(t),
+    choseLifetime: CHOSE_LIFETIME_REGEX.test(t),
+    claimsPaid: PAID_REGEX.test(t),
+    needsSupport: SUPPORT_REGEX.test(t),
+    asksWhatItIs: WHAT_IS_IT_REGEX.test(t),
+    wantsSoftware: WANTS_SOFTWARE_REGEX.test(t)
+  };
+}
+function detectHistoricalFacts(history) {
+  let downloaded = false;
+  let installed = false;
+  let hwid = null;
+  let paid = false;
+  for (const msg of history) {
+    if (msg.role !== "user") continue;
+    const s = detectSignals(msg.content || "");
+    if (s.saysDownloaded) downloaded = true;
+    if (s.saysInstalled) installed = true;
+    if (s.claimsPaid) paid = true;
+    if (s.providedHwid) hwid = s.providedHwid;
+  }
+  return { downloaded, installed, hwid, paid };
+}
+function resolveStage(signals, known, historicalPaid) {
+  if (signals.claimsPaid || historicalPaid) return "paid";
+  if (signals.needsSupport && (known.appInstalled || known.hwid)) return "support";
+  if (signals.providedHwid) return "hwid_provided";
+  if (signals.wantsLicense && (known.appInstalled || known.appDownloaded || known.hwid)) return "awaiting_license";
+  if (signals.mentionsHwid) return "activation";
+  if (signals.saysInstalled) return "installed";
+  if (signals.saysDownloaded) return "downloaded";
+  if (signals.claimsPaid) return "paid";
+  if (signals.choseLifetime) return "plan_lifetime";
+  if (signals.choseMonthly) return "plan_monthly";
+  if (signals.comparesPlans) return "comparing_plans";
+  if (signals.wantsLicense) return "awaiting_license";
+  if (signals.objectsToPrice) return "objection_price";
+  if (signals.questionsLegitimacy) return "trust_check";
+  if (signals.wantsProof) return "proof_request";
+  if (signals.asksAboutResults) return "results_inquiry";
+  if (signals.asksAboutNiche) return "niche_guidance";
+  if (signals.asksPrice) return "price_inquiry";
+  if (signals.asksAboutFeatures) return "feature_inquiry";
+  if (known.appInstalled || known.hwid) return "returning_customer";
+  if (signals.asksWhatItIs || signals.wantsSoftware) return "new_lead";
+  if (known.isReturningConversation) return "researching";
+  return "new_lead";
+}
+function decideTemplate(stage, signals, known) {
+  if (known.templateAlreadySent) return { shouldSend: false, reason: "template already sent in this conversation" };
+  if (known.appInstalled || signals.saysInstalled) return { shouldSend: false, reason: "customer already installed the app" };
+  if (known.appDownloaded || signals.saysDownloaded) return { shouldSend: false, reason: "customer already downloaded the app" };
+  if (known.hwid || signals.providedHwid || signals.mentionsHwid)
+    return { shouldSend: false, reason: "customer is in the device-id/activation flow" };
+  if (signals.wantsLicense) return { shouldSend: false, reason: "customer is asking for a licence, not for information" };
+  if (signals.claimsPaid) return { shouldSend: false, reason: "customer has already paid" };
+  if (known.paymentDetailsSent) return { shouldSend: false, reason: "payment details already shared" };
+  if (known.selectedPlan) return { shouldSend: false, reason: "customer already chose a plan" };
+  if (signals.needsSupport) return { shouldSend: false, reason: "support request, not a new lead" };
+  if (!TEMPLATE_ALLOWED_STAGES.includes(stage))
+    return { shouldSend: false, reason: `stage "${stage}" is past the introduction` };
+  return { shouldSend: true, reason: `genuine new lead at stage "${stage}"` };
+}
+function buildDoNotRepeat(known, signals) {
+  const items = [];
+  if (known.appDownloaded || known.appInstalled) {
+    items.push("They already have the app \u2014 do NOT send download links or install instructions again unless they ask.");
+  }
+  if (known.appInstalled) {
+    items.push("They already installed it \u2014 do NOT explain how to install.");
+  }
+  if (known.hwid) {
+    items.push(`Their Device ID (${known.hwid}) is already received \u2014 NEVER ask for it again.`);
+  }
+  if (known.priceDiscussed) {
+    items.push("The price has already been quoted \u2014 do NOT re-explain pricing unless they ask again or are negotiating.");
+  }
+  if (known.templateAlreadySent) {
+    items.push("The product intro/advertisement was already sent \u2014 do NOT repeat it.");
+  }
+  if (known.linkAlreadySent) {
+    items.push("The download/setup link was already sent \u2014 do NOT paste it again unless asked.");
+  }
+  if (known.selectedPlan) {
+    items.push(`They already chose the ${known.selectedPlan} plan \u2014 do NOT re-pitch the other plan.`);
+  }
+  if (known.paymentDetailsSent) {
+    items.push("Payment account details were already sent \u2014 do NOT resend them unless asked.");
+  }
+  if (signals.claimsPaid) {
+    items.push("They say they paid \u2014 do NOT ask them to pay again, and never confirm a payment yourself.");
+  }
+  return items;
+}
+function inferConversationState(params) {
+  const { latestCustomerText, recentMessages, memory, lockedToolId } = params;
+  const signals = detectSignals(latestCustomerText);
+  const history = recentMessages || [];
+  const historical = detectHistoricalFacts(history);
+  const agentTurns = history.filter((m) => m.role === "agent");
+  const linkAlreadySent = agentTurns.some((m) => /https?:\/\//i.test(m.content || ""));
+  const priceDiscussed = Boolean(memory?.quotedPrices && Object.keys(memory.quotedPrices).length > 0) || agentTurns.some((m) => /(?:rs\.?\s*\d|pkr\s*\d|\d+\s*(?:rs|pkr))/i.test(m.content || ""));
+  const known = {
+    appDownloaded: Boolean(memory?.appDownloaded) || historical.downloaded || signals.saysDownloaded,
+    appInstalled: Boolean(memory?.appInstalled) || historical.installed || signals.saysInstalled,
+    hwid: memory?.hwid || historical.hwid || signals.providedHwid || null,
+    selectedPlan: memory?.selectedPlan || (signals.choseLifetime ? "lifetime" : signals.choseMonthly ? "monthly" : null),
+    priceDiscussed,
+    paymentDetailsSent: Boolean(memory?.paymentDetailsSent),
+    templateAlreadySent: Boolean(lockedToolId && (memory?.templatesSent || []).includes(lockedToolId)),
+    linkAlreadySent,
+    isReturningConversation: history.length > 2 || Boolean(memory?.totalTurnsCount && memory.totalTurnsCount > 1)
+  };
+  const stage = resolveStage(signals, known, historical.paid);
+  const template = decideTemplate(stage, signals, known);
+  return {
+    stage,
+    signals,
+    known,
+    doNotRepeat: buildDoNotRepeat(known, signals),
+    nextAction: NEXT_ACTION_BY_STAGE[stage],
+    shouldSendTemplate: template.shouldSend,
+    templateDecisionReason: template.reason
+  };
+}
+function memoryPatchFromState(state) {
+  const patch = { journeyStage: state.stage };
+  if (state.known.appDownloaded) patch.appDownloaded = true;
+  if (state.known.appInstalled) patch.appInstalled = true;
+  if (state.known.hwid) patch.hwid = state.known.hwid;
+  if (state.known.selectedPlan) patch.selectedPlan = state.known.selectedPlan;
+  return patch;
+}
+var DOWNLOADED_REGEX, INSTALLED_REGEX, HWID_MENTION_REGEX, HWID_VALUE_REGEX, LICENSE_REQUEST_REGEX, PRICE_INQUIRY_REGEX, PRICE_OBJECTION_REGEX, TRUST_OBJECTION_REGEX, PROOF_REQUEST_REGEX, RESULTS_INQUIRY_REGEX, NICHE_INQUIRY_REGEX, FEATURE_INQUIRY_REGEX, PLAN_COMPARISON_REGEX, CHOSE_MONTHLY_REGEX, CHOSE_LIFETIME_REGEX, PAID_REGEX, SUPPORT_REGEX, WHAT_IS_IT_REGEX, WANTS_SOFTWARE_REGEX, NEXT_ACTION_BY_STAGE, TEMPLATE_ALLOWED_STAGES;
+var init_conversation_state = __esm({
+  "src/server/services/conversation-state.ts"() {
+    DOWNLOADED_REGEX = /(?:download\s*(?:kar|kr|ho|hogya|ho\s*gaya|kiya|kr\s*li|kar\s*li|kr\s*lia|kar\s*liya|done)|downloaded|\bdownload\s*complete\b|file\s*mil\s*gay)/i;
+    INSTALLED_REGEX = /(?:install\s*(?:kar|kr|ho|hogya|ho\s*gaya|kiya|kr\s*li|kar\s*li|kr\s*lia|kar\s*liya|done|kr\s*chuka|kar\s*chuka)|installed|\bsetup\s*(?:ho\s*gaya|hogya|complete|done|kar\s*li)|app\s*(?:chal|open|khul)\s*(?:rah|gay|gy)|software\s*(?:chal|open|khul))/i;
+    HWID_MENTION_REGEX = /(?:\bhwid\b|hardware\s*id|device\s*id|machine\s*id|\bhw\s*id\b)/i;
+    HWID_VALUE_REGEX = /(?:(?:hwid|hardware\s*id|device\s*id|machine\s*id)\s*(?:is|hai|=|:|-)?\s*)([A-Za-z0-9][A-Za-z0-9\-_]{5,63})|\b([A-Z]{2,5}-[A-Z0-9]{4,}(?:-[A-Z0-9]{4,})*)\b/;
+    LICENSE_REQUEST_REGEX = /(?:\blicen[cs]e\b|licence|\bkey\b|\bkeys\b|activat|\bactive\s*kar|chalu\s*kar|unlock)/i;
+    PRICE_INQUIRY_REGEX = /(?:\bprice\b|\brate\b|\bkitna\b|\bkitne\b|\bkitni\b|how\s*much|\bcost\b|charges|\bfees\b|\bfee\b)/i;
+    PRICE_OBJECTION_REGEX = /(?:mehnga|menga|mehanga|expensive|zyada\s*(?:hai|he|h)|bohat\s*zyada|buhat\s*zyada|too\s*much|budget\s*(?:nahi|ni|nhi|kam)|kam\s*kar|kam\s*karo|discount|sasta|km\s*kro|rate\s*kam)/i;
+    TRUST_OBJECTION_REGEX = /(?:scam|fraud|fake|dhoka|dhoka\s*to|genuine|asli|real\s*hai|trust|bharosa|bharosay|legit|sach\s*much|paisay\s*le\s*kar|reliable|safe\s*hai)/i;
+    PROOF_REQUEST_REGEX = /(?:\bproof\b|\bstats\b|statistics|analytics|\bresults?\b|screenshot|\bsubut\b|saboot|feedback|review|testimonial|kisi\s*ne\s*liya|kitne\s*log)/i;
+    RESULTS_INQUIRY_REGEX = /(?:views?\s*(?:aye|ayen|ayenge|aayen|ata|aate|milen|milenge|ate)|\bviral\b|\bgrowth\b|\breach\b|monetiz|earning|paisa\s*ban|kamai|subscriber)/i;
+    NICHE_INQUIRY_REGEX = /(?:\bniche\b|\bnitch\b|kis\s*(?:type|tarah)\s*k[ae]\s*(?:video|content|channel)|kon\s*si\s*(?:niche|category)|konsi\s*(?:niche|category)|what\s*(?:niche|content)|content\s*(?:kya|konsa|kaunsa))/i;
+    FEATURE_INQUIRY_REGEX = /(?:feature|kya\s*kya\s*kar|kaam\s*kaise|kaise\s*kaam|how\s*does\s*it\s*work|kya\s*karta|functions?|capab)/i;
+    PLAN_COMPARISON_REGEX = /(?:monthly\s*(?:ya|or|vs)\s*lifetime|lifetime\s*(?:ya|or|vs)\s*monthly|\bfarq\b|difference\s*(?:kya|between)|konsa\s*(?:better|behtar|acha)|which\s*(?:one|plan)\s*(?:is\s*)?(?:better|good))/i;
+    CHOSE_MONTHLY_REGEX = /(?:\bmonthly\b|\b1\s*month\b|one\s*month|ek\s*mah|mahin[ae]\s*wala|month\s*wala)/i;
+    CHOSE_LIFETIME_REGEX = /(?:lifetime|life\s*time|permanent|hamesha\s*k[ae]\s*li?[ye])/i;
+    PAID_REGEX = /(?:payment\s*(?:kar\s*d|kr\s*d|ho\s*gay|hogy|done|send|bhej)|paid|paisay?\s*(?:bhej|send|transfer)\s*(?:di|diy|dia|diye)|transfer\s*(?:kar\s*d|kr\s*d|ho\s*gay)|slip|receipt|screenshot\s*(?:bhej|send))/i;
+    SUPPORT_REGEX = /(?:kaam\s*nahi|kam\s*nahi|not\s*working|error|problem|issue|masla|chal\s*nahi|open\s*nahi|expire|expired|reinstall|dobara|phir\s*se\s*install)/i;
+    WHAT_IS_IT_REGEX = /(?:kya\s*h[aei]\b|kia\s*h[aey]\b|what\s*is\b|batao\s*(?:is\s*)?(?:k[ae]\s*bar[ae]|about)|introduce|tafseel|detail)/i;
+    WANTS_SOFTWARE_REGEX = /(?:\blink\b|download|\bapp\b|software|tool\s*(?:chahiye|do|de|bhej)|kahan\s*se\s*(?:milega|le)|send\s*me|bhej\s*d)/i;
+    NEXT_ACTION_BY_STAGE = {
+      new_lead: "Introduce the product briefly in terms of the problem it solves, then ask one question about what they want to build.",
+      researching: "Answer what they asked, then move them one concrete step forward.",
+      downloaded: "Acknowledge they have it, and guide them to install/open it and test the free trial.",
+      installed: "Acknowledge the install \u2014 do NOT re-explain download steps. Guide them to the Device ID/HWID step and ask which plan they want.",
+      awaiting_license: "They want a licence. Skip all marketing. Confirm the plan (monthly or lifetime) and move to payment.",
+      hwid_provided: "Their Device ID is received \u2014 confirm that, never ask for it again, and ask which plan they want so you can proceed.",
+      price_inquiry: "Give the price directly and plainly, then ask one question that moves toward a decision.",
+      comparing_plans: "Compare the plans honestly in one or two lines and give a recommendation for their use case.",
+      trust_check: "Address the trust concern first and concretely (free trial, how activation works). Social proof helps here.",
+      objection_price: "Acknowledge the concern, understand what they're comparing against, reframe value against their goal, mention the trial. Only offer a configured discount after that.",
+      objection_other: "Diagnose the real objection and address it before selling anything further.",
+      feature_inquiry: "Explain only the features relevant to their stated goal, not the whole list.",
+      niche_guidance: "Give genuinely useful niche advice, ask what kind of channel they want, then connect the workflow to the product.",
+      results_inquiry: "Never guarantee views or income. Explain what the tool actually helps with, then ask about their content plan.",
+      proof_request: "Show the strongest relevant proof, explain what it does and does not demonstrate, then continue.",
+      ready_to_buy: "Stop selling. Confirm the plan and move straight to payment details.",
+      plan_monthly: "They chose monthly \u2014 confirm the price and send payment details.",
+      plan_lifetime: "They chose lifetime \u2014 confirm the price and send payment details.",
+      awaiting_payment_details: "Send the configured payment accounts and what to share after paying.",
+      paid: "Never confirm payment yourself. Acknowledge, tell them it's being verified, and collect the Device ID if missing.",
+      activation: "Give the exact steps to find the Device ID, then activate. No marketing.",
+      support: "Solve the problem directly. This is an existing customer, not a lead \u2014 no pitching.",
+      returning_customer: "Treat them as an existing user. Answer directly, skip all onboarding material."
+    };
+    TEMPLATE_ALLOWED_STAGES = ["new_lead", "researching"];
+  }
+});
+
+// src/server/services/image-intelligence.ts
+function tokenize(text) {
+  const tokens = /* @__PURE__ */ new Set();
+  for (const raw of (text || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").split(/\s+/)) {
+    if (raw.length < 3) continue;
+    if (STOPWORDS.has(raw)) continue;
+    tokens.add(raw);
+  }
+  if (tokens.has("hwid")) {
+    tokens.add("hardware");
+    tokens.add("device");
+  }
+  if (tokens.has("hardware") || tokens.has("device")) tokens.add("hwid");
+  return tokens;
+}
+function overlapScore(a, b) {
+  let score = 0;
+  for (const t of a) if (b.has(t)) score++;
+  return score;
+}
+function activeSignalLabels(state) {
+  const s = state.signals;
+  const labels = [state.stage];
+  if (s.questionsLegitimacy) labels.push("skeptical", "trust", "scam", "legitimacy", "doubt", "genuine");
+  if (s.wantsProof) labels.push("proof", "evidence", "social_proof", "testimonial", "feedback", "stats");
+  if (s.asksAboutResults) labels.push("results", "views", "growth", "analytics", "reach", "performance");
+  if (s.objectsToPrice) labels.push("price_objection", "expensive", "value", "hesitant");
+  if (s.asksAboutNiche) labels.push("niche", "content", "channel", "strategy");
+  if (s.asksAboutFeatures) labels.push("feature", "capability", "how_it_works");
+  if (s.mentionsHwid || s.providedHwid) labels.push("hwid", "hardware", "device", "activation", "license");
+  if (s.asksPrice || s.comparesPlans) labels.push("pricing", "plans");
+  if (s.needsSupport) labels.push("support", "troubleshooting");
+  if (s.saysInstalled || s.saysDownloaded) labels.push("installed", "setup", "onboarding");
+  return labels;
+}
+function imageMetaText(img) {
+  return [
+    img.title,
+    img.description,
+    img.purpose,
+    img.category,
+    img.what_it_proves,
+    ...img.sales_context || [],
+    ...img.use_when || [],
+    ...img.customer_signals || [],
+    img.filename
+  ].filter(Boolean).join(" ");
+}
+function minutesSince(iso, now) {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return Number.POSITIVE_INFINITY;
+  return (now - t) / 6e4;
+}
+function selectImageForTurn(input) {
+  const { state, customerText, explicitRequest = false } = input;
+  const images = (input.images || []).filter((img) => img && (img.filepath || img.url));
+  if (images.length === 0) return null;
+  const now = input.now ?? Date.now();
+  const history = input.sentHistory || [];
+  if (!explicitRequest && CLOSING_STAGES.includes(state.stage)) return null;
+  const customerTokens = tokenize(customerText);
+  const signalLabels = activeSignalLabels(state);
+  const signalTokens = tokenize(signalLabels.join(" "));
+  const rejections = [];
+  let best = null;
+  for (const img of images) {
+    const sends = history.filter((h) => h.imageId === img.id);
+    const maxPer = img.max_per_conversation ?? DEFAULT_MAX_PER_CONVERSATION;
+    if (sends.length >= maxPer) {
+      rejections.push({ imageId: img.id, reason: `already sent ${sends.length}x (max ${maxPer})` });
+      continue;
+    }
+    const cooldown = img.cooldown_minutes ?? DEFAULT_COOLDOWN_MINUTES;
+    const lastSend = sends[sends.length - 1];
+    if (lastSend && minutesSince(lastSend.at, now) < cooldown) {
+      rejections.push({ imageId: img.id, reason: `cooldown (${cooldown}m) not elapsed` });
+      continue;
+    }
+    const avoid = (img.avoid_when || []).map((a) => a.toLowerCase());
+    if (avoid.some((a) => signalLabels.some((l) => l.toLowerCase().includes(a) || a.includes(l.toLowerCase())))) {
+      rejections.push({ imageId: img.id, reason: "matched an avoid_when rule" });
+      continue;
+    }
+    const metaTokens = tokenize(imageMetaText(img));
+    let score = 0;
+    const why = [];
+    const directHit = overlapScore(customerTokens, metaTokens);
+    if (directHit > 0) {
+      score += directHit * 2;
+      why.push(`matches their wording (${directHit})`);
+    }
+    const signalHit = overlapScore(signalTokens, metaTokens);
+    if (signalHit > 0) {
+      score += signalHit * 2;
+      why.push(`fits the current situation (${signalHit})`);
+    }
+    if ((img.sales_stage || []).includes(state.stage)) {
+      score += 4;
+      why.push(`declared for stage "${state.stage}"`);
+    }
+    const declaredSignals = (img.customer_signals || []).map((s) => s.toLowerCase());
+    if (declaredSignals.some((d) => signalLabels.some((l) => l.toLowerCase().includes(d) || d.includes(l.toLowerCase())))) {
+      score += 4;
+      why.push("matches a declared customer signal");
+    }
+    const useWhen = (img.use_when || []).map((u) => u.toLowerCase());
+    if (useWhen.length > 0) {
+      const situation = `${customerText} ${signalLabels.join(" ")}`.toLowerCase();
+      if (useWhen.some((u) => u && situation.includes(u))) {
+        score += 3;
+        why.push("matched a use_when rule");
+      }
+    }
+    if (explicitRequest) {
+      score += 1;
+      why.push("customer asked to be shown something");
+    }
+    score += (img.priority ?? DEFAULT_PRIORITY) - 1;
+    if (score <= 0) continue;
+    if (!best || score > best.score) {
+      best = {
+        image: img,
+        score,
+        reason: why.join("; ") || "general relevance",
+        doNotClaim: img.what_it_does_not_prove
+      };
+    }
+  }
+  if (!best) return null;
+  const threshold = explicitRequest ? EXPLICIT_SCORE_THRESHOLD : PROACTIVE_SCORE_THRESHOLD;
+  if (best.score < threshold) return null;
+  return best;
+}
+function recordImageSent(history, imageId, toolId, now = Date.now()) {
+  const next = [...history || [], { imageId, toolId, at: new Date(now).toISOString() }];
+  return next.slice(-40);
+}
+function describeImageForPrompt(selection) {
+  const img = selection.image;
+  const label = (img.title || img.description || "product image").trim().slice(0, 120);
+  const lines = [`AUTO-IMAGE ATTACHED: "${label}" is ALREADY being attached to this reply automatically.`];
+  if (img.what_it_proves) lines.push(`It demonstrates: ${img.what_it_proves}`);
+  if (selection.doNotClaim) lines.push(`It does NOT prove: ${selection.doNotClaim} \u2014 never claim that.`);
+  lines.push(
+    "Introduce it naturally in one short line, say what to look at in it, and then CONTINUE the conversation with a question or next step. Do NOT promise to send it later, do NOT say you cannot send images, and do NOT output a [SEND_IMAGE:] tag."
+  );
+  return lines.join(" ");
+}
+var DEFAULT_COOLDOWN_MINUTES, DEFAULT_MAX_PER_CONVERSATION, DEFAULT_PRIORITY, PROACTIVE_SCORE_THRESHOLD, EXPLICIT_SCORE_THRESHOLD, CLOSING_STAGES, STOPWORDS;
+var init_image_intelligence = __esm({
+  "src/server/services/image-intelligence.ts"() {
+    DEFAULT_COOLDOWN_MINUTES = 30;
+    DEFAULT_MAX_PER_CONVERSATION = 1;
+    DEFAULT_PRIORITY = 1;
+    PROACTIVE_SCORE_THRESHOLD = 3;
+    EXPLICIT_SCORE_THRESHOLD = 1;
+    CLOSING_STAGES = [
+      "awaiting_license",
+      "hwid_provided",
+      "plan_monthly",
+      "plan_lifetime",
+      "awaiting_payment_details",
+      "paid",
+      "ready_to_buy"
+    ];
+    STOPWORDS = /* @__PURE__ */ new Set([
       "the",
       "and",
       "for",
@@ -3790,6 +4180,7 @@ var init_reply_guard = __esm({
       "where",
       "what",
       "when",
+      "why",
       "see",
       "get",
       "got",
@@ -3805,9 +4196,13 @@ var init_reply_guard = __esm({
       "all",
       "into",
       "out",
-      "tool",
-      "app",
-      "software",
+      "use",
+      "used",
+      "using",
+      "when",
+      "show",
+      "shows",
+      "showing",
       "image",
       "images",
       "screenshot",
@@ -3816,12 +4211,25 @@ var init_reply_guard = __esm({
       "photo",
       "pic",
       "picture",
+      "proof",
+      "example",
+      "examples",
+      "real",
+      "tool",
+      "app",
+      "software",
+      "customer",
+      "customers",
+      "user",
+      "users",
+      "product",
       "kaise",
       "kese",
       "kahan",
       "kaha",
       "kidhar",
       "kya",
+      "kia",
       "kyu",
       "hai",
       "hain",
@@ -3876,15 +4284,10 @@ var init_reply_guard = __esm({
       "sakta",
       "sakte",
       "hoga",
-      "hota"
+      "hota",
+      "koi",
+      "kuch"
     ]);
-    IMAGE_MATCH_MIN_SCORE = 2;
-    PLACEHOLDER_HOST_REGEX = /(?:example\.(?:com|org|net)|yourdomain|your-?site|placeholder|dummy|test\.com|xyz\.com|abc\.com|link\.com|sample\.com|domain\.com)/i;
-    AFFIRMATION_WORD_REGEX = /^(?:g|gg|gee|ji|jee|jii|ha|haan|han|hn|hnji|hanji|jihan|ok|oky|okay|okk|k|acha|achaa|achha|theek|thek|thik|sahi|yes|ya|yeah|yep|yup|sure|done|zaroor|bilkul|bhejo|bhej|bhejdo|bhejde|bhejein|bhejen|send|dedo|dedein|krdo|kardo|kar|do|karo|please|plz|pls|bhai|bro|sir)$/i;
-    AFFIRMATION_FILLER_REGEX = /^(?:hai|hain|hy|he|na|nah|yr|yaar|jani|jaan|zra|zara|abhi|to|tou)$/i;
-    OFFER_VERB_SOURCE = "bhej(?:un|oon|on|u|ou)?|bhejta|bhejdun|bhej\\s*d(?:oon|un|u|ta)|(?:send|share|de|kar|bhej|bata)\\s*(?:kar\\s*)?(?:d(?:oon|un|u|e|ee)|deta|deti)\\s*(?:h(?:oon|u|un|o|ai))?|batau|bata\\s*(?:doon|dun)|chahiye|chahye|karun|karoon";
-    OFFER_VERB_REGEX = new RegExp(`(?:${OFFER_VERB_SOURCE})`, "i");
-    CONTINUATION_STARTER_REGEX = /^(?:ko|ka|ki|ke|se|me|mein|par|pe|aur|ya|taake|takay|takke|jis|jise|jin|jo|hai|hain|tha|thi|the|kar|karta|karti|karte|karne|karna|kiya|deta|deti|dete|diya|raha|rahi|rahe|wala|wali|wale|bhi|to|ho|hota|hoti|hote|nahi|na|kyunke|kyunki|lekin|magar|phir|is|us|iska|uska|jab|agar)\b/i;
   }
 });
 
@@ -3908,6 +4311,15 @@ function extractQuotedPriceSummary(templateContent) {
   const matches = templateContent.match(PRICE_MENTION_REGEX) || [];
   const cleaned = matches.map((m) => m.replace(/[^\S\r\n]+/g, " ").trim()).filter(Boolean).slice(0, 4);
   return cleaned.join(" | ").slice(0, 200);
+}
+async function persistImageSend(cleanJid, memory, imageId, toolId, userId) {
+  try {
+    const imagesSent = recordImageSent(memory.imagesSent, imageId, toolId);
+    memory.imagesSent = imagesSent;
+    await customerService.updateCustomerMemory(cleanJid, { imagesSent }, userId);
+  } catch (err) {
+    console.error(`[Agent:${userId}] Could not record image send:`, err);
+  }
 }
 function stripFabricatedCustomerTurns(raw) {
   if (!raw) return raw;
@@ -4096,10 +4508,19 @@ async function generateResponse(cleanJid, latestCustomerText, name, batch, userI
       ]
     };
   }
+  const convoState = inferConversationState({
+    latestCustomerText,
+    recentMessages,
+    memory,
+    lockedToolId: lockedTool?.id
+  });
+  console.log(
+    `[Agent:${userId}] State for ${cleanJid}: stage="${convoState.stage}" installed=${convoState.known.appInstalled} hwid=${convoState.known.hwid || "none"} plan=${convoState.known.selectedPlan || "none"} | template: ${convoState.templateDecisionReason}`
+  );
   let templateMessage = null;
   const templatesSent = [...memory.templatesSent || []];
   const quotedPrices = { ...memory.quotedPrices || {} };
-  if (lockedTool && directlyDetectedTool && directlyDetectedTool.id === lockedTool.id) {
+  if (lockedTool && directlyDetectedTool && directlyDetectedTool.id === lockedTool.id && convoState.shouldSendTemplate) {
     const tm = lockedTool.templateMessage;
     const alreadySent = templatesSent.includes(lockedTool.id);
     const sendOnce = tm?.sendOnce !== false;
@@ -4110,6 +4531,7 @@ async function generateResponse(cleanJid, latestCustomerText, name, batch, userI
       if (quoted) quotedPrices[lockedTool.name] = quoted;
     }
   }
+  const journeyPatch = memoryPatchFromState(convoState);
   if (lockedTool) {
     await customerService.updateCustomerMemory(
       cleanJid,
@@ -4118,10 +4540,13 @@ async function generateResponse(cleanJid, latestCustomerText, name, batch, userI
         currentProductName: lockedTool.name,
         lastToolDiscussed: lockedTool.name,
         templatesSent,
-        quotedPrices
+        quotedPrices,
+        ...journeyPatch
       },
       userId
     );
+  } else if (Object.keys(journeyPatch).length > 0) {
+    await customerService.updateCustomerMemory(cleanJid, journeyPatch, userId);
   }
   const buyingIntent = BUYING_INTENT_REGEX.test(latestCustomerText);
   const explicitPaymentRequest = EXPLICIT_PAYMENT_REGEX.test(latestCustomerText);
@@ -4139,8 +4564,11 @@ Account: ${p.accountNumber}
 Title: ${p.accountTitle}${p.instructions ? `
 (${p.instructions})` : ""}`);
       }
-      lines.push("\nPayment ke baad screenshot + apna email / Hardware ID yahan share karein. Main activate kar deta hoon. \u2705");
+      lines.push(
+        convoState.known.hwid ? "\nPayment ke baad bas screenshot bhej dein \u2014 Device ID mere paas already hai, main activate kar deta hoon. \u2705" : "\nPayment ke baad screenshot + apna email / Hardware ID yahan share karein. Main activate kar deta hoon. \u2705"
+      );
       const paymentReply = lines.join("\n");
+      await customerService.updateCustomerMemory(cleanJid, { paymentDetailsSent: true }, userId);
       await evaluateAndApplyCustomerStatus(cleanJid, customer, latestCustomerText, null, userId, buyingIntent);
       return {
         textMessages: [paymentReply],
@@ -4170,15 +4598,22 @@ ${primaryLink}`, guide],
   }
   const toolImages = (lockedTool?.images || []).filter((img) => img?.filepath || img?.url);
   const wantsScreenshot = SCREENSHOT_REQUEST_REGEX.test(latestCustomerText);
-  const relevantImage = pickRelevantImage(latestCustomerText, toolImages)?.image || null;
-  if (lockedTool && (wantsScreenshot || relevantImage)) {
+  const imageSelection = selectImageForTurn({
+    images: toolImages,
+    state: convoState,
+    customerText: latestCustomerText,
+    sentHistory: memory.imagesSent,
+    explicitRequest: wantsScreenshot
+  });
+  if (lockedTool && toolImages.length > 0) {
     console.log(
-      `[Agent:${userId}] Image check for ${cleanJid}: tool="${lockedTool.name}" uploadedImages=${toolImages.length} explicitRequest=${wantsScreenshot} semanticMatch=${relevantImage ? `"${relevantImage.id}"` : "none"}`
+      `[Agent:${userId}] Visual proof for ${cleanJid}: uploaded=${toolImages.length} explicitRequest=${wantsScreenshot} chosen=${imageSelection ? `"${imageSelection.image.id}" (score ${imageSelection.score}: ${imageSelection.reason})` : "none"}`
     );
   }
-  if (wantsScreenshot && lockedTool && toolImages.length > 0) {
-    const chosen = relevantImage || toolImages[0];
+  if (wantsScreenshot && lockedTool && imageSelection) {
+    const chosen = imageSelection.image;
     const label = (chosen.title || "").trim();
+    await persistImageSend(cleanJid, memory, chosen.id, lockedTool.id, userId);
     await evaluateAndApplyCustomerStatus(cleanJid, customer, latestCustomerText, null, userId, buyingIntent);
     return {
       textMessages: [label ? `Han bhai, ye dekho \u{1F447}
@@ -4187,8 +4622,9 @@ ${label}` : `Han bhai, ye dekho ${lockedTool.name} ka interface \u{1F447}`],
       templateMessage
     };
   }
-  const autoAttachImage = !wantsScreenshot && relevantImage ? relevantImage.filepath || relevantImage.url : null;
-  const autoAttachImageLabel = relevantImage ? (relevantImage.title || relevantImage.description || "").trim().slice(0, 120) : "";
+  const autoAttachSelection = !wantsScreenshot ? imageSelection : null;
+  const autoAttachImage = autoAttachSelection ? autoAttachSelection.image.filepath || autoAttachSelection.image.url : null;
+  const autoAttachImageBriefing = autoAttachSelection ? describeImageForPrompt(autoAttachSelection) : "";
   const { prompt, systemPrompt } = synthesizeSalesPrompt({
     customer,
     matchedTools: match.matched,
@@ -4205,7 +4641,10 @@ ${label}` : `Han bhai, ye dekho ${lockedTool.name} ka interface \u{1F447}`],
     explicitLinkRequest,
     templateJustSent: Boolean(templateMessage),
     wantsAlternative,
-    autoImageAttached: autoAttachImage ? autoAttachImageLabel || "product image" : void 0
+    autoImageAttached: autoAttachImage ? autoAttachImageBriefing : void 0,
+    journeyStage: convoState.stage,
+    nextAction: convoState.nextAction,
+    doNotRepeat: convoState.doNotRepeat
   });
   console.log(`[Agent:${userId}] Querying AI for ${cleanJid} (Locked: ${lockedTool?.name || (match.isUnknownProduct ? `Unknown:${match.queryProduct}` : "CatalogOverview")}${buyingIntent ? " | HighIntent" : ""}${templateMessage ? " | TemplateFirst" : ""})...`);
   const rawReply = await askAI(prompt, systemPrompt, userId);
@@ -4226,6 +4665,10 @@ ${label}` : `Han bhai, ye dekho ${lockedTool.name} ka interface \u{1F447}`],
   }
   if (!imageToSend && autoAttachImage) {
     imageToSend = autoAttachImage;
+  }
+  if (imageToSend) {
+    const sentImage = autoAttachSelection?.image || lockedTool?.images?.find((img) => (img.filepath || img.url) === imageToSend);
+    if (sentImage) await persistImageSend(cleanJid, memory, sentImage.id, lockedTool?.id, userId);
   }
   await evaluateAndApplyCustomerStatus(cleanJid, customer, latestCustomerText, extractedAiStatus, userId, buyingIntent);
   text = stripFabricatedCustomerTurns(text).replace(/^["']|["']$/g, "").trim();
@@ -4373,6 +4816,8 @@ var init_agent = __esm({
     init_usage();
     init_tool_matcher();
     init_reply_guard();
+    init_conversation_state();
+    init_image_intelligence();
     BUYING_INTENT_REGEX = /(?:\b(?:le?na|lena|leni|chahiye|chaiye|chahye)\b|\blink\b|\bprice\b|\brate\b|\bkitne?\b|\bkitna\b|final\s*price|\bpayment\b|jazz\s*cash|jazzcash|easy\s*paisa|easypaisa|\braast\b|account\s*(?:number|details|no)|\bpro\b|start\s*kar|shuru\s*kar|kharid|khareed|purchase|\bbuy\b|sub\s*len|order\s*kar|paise?\s*(?:bhej|send|transfer|kaha))/i;
     EXPLICIT_PAYMENT_REGEX = /(?:payment\s*(?:details|method|info|kaise|karni|kar\s*d|number|account)|kaise?\s*pay|kahan?\s*(?:pay|paise|paisay|bhej)|account\s*(?:number|details|title|no)\b|jazz\s*cash|jazzcash|easy\s*paisa|easypaisa|\braast\b|bank\s*(?:details|account)|\bpay\s*(?:karna|karni|karu|karoon|kru|kro|kese|kaise)\b|pais(?:e|ay)?\s*(?:kaise|kese)\s*(?:du|doon|dun|de|karu|karoon)|\bhow\s*to\s*pay\b)/i;
     EXPLICIT_LINK_REGEX = /(?:\blink\b|\blinks\b|download|trial\s*(?:link|de)|website\s*(?:link|do)|\bportal\b)/i;
@@ -4387,6 +4832,27 @@ var init_agent = __esm({
 // src/server/tools.ts
 async function getTools(userId) {
   return toolService.getAccountTools(userId);
+}
+function sanitizeImageSalesMeta(raw) {
+  if (!raw || typeof raw !== "object") return {};
+  const meta = {};
+  for (const field of IMAGE_META_TEXT_FIELDS) {
+    const value = raw[field];
+    if (typeof value === "string" && value.trim()) meta[field] = value.trim();
+  }
+  for (const field of IMAGE_META_LIST_FIELDS) {
+    const value = raw[field];
+    const list = Array.isArray(value) ? value : typeof value === "string" ? value.split(/[\n,]/) : [];
+    const cleaned = list.map((v) => String(v).trim().toLowerCase()).filter(Boolean);
+    if (cleaned.length > 0) meta[field] = cleaned;
+  }
+  const priority = Number(raw.priority);
+  if (Number.isFinite(priority) && priority > 0) meta.priority = Math.min(10, Math.round(priority));
+  const cooldown = Number(raw.cooldown_minutes);
+  if (Number.isFinite(cooldown) && cooldown >= 0) meta.cooldown_minutes = Math.round(cooldown);
+  const maxPer = Number(raw.max_per_conversation);
+  if (Number.isFinite(maxPer) && maxPer > 0) meta.max_per_conversation = Math.round(maxPer);
+  return meta;
 }
 function setupToolsRoutes(app) {
   app.get("/api/tools", async (req, res) => {
@@ -4405,7 +4871,7 @@ function setupToolsRoutes(app) {
   app.post("/api/tools/upload-image", async (req, res) => {
     try {
       const user = await getUserByToken(req.headers.authorization);
-      const { filename, data, title, description, toolId } = req.body;
+      const { filename, data, title, description, toolId, salesMeta } = req.body;
       if (!filename || !data || !description) {
         return res.status(400).json({ error: "Filename, image data, and description are required." });
       }
@@ -4419,6 +4885,10 @@ function setupToolsRoutes(app) {
       const buffer = Buffer.from(base64Data, "base64");
       await import_promises6.default.writeFile(targetPath, buffer);
       const imageObject = {
+        // Optional sales metadata (purpose, use_when, cooldown, what it does
+        // NOT prove, ...). Spread first so the core identity fields below can
+        // never be overwritten by whatever the client sent.
+        ...sanitizeImageSalesMeta(salesMeta),
         id: `img_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
         filename: uniqueFilename,
         // Always forward slashes: tools.json is committed to git, so a path
@@ -4638,7 +5108,7 @@ ${rawInfo}
     }
   });
 }
-var import_promises6, import_path9, getToolImagesDir;
+var import_promises6, import_path9, getToolImagesDir, IMAGE_META_LIST_FIELDS, IMAGE_META_TEXT_FIELDS;
 var init_tools = __esm({
   "src/server/tools.ts"() {
     import_promises6 = __toESM(require("fs/promises"), 1);
@@ -4647,6 +5117,8 @@ var init_tools = __esm({
     init_auth();
     init_tool_service();
     getToolImagesDir = () => import_path9.default.join(process.cwd(), "data", "tool-images");
+    IMAGE_META_LIST_FIELDS = ["sales_context", "use_when", "avoid_when", "customer_signals", "sales_stage"];
+    IMAGE_META_TEXT_FIELDS = ["purpose", "category", "what_it_proves", "what_it_does_not_prove"];
   }
 });
 

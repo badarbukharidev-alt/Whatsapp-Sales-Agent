@@ -420,6 +420,18 @@ export function buildCompactPublicQuery(prompt: string, systemPrompt?: string, j
     salesDirectives = `DIRECTIVE: ${ctrlMatch[1].trim().replace(/\n+/g, " | ")}`;
   }
 
+  // 3b-bis. The internal sales-journey read (stage, next move, and the explicit
+  // "they already know this" list). This is what stops the fallback model from
+  // re-advertising to a customer who already installed the app — so it is a
+  // must-keep block, never dropped by budget trimming.
+  let journeyBlock = "";
+  const journeyMatch = prompt.match(
+    /\[SALES JOURNEY[^\]]*\]\s*\n([\s\S]*?)(?=\n\[|\n===|\nCUSTOMER'S LATEST MESSAGE|\nCUSTOMER'S NEW MESSAGE|$)/i
+  );
+  if (journeyMatch && journeyMatch[1].trim()) {
+    journeyBlock = `[SALES JOURNEY — INTERNAL, never mention to the customer]\n${journeyMatch[1].trim()}`;
+  }
+
   // 3c. Extract previously-quoted-rates consistency line so the fallback model
   // never states a different price than what was already sent to this customer.
   let quotedRatesLine = "";
@@ -470,6 +482,7 @@ export function buildCompactPublicQuery(prompt: string, systemPrompt?: string, j
   // Build body parts (excluding the guaranteed links block)
   const bodyParts = [
     roleRules,
+    journeyBlock,
     toolSummary,
     availabilityLine,
     imagesBlock,

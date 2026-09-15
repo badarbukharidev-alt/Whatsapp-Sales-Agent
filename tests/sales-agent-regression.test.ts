@@ -1,7 +1,9 @@
 import assert from "assert";
 import fs from "fs";
 import path from "path";
-import { Tool, Customer } from "../src/types.js";
+import { Tool, Customer, ChatMessage } from "../src/types.js";
+import { inferConversationState, memoryPatchFromState } from "../src/server/services/conversation-state.js";
+import { selectImageForTurn } from "../src/server/services/image-intelligence.js";
 import {
   matchTool,
   matchToolSync,
@@ -949,6 +951,273 @@ async function runRegressionSuite() {
     });
     assert.ok(prompt.includes("AUTO-IMAGE ATTACHED"), "Must announce the auto-attached image");
     assert.ok(/Do NOT promise to send it later/i.test(prompt), "Must stop the agent promising a later send");
+  });
+
+  // =========================================================================
+  // SCENARIO 14: Conversation-state awareness — the reported main bug.
+  // The agent re-sent the full ClipShield advertisement to a customer who had
+  // already installed the app and just wanted a licence.
+  // Covers the requested end-to-end scenarios A-J.
+  // =========================================================================
+  const turn = (role: "user" | "agent", content: string): ChatMessage => ({
+    role,
+    content,
+    timestamp: new Date().toISOString(),
+  });
+
+  const stateFor = (text: string, history: ChatMessage[] = [], memory: any = {}, toolId = "tool_1") =>
+    inferConversationState({ latestCustomerText: text, recentMessages: history, memory, lockedToolId: toolId });
+
+  test("14.A New lead asking what the product is → template IS allowed", () => {
+    const state = stateFor("ClipShield kya hai?");
+    assert.strictEqual(state.stage, "new_lead");
+    assert.strictEqual(state.shouldSendTemplate, true, "A genuine new lead should still get the intro template");
+  });
+
+  test("14.B THE BUG: installed + Device ID + wants licence → template BLOCKED", () => {
+    const state = stateFor("I installed ClipShield. My Device ID is CS-4F21-9K7B. I need a license.");
+    assert.strictEqual(state.shouldSendTemplate, false, "Must NOT re-advertise to an installed user");
+    assert.ok(
+      ["hwid_provided", "awaiting_license", "installed"].includes(state.stage),
+      `Expected an activation-track stage, got "${state.stage}"`
+    );
+    assert.strictEqual(state.known.appInstalled, true);
+    assert.ok(state.known.hwid, "Device ID must be captured");
+    assert.ok(
+      state.doNotRepeat.some((d) => /download/i.test(d)),
+      "Must explicitly forbid re-sending download info"
+    );
+    assert.ok(
+      state.doNotRepeat.some((d) => /never ask for it again/i.test(d)),
+      "Must forbid asking for the Device ID again"
+    );
+  });
+
+  test("14.B2 Roman Urdu equivalent is understood too", () => {
+    const state = stateFor("bhai app install kar li hai, ab key chahiye");
+    assert.strictEqual(state.shouldSendTemplate, false);
+    assert.strictEqual(state.known.appInstalled, true);
+  });
+
+  test("14.B3 Facts from EARLIER turns still suppress the template", () => {
+    const history = [turn("user", "install kar li hai bhai"), turn("agent", "Great!")];
+    const state = stateFor("price kya hai?", history);
+    assert.strictEqual(state.known.appInstalled, true, "Install from an earlier turn must persist");
+    assert.strictEqual(state.shouldSendTemplate, false, "Still must not re-advertise");
+  });
+
+  test("14.C Price question → direct pricing stage", () => {
+    const state = stateFor("Price kia hai?");
+    assert.strictEqual(state.stage, "price_inquiry");
+    assert.ok(/price/i.test(state.nextAction) && /directly|plainly/i.test(state.nextAction));
+  });
+
+  test("14.D Scam objection → trust stage, and proof image is chosen proactively", () => {
+    const state = stateFor("Scam tu ni hy?");
+    assert.strictEqual(state.stage, "trust_check");
+
+    const feedbackImage: any = {
+      id: "img_feedback",
+      filename: "feedback.png",
+      filepath: "data/tool-images/feedback.png",
+      url: "/tool-images/feedback.png",
+      title: "Customer feedback",
+      description: "WhatsApp screenshots of real buyers confirming the tool works",
+      category: "social_proof",
+      customer_signals: ["skeptical", "scam", "legitimacy"],
+      what_it_proves: "real people bought and used it",
+      what_it_does_not_prove: "any specific result for this customer",
+    };
+    const selected = selectImageForTurn({
+      images: [feedbackImage],
+      state,
+      customerText: "Scam tu ni hy?",
+      sentHistory: [],
+      explicitRequest: false,
+    });
+    assert.ok(selected, "Social proof must be offered proactively on a trust objection");
+    assert.strictEqual(selected!.image.id, "img_feedback");
+    assert.strictEqual(selected!.doNotClaim, "any specific result for this customer");
+  });
+
+  test("14.E Niche question → guidance stage that asks about their channel", () => {
+    const state = stateFor("Konsi niche achi hai?");
+    assert.strictEqual(state.stage, "niche_guidance");
+    assert.ok(/channel|goal|ask/i.test(state.nextAction));
+  });
+
+  test("14.F Results question → no-guarantee stage", () => {
+    const state = stateFor("Views ayenge?");
+    assert.strictEqual(state.stage, "results_inquiry");
+    assert.ok(/never guarantee/i.test(state.nextAction), "Next action must forbid guarantees");
+  });
+
+  test("14.G Stats request → proof stage picks the analytics image", () => {
+    const state = stateFor("Koi stats hain?");
+    assert.strictEqual(state.stage, "proof_request");
+
+    const analytics: any = {
+      id: "img_analytics",
+      filename: "analytics.png",
+      filepath: "data/tool-images/analytics.png",
+      url: "/tool-images/analytics.png",
+      title: "Channel analytics example",
+      description: "YouTube analytics screenshot showing views and reach growth for a shorts channel",
+      category: "analytics",
+      customer_signals: ["results", "views", "growth", "proof"],
+      what_it_does_not_prove: "that ClipShield itself caused these results",
+    };
+    const selected = selectImageForTurn({
+      images: [analytics],
+      state,
+      customerText: "Koi stats hain?",
+      sentHistory: [],
+      explicitRequest: true,
+    });
+    assert.ok(selected, "An explicit stats request must surface the analytics image");
+    assert.strictEqual(selected!.image.id, "img_analytics");
+  });
+
+  test("14.H Expensive → price-objection stage that diagnoses before discounting", () => {
+    const state = stateFor("Bohat mehnga hai.");
+    assert.strictEqual(state.stage, "objection_price");
+    assert.ok(/only after|acknowledge/i.test(state.nextAction), "Must not lead with a discount");
+  });
+
+  test("14.I Ready to buy → stop selling, no proactive image", () => {
+    const state = stateFor("Lifetime chahiye");
+    assert.strictEqual(state.stage, "plan_lifetime");
+    assert.strictEqual(state.shouldSendTemplate, false);
+
+    const proof: any = {
+      id: "img_feedback",
+      filename: "f.png",
+      filepath: "data/tool-images/f.png",
+      url: "/f.png",
+      title: "Customer feedback",
+      description: "buyers confirming it works, social proof, trust",
+      customer_signals: ["skeptical", "proof"],
+    };
+    const selected = selectImageForTurn({
+      images: [proof],
+      state,
+      customerText: "Lifetime chahiye",
+      sentHistory: [],
+      explicitRequest: false,
+    });
+    assert.strictEqual(selected, null, "A buyer who is closing must not be shown unrequested marketing proof");
+  });
+
+  test("14.J Support question about HWID → activation stage, no template", () => {
+    const state = stateFor("HWID kahan se milega?");
+    assert.strictEqual(state.shouldSendTemplate, false);
+    assert.ok(["activation", "support"].includes(state.stage), `Got "${state.stage}"`);
+  });
+
+  test("14.K Image spam protection: cooldown and per-conversation cap are enforced", () => {
+    const state = stateFor("Scam tu ni hy?");
+    const img: any = {
+      id: "img_feedback",
+      filename: "f.png",
+      filepath: "data/tool-images/f.png",
+      url: "/f.png",
+      title: "Customer feedback",
+      description: "real buyers confirming legitimacy, scam doubts, trust proof",
+      customer_signals: ["skeptical", "scam"],
+      cooldown_minutes: 30,
+      max_per_conversation: 1,
+    };
+    const now = Date.now();
+
+    // Already sent once → the per-conversation cap blocks it.
+    assert.strictEqual(
+      selectImageForTurn({
+        images: [img],
+        state,
+        customerText: "Scam tu ni hy?",
+        sentHistory: [{ imageId: "img_feedback", at: new Date(now - 60 * 60000).toISOString() }],
+        now,
+      }),
+      null,
+      "max_per_conversation must stop a repeat send"
+    );
+
+    // Cap raised, but still inside the cooldown window → still blocked.
+    assert.strictEqual(
+      selectImageForTurn({
+        images: [{ ...img, max_per_conversation: 5 }],
+        state,
+        customerText: "Scam tu ni hy?",
+        sentHistory: [{ imageId: "img_feedback", at: new Date(now - 5 * 60000).toISOString() }],
+        now,
+      }),
+      null,
+      "cooldown_minutes must stop a rapid repeat"
+    );
+  });
+
+  test("14.L An irrelevant message never triggers a proactive image", () => {
+    const state = stateFor("assalam o alaikum");
+    const img: any = {
+      id: "img_analytics",
+      filename: "a.png",
+      filepath: "data/tool-images/a.png",
+      url: "/a.png",
+      title: "Analytics",
+      description: "views and reach growth analytics",
+    };
+    assert.strictEqual(
+      selectImageForTurn({ images: [img], state, customerText: "assalam o alaikum", sentHistory: [] }),
+      null
+    );
+  });
+
+  test("14.M Legacy images with only a description still work (backwards compatible)", () => {
+    const state = stateFor("hardware id kahan se milega");
+    const legacy: any = {
+      id: "img_legacy",
+      filename: "hwid.png",
+      filepath: "data/tool-images/hwid.png",
+      url: "/hwid.png",
+      description: "Settings screen showing where the Hardware ID is copied from",
+    };
+    const selected = selectImageForTurn({
+      images: [legacy],
+      state,
+      customerText: "hardware id kahan se milega",
+      sentHistory: [],
+    });
+    assert.ok(selected, "An image with only the legacy description field must still be selectable");
+    assert.strictEqual(selected!.image.id, "img_legacy");
+  });
+
+  test("14.N The journey block reaches the prompt and survives the fallback compaction", () => {
+    const state = stateFor("I installed it, my Device ID is CS-4F21-9K7B, need a license");
+    const { prompt } = synthesizeSalesPrompt({
+      customer: baseCustomer,
+      matchedTools: [clipTool],
+      allAccountToolsSummary: "- ClipShield",
+      recentMessages: baseCustomer.messages!,
+      latestCustomerText: "I installed it, my Device ID is CS-4F21-9K7B, need a license",
+      settings: { aiAgentEnabled: true, language: "Roman Urdu" } as any,
+      lockedProductName: clipTool.name,
+      journeyStage: state.stage,
+      nextAction: state.nextAction,
+      doNotRepeat: state.doNotRepeat,
+    });
+    assert.ok(prompt.includes("[SALES JOURNEY"), "Journey block must be in the full prompt");
+    assert.ok(prompt.includes("DO NOT REPEAT"), "The already-known list must be present");
+
+    const compact = buildCompactPublicQuery(prompt);
+    assert.ok(compact.includes("SALES JOURNEY"), `Journey block must survive compaction. Got:\n${compact}`);
+  });
+
+  test("14.O Memory patch carries the learned facts forward", () => {
+    const state = stateFor("install kar li, device id CS-99AA-1234");
+    const patch = memoryPatchFromState(state);
+    assert.strictEqual(patch.appInstalled, true);
+    assert.ok(patch.hwid, "HWID must be persisted so it is never asked for twice");
+    assert.ok(patch.journeyStage);
   });
 
   for (const t of testQueue) {
