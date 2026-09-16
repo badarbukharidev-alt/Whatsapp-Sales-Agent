@@ -4581,6 +4581,48 @@ function renderTemplateMessage(tm, tool) {
     (m) => values[m] !== void 0 && values[m] !== "" ? values[m] : m
   );
 }
+function renderDynamicSectionsList(sections, tool) {
+  if (!sections || sections.length === 0) return [];
+  const genericTitleRegex = /^(?:Constant Dynamic Knowledge Message|Dynamic Section\s*\d*|Section\s*\d*|Knowledge Section\s*\d*)$/i;
+  const link = tool.links && tool.links[0] && tool.links[0].url || "";
+  const values = {
+    "{tool_name}": tool.name || "",
+    "{price_pkr}": tool.pricePkr ? `Rs. ${tool.pricePkr}` : "",
+    "{price_usd}": tool.priceUsd ? `$${tool.priceUsd}` : "",
+    "{link}": link
+  };
+  const replaceVars = (str) => str.replace(
+    /\{tool_name\}|\{price_pkr\}|\{price_usd\}|\{link\}/g,
+    (m) => values[m] !== void 0 && values[m] !== "" ? values[m] : m
+  );
+  const result = [];
+  for (const sec of sections) {
+    const title = (sec.title || "").trim();
+    const rawContent = (sec.content || "").trim();
+    const isGenericTitle = genericTitleRegex.test(title);
+    let formattedText = "";
+    if (title && rawContent && !isGenericTitle) {
+      if (rawContent.toLowerCase().startsWith(title.toLowerCase())) {
+        formattedText = replaceVars(rawContent);
+      } else {
+        formattedText = `*${replaceVars(title)}*
+${replaceVars(rawContent)}`;
+      }
+    } else if (rawContent) {
+      formattedText = replaceVars(rawContent);
+    } else if (title && !isGenericTitle) {
+      formattedText = `*${replaceVars(title)}*`;
+    }
+    if (formattedText || sec.imageUrl) {
+      result.push({
+        title: isGenericTitle ? "" : title,
+        content: formattedText,
+        imageUrl: sec.imageUrl && sec.imageUrl.trim().length > 0 ? sec.imageUrl.trim() : void 0
+      });
+    }
+  }
+  return result;
+}
 function extractQuotedPriceSummary(templateContent) {
   const matches = templateContent.match(PRICE_MENTION_REGEX) || [];
   const cleaned = matches.map((m) => m.replace(/[^\S\r\n]+/g, " ").trim()).filter(Boolean).slice(0, 4);
@@ -4799,6 +4841,9 @@ async function generateResponse(cleanJid, latestCustomerText, name, batch, userI
     `[Agent:${userId}] State for ${cleanJid}: stage="${convoState.stage}" installed=${convoState.known.appInstalled} hwid=${convoState.known.hwid || "none"} plan=${convoState.known.selectedPlan || "none"} | template: ${convoState.templateDecisionReason}`
   );
   let templateMessage = null;
+  const extraSectionMessages = [];
+  let sectionImageToSend = null;
+  let sectionImageCaption = void 0;
   const templatesSent = [...memory.templatesSent || []];
   const quotedPrices = { ...memory.quotedPrices || {} };
   if (lockedTool && directlyDetectedTool && directlyDetectedTool.id === lockedTool.id && convoState.shouldSendTemplate) {
@@ -4809,18 +4854,24 @@ async function generateResponse(cleanJid, latestCustomerText, name, batch, userI
       if (tm?.enabled && (tm.content || "").trim().length > 0) {
         primaryMessage = renderTemplateMessage(tm, lockedTool);
       }
-      const hasSections = lockedTool.sections && lockedTool.sections.length > 0;
-      if (hasSections) {
-        const sectionsText = renderDynamicSections(lockedTool.sections, lockedTool);
-        if (sectionsText.trim().length > 0) {
-          if (primaryMessage.trim().length > 0) {
-            const normPrimary = primaryMessage.replace(/[\s\W]+/g, "").toLowerCase();
-            const normSections = sectionsText.replace(/[\s\W]+/g, "").toLowerCase();
-            if (!normPrimary.includes(normSections.slice(0, 40)) && !normSections.includes(normPrimary.slice(0, 40))) {
-              primaryMessage = primaryMessage + "\n\n" + sectionsText;
+      const formattedSecs = renderDynamicSectionsList(lockedTool.sections || [], lockedTool);
+      for (let i = 0; i < formattedSecs.length; i++) {
+        const sec = formattedSecs[i];
+        const normPrimary = primaryMessage.replace(/[\s\W]+/g, "").toLowerCase();
+        const normSec = sec.content.replace(/[\s\W]+/g, "").toLowerCase();
+        if (sec.imageUrl && !sectionImageToSend) {
+          sectionImageToSend = sec.imageUrl;
+          sectionImageCaption = sec.content || void 0;
+        }
+        if (sec.content) {
+          if (!primaryMessage) {
+            primaryMessage = sec.content;
+          } else if (!normPrimary.includes(normSec.slice(0, 40)) && !normSec.includes(normPrimary.slice(0, 40))) {
+            if (sec.imageUrl && sectionImageToSend === sec.imageUrl) {
+              sectionImageCaption = sec.content;
+            } else {
+              extraSectionMessages.push(sec.content);
             }
-          } else {
-            primaryMessage = sectionsText;
           }
         }
       }
@@ -5011,6 +5062,10 @@ ${label}` : `Han bhai, ye dekho ${lockedTool.name} ka interface \u{1F447}`],
     }
     text = text.replace(imageTagMatch[0], "").trim();
   }
+  if (!imageToSend && sectionImageToSend) {
+    imageToSend = sectionImageToSend;
+    imageCaption = sectionImageCaption;
+  }
   if (!imageToSend && autoAttachImage) {
     imageToSend = autoAttachImage;
   }
@@ -5123,11 +5178,14 @@ ${formatPlanLines(toolPlans)}`;
       messages = [text];
     }
   }
+  if (extraSectionMessages.length > 0) {
+    messages = [...extraSectionMessages, ...messages];
+  }
   messages = messages.map((m) => m.replace(/^(Message\s*\d+:|\d+\.)\s*/i, "").trim()).filter((m) => m.length > 0);
   if (messages.length > 3) {
     messages = messages.slice(0, 3);
   }
-  if (messages.length === 0 && imageToSend) {
+  if (messages.length === 0 && imageToSend && !imageCaption) {
     messages = ["Han bhai, ye dekho interface \u{1F447}"];
   }
   return {

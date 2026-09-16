@@ -545,6 +545,10 @@ async function generateResponse(
   // 4. SAVED PRODUCT TEMPLATE & DYNAMIC SECTIONS MESSAGE — sent FIRST, exactly once,
   // when a tool is detected for the first time for a customer.
   let templateMessage: string | null = null;
+  const extraSectionMessages: string[] = [];
+  let sectionImageToSend: string | null = null;
+  let sectionImageCaption: string | undefined = undefined;
+
   const templatesSent = [...(memory.templatesSent || [])];
   const quotedPrices: Record<string, string> = { ...(memory.quotedPrices || {}) };
   if (lockedTool && directlyDetectedTool && directlyDetectedTool.id === lockedTool.id && convoState.shouldSendTemplate) {
@@ -557,18 +561,27 @@ async function generateResponse(
       }
 
       // Automatically include all dynamic knowledge sections when tool is detected for the first time
-      const hasSections = lockedTool.sections && lockedTool.sections.length > 0;
-      if (hasSections) {
-        const sectionsText = renderDynamicSections(lockedTool.sections!, lockedTool);
-        if (sectionsText.trim().length > 0) {
-          if (primaryMessage.trim().length > 0) {
-            const normPrimary = primaryMessage.replace(/[\s\W]+/g, "").toLowerCase();
-            const normSections = sectionsText.replace(/[\s\W]+/g, "").toLowerCase();
-            if (!normPrimary.includes(normSections.slice(0, 40)) && !normSections.includes(normPrimary.slice(0, 40))) {
-              primaryMessage = primaryMessage + "\n\n" + sectionsText;
+      const formattedSecs = renderDynamicSectionsList(lockedTool.sections || [], lockedTool);
+      for (let i = 0; i < formattedSecs.length; i++) {
+        const sec = formattedSecs[i];
+        const normPrimary = primaryMessage.replace(/[\s\W]+/g, "").toLowerCase();
+        const normSec = sec.content.replace(/[\s\W]+/g, "").toLowerCase();
+
+        if (sec.imageUrl && !sectionImageToSend) {
+          sectionImageToSend = sec.imageUrl;
+          sectionImageCaption = sec.content || undefined;
+        }
+
+        if (sec.content) {
+          if (!primaryMessage) {
+            primaryMessage = sec.content;
+          } else if (!normPrimary.includes(normSec.slice(0, 40)) && !normSec.includes(normPrimary.slice(0, 40))) {
+            // If this section has an image and is selected for sending, its content is the caption
+            if (sec.imageUrl && sectionImageToSend === sec.imageUrl) {
+              sectionImageCaption = sec.content;
+            } else {
+              extraSectionMessages.push(sec.content);
             }
-          } else {
-            primaryMessage = sectionsText;
           }
         }
       }
@@ -852,6 +865,11 @@ async function generateResponse(
     text = text.replace(imageTagMatch[0], "").trim();
   }
 
+  if (!imageToSend && sectionImageToSend) {
+    imageToSend = sectionImageToSend;
+    imageCaption = sectionImageCaption;
+  }
+
   // The situation warranted visual proof: attach it even though the model
   // didn't ask for it (it usually won't, especially on the fallback model).
   if (!imageToSend && autoAttachImage) {
@@ -1029,6 +1047,10 @@ async function generateResponse(
     }
   }
 
+  if (extraSectionMessages.length > 0) {
+    messages = [...extraSectionMessages, ...messages];
+  }
+
   messages = messages
     .map((m) => m.replace(/^(Message\s*\d+:|\d+\.)\s*/i, "").trim())
     .filter((m) => m.length > 0);
@@ -1038,7 +1060,7 @@ async function generateResponse(
     messages = messages.slice(0, 3);
   }
 
-  if (messages.length === 0 && imageToSend) {
+  if (messages.length === 0 && imageToSend && !imageCaption) {
     messages = ["Han bhai, ye dekho interface 👇"];
   }
 
