@@ -503,7 +503,7 @@ export function stripUnsolicitedSalam(replyText: string, latestCustomerText: str
 }
 
 const IRRELEVANT_DISCOVERY_REGEX =
-  /(?:aap\s+basically\s+long\s+videos|monetization\s*ke\s*liye\s*use\s*karna|specific\s*channel\s*ke\s*liye|kis\s*kisam\s*ka\s*content|konse?\s*content|niche\s*kya\s*hai|kaunsa\s*channel|use\s*karna\s*chahte\s*hain\s*ya|mashwara\s*den\s*taake)/gi;
+  /(?:aap\s+basically\s+long\s+videos|monetization\s*ke\s*liye\s*use\s*karna|specific\s*channel\s*ke\s*liye|kis\s*kisam\s*ka\s*content|kis\s*tarah\s*ke\s*content|konse?\s*content|niche\s*kya\s*hai|kaunsa\s*channel|use\s*karna\s*chahte\s*hain\s*ya|mashwara\s*den\s*taake|youtube\s*automation\s*ke\s*liye\s*chahiye|apna\s*channel\s*grow\s*karna)/gi;
 
 /**
  * Strips irrelevant interview questions (e.g. "shorts ke liye ya long videos?", "specific channel ke liye chahiye?")

@@ -4,7 +4,7 @@ import { toolService } from "./services/tool-service.js";
 import { synthesizeSalesPrompt } from "./services/prompt-service.js";
 import { getSettings } from "./settings.js";
 import { sendMessage, sendToolImage } from "./whatsapp.js";
-import { Customer, CustomerStatus, SentImageRecord, Tool } from "../types.js";
+import { Customer, CustomerStatus, SentImageRecord, Tool, ToolSection } from "../types.js";
 import { checkAiReplyQuota, recordAiReply, recordUserMessage } from "./usage.js";
 import { recordStatedFacts, clampPriceFloors, extractMentionedFacts } from "./tool-matcher.js";
 import {
@@ -85,6 +85,12 @@ export interface FormattedSection {
   title: string;
   content: string;
   imageUrl?: string;
+}
+
+export interface SectionMediaItem {
+  text?: string;
+  imageUrl?: string;
+  imageCaption?: string;
 }
 
 /**
@@ -418,22 +424,40 @@ async function handleCustomerMessageBatch(
 
   // 3. Generate retrieval-based AI response
   const response = await generateResponse(cleanJid, combinedUserText, name, batch, userId);
-  if (!response || (response.textMessages.length === 0 && !response.imageToSend && !response.templateMessage)) {
+  if (!response || (response.textMessages.length === 0 && !response.imageToSend && !response.templateMessage && (!response.sectionItems || response.sectionItems.length === 0))) {
     return;
   }
 
-  // 4. Send response: saved product template FIRST (exactly as stored), then AI messages.
+  // 4. Send response: saved product template FIRST (exactly as stored), then dynamic section items, then AI messages.
   const delaySec = settings.responseDelaySeconds || 1.4;
-  await sendResponse(cleanJid, response.textMessages, response.imageToSend, delaySec, userId, response.templateMessage, response.imageCaption);
+  await sendResponse(
+    cleanJid,
+    response.textMessages,
+    response.imageToSend,
+    delaySec,
+    userId,
+    response.templateMessage,
+    response.imageCaption,
+    response.sectionItems
+  );
 
   // 5. Save agent reply immediately to permanent memory (template included for history).
-  // A delivered image is stored as a real imageUrl so the admin chat view renders
-  // the actual picture instead of a literal "[Sent Image: data/...]" line.
   const replyParts: string[] = [];
   if (response.templateMessage) replyParts.push(response.templateMessage);
+  if (response.sectionItems) {
+    for (const item of response.sectionItems) {
+      if (item.text) replyParts.push(item.text);
+      if (item.imageUrl && item.imageCaption) replyParts.push(item.imageCaption);
+    }
+  }
   replyParts.push(...response.textMessages);
+
+  const firstImageUrl =
+    (response.sectionItems && response.sectionItems.find((s) => s.imageUrl)?.imageUrl) ||
+    response.imageToSend;
+
   await customerService.saveMessage(cleanJid, "agent", replyParts.join("\n\n"), userId, {
-    imageUrl: toPublicImageUrl(response.imageToSend),
+    imageUrl: toPublicImageUrl(firstImageUrl),
   });
   await recordAiReply();
 }
@@ -447,7 +471,7 @@ async function generateResponse(
   name?: string,
   batch?: QueuedIncomingMessage[],
   userId = "usr_admin_badar"
-): Promise<{ textMessages: string[]; imageToSend: string | null; imageCaption?: string; templateMessage: string | null }> {
+): Promise<{ textMessages: string[]; imageToSend: string | null; imageCaption?: string; templateMessage: string | null; sectionItems?: SectionMediaItem[] }> {
   const settings = await getSettings(userId);
 
   // 1. Load permanent customer record BEFORE generating reply
@@ -545,9 +569,7 @@ async function generateResponse(
   // 4. SAVED PRODUCT TEMPLATE & DYNAMIC SECTIONS MESSAGE — sent FIRST, exactly once,
   // when a tool is detected for the first time for a customer.
   let templateMessage: string | null = null;
-  const extraSectionMessages: string[] = [];
-  let sectionImageToSend: string | null = null;
-  let sectionImageCaption: string | undefined = undefined;
+  const sectionItems: SectionMediaItem[] = [];
 
   const templatesSent = [...(memory.templatesSent || [])];
   const quotedPrices: Record<string, string> = { ...(memory.quotedPrices || {}) };
@@ -566,22 +588,18 @@ async function generateResponse(
         const sec = formattedSecs[i];
         const normPrimary = primaryMessage.replace(/[\s\W]+/g, "").toLowerCase();
         const normSec = sec.content.replace(/[\s\W]+/g, "").toLowerCase();
+        const isDuplicate = normSec && normPrimary && (normPrimary.includes(normSec.slice(0, 40)) || normSec.includes(normPrimary.slice(0, 40)));
 
-        if (sec.imageUrl && !sectionImageToSend) {
-          sectionImageToSend = sec.imageUrl;
-          sectionImageCaption = sec.content || undefined;
-        }
-
-        if (sec.content) {
+        if (sec.imageUrl) {
+          sectionItems.push({
+            imageUrl: sec.imageUrl,
+            imageCaption: sec.content || undefined,
+          });
+        } else if (sec.content && !isDuplicate) {
           if (!primaryMessage) {
             primaryMessage = sec.content;
-          } else if (!normPrimary.includes(normSec.slice(0, 40)) && !normSec.includes(normPrimary.slice(0, 40))) {
-            // If this section has an image and is selected for sending, its content is the caption
-            if (sec.imageUrl && sectionImageToSend === sec.imageUrl) {
-              sectionImageCaption = sec.content;
-            } else {
-              extraSectionMessages.push(sec.content);
-            }
+          } else {
+            sectionItems.push({ text: sec.content });
           }
         }
       }
@@ -865,10 +883,6 @@ async function generateResponse(
     text = text.replace(imageTagMatch[0], "").trim();
   }
 
-  if (!imageToSend && sectionImageToSend) {
-    imageToSend = sectionImageToSend;
-    imageCaption = sectionImageCaption;
-  }
 
   // The situation warranted visual proof: attach it even though the model
   // didn't ask for it (it usually won't, especially on the fallback model).
@@ -1047,9 +1061,6 @@ async function generateResponse(
     }
   }
 
-  if (extraSectionMessages.length > 0) {
-    messages = [...extraSectionMessages, ...messages];
-  }
 
   messages = messages
     .map((m) => m.replace(/^(Message\s*\d+:|\d+\.)\s*/i, "").trim())
@@ -1069,6 +1080,7 @@ async function generateResponse(
     imageToSend,
     imageCaption,
     templateMessage,
+    sectionItems,
   };
 }
 
@@ -1082,16 +1094,36 @@ async function sendResponse(
   delaySec: number,
   userId?: string,
   templateMessage?: string | null,
-  imageCaption?: string | null
+  imageCaption?: string | null,
+  sectionItems?: SectionMediaItem[]
 ) {
   // TEMPLATE ORDER GUARANTEE: the saved product template is ALWAYS sent first,
   // exactly as stored, before any AI-generated message.
   if (templateMessage && templateMessage.trim().length > 0) {
     console.log(`[Agent:${userId || 'default'}] Sending saved product template FIRST to ${cleanJid}.`);
     await sendMessage(cleanJid, templateMessage, userId);
-    if (textMessages.length > 0 || imageToSend) {
+    if (textMessages.length > 0 || imageToSend || (sectionItems && sectionItems.length > 0)) {
       const waitMs = Math.max(900, Math.min(2500, delaySec * 1000));
       await new Promise((resolve) => setTimeout(resolve, waitMs));
+    }
+  }
+
+  // DYNAMIC SECTIONS: send all dynamic section items sequentially
+  if (sectionItems && sectionItems.length > 0) {
+    for (let i = 0; i < sectionItems.length; i++) {
+      const item = sectionItems[i];
+      if (item.imageUrl) {
+        console.log(`[Agent:${userId || 'default'}] Delivering dynamic section image [${i + 1}/${sectionItems.length}] to ${cleanJid}: ${item.imageUrl}${item.imageCaption ? ` (caption: "${item.imageCaption.slice(0, 30)}...")` : ""}`);
+        await sendToolImage(cleanJid, item.imageUrl, item.imageCaption || undefined, userId);
+      } else if (item.text) {
+        console.log(`[Agent:${userId || 'default'}] Sending dynamic section text [${i + 1}/${sectionItems.length}] to ${cleanJid}: "${item.text.slice(0, 30)}..."`);
+        await sendMessage(cleanJid, item.text, userId);
+      }
+
+      if (i < sectionItems.length - 1 || textMessages.length > 0 || imageToSend) {
+        const waitMs = Math.max(900, Math.min(2500, delaySec * 1000));
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+      }
     }
   }
 
@@ -1100,16 +1132,19 @@ async function sendResponse(
     console.log(`[Agent:${userId || 'default'}] Sending message [${i + 1}/${textMessages.length}] to ${cleanJid}: "${msg}"`);
     await sendMessage(cleanJid, msg, userId);
 
-    if (i < textMessages.length - 1) {
+    if (i < textMessages.length - 1 || imageToSend) {
       const waitMs = Math.max(900, Math.min(2500, delaySec * 1000));
       await new Promise((resolve) => setTimeout(resolve, waitMs));
     }
   }
 
   if (imageToSend) {
-    console.log(`[Agent:${userId || 'default'}] Delivering tool image/screenshot to ${cleanJid}: ${imageToSend}${imageCaption ? ` (caption: "${imageCaption}")` : ""}`);
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    await sendToolImage(cleanJid, imageToSend, imageCaption || undefined, userId);
+    const alreadySentInSection = sectionItems?.some((s) => s.imageUrl === imageToSend);
+    if (!alreadySentInSection) {
+      console.log(`[Agent:${userId || 'default'}] Delivering tool image/screenshot to ${cleanJid}: ${imageToSend}${imageCaption ? ` (caption: "${imageCaption}")` : ""}`);
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await sendToolImage(cleanJid, imageToSend, imageCaption || undefined, userId);
+    }
   }
 }
 

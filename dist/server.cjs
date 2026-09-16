@@ -3936,7 +3936,7 @@ var init_reply_guard = __esm({
     OFFER_VERB_REGEX = new RegExp(`(?:${OFFER_VERB_SOURCE})`, "i");
     CONTINUATION_STARTER_REGEX = /^(?:ko|ka|ki|ke|se|me|mein|par|pe|aur|ya|taake|takay|takke|jis|jise|jin|jo|hai|hain|tha|thi|the|kar|karta|karti|karte|karne|karna|kiya|deta|deti|dete|diya|raha|rahi|rahe|wala|wali|wale|bhi|to|ho|hota|hoti|hote|nahi|na|kyunke|kyunki|lekin|magar|phir|is|us|iska|uska|jab|agar)\b/i;
     SALAM_GREETING_REGEX = /(?:salam|slm|aoa|assalam|walikum|walaikum)/i;
-    IRRELEVANT_DISCOVERY_REGEX = /(?:aap\s+basically\s+long\s+videos|monetization\s*ke\s*liye\s*use\s*karna|specific\s*channel\s*ke\s*liye|kis\s*kisam\s*ka\s*content|konse?\s*content|niche\s*kya\s*hai|kaunsa\s*channel|use\s*karna\s*chahte\s*hain\s*ya|mashwara\s*den\s*taake)/gi;
+    IRRELEVANT_DISCOVERY_REGEX = /(?:aap\s+basically\s+long\s+videos|monetization\s*ke\s*liye\s*use\s*karna|specific\s*channel\s*ke\s*liye|kis\s*kisam\s*ka\s*content|kis\s*tarah\s*ke\s*content|konse?\s*content|niche\s*kya\s*hai|kaunsa\s*channel|use\s*karna\s*chahte\s*hain\s*ya|mashwara\s*den\s*taake|youtube\s*automation\s*ke\s*liye\s*chahiye|apna\s*channel\s*grow\s*karna)/gi;
   }
 });
 
@@ -4769,16 +4769,32 @@ async function handleCustomerMessageBatch(phoneNumber, batch, name, userId = "us
     return;
   }
   const response = await generateResponse(cleanJid, combinedUserText, name, batch, userId);
-  if (!response || response.textMessages.length === 0 && !response.imageToSend && !response.templateMessage) {
+  if (!response || response.textMessages.length === 0 && !response.imageToSend && !response.templateMessage && (!response.sectionItems || response.sectionItems.length === 0)) {
     return;
   }
   const delaySec = settings.responseDelaySeconds || 1.4;
-  await sendResponse(cleanJid, response.textMessages, response.imageToSend, delaySec, userId, response.templateMessage, response.imageCaption);
+  await sendResponse(
+    cleanJid,
+    response.textMessages,
+    response.imageToSend,
+    delaySec,
+    userId,
+    response.templateMessage,
+    response.imageCaption,
+    response.sectionItems
+  );
   const replyParts = [];
   if (response.templateMessage) replyParts.push(response.templateMessage);
+  if (response.sectionItems) {
+    for (const item of response.sectionItems) {
+      if (item.text) replyParts.push(item.text);
+      if (item.imageUrl && item.imageCaption) replyParts.push(item.imageCaption);
+    }
+  }
   replyParts.push(...response.textMessages);
+  const firstImageUrl = response.sectionItems && response.sectionItems.find((s) => s.imageUrl)?.imageUrl || response.imageToSend;
   await customerService.saveMessage(cleanJid, "agent", replyParts.join("\n\n"), userId, {
-    imageUrl: toPublicImageUrl(response.imageToSend)
+    imageUrl: toPublicImageUrl(firstImageUrl)
   });
   await recordAiReply();
 }
@@ -4841,9 +4857,7 @@ async function generateResponse(cleanJid, latestCustomerText, name, batch, userI
     `[Agent:${userId}] State for ${cleanJid}: stage="${convoState.stage}" installed=${convoState.known.appInstalled} hwid=${convoState.known.hwid || "none"} plan=${convoState.known.selectedPlan || "none"} | template: ${convoState.templateDecisionReason}`
   );
   let templateMessage = null;
-  const extraSectionMessages = [];
-  let sectionImageToSend = null;
-  let sectionImageCaption = void 0;
+  const sectionItems = [];
   const templatesSent = [...memory.templatesSent || []];
   const quotedPrices = { ...memory.quotedPrices || {} };
   if (lockedTool && directlyDetectedTool && directlyDetectedTool.id === lockedTool.id && convoState.shouldSendTemplate) {
@@ -4859,19 +4873,17 @@ async function generateResponse(cleanJid, latestCustomerText, name, batch, userI
         const sec = formattedSecs[i];
         const normPrimary = primaryMessage.replace(/[\s\W]+/g, "").toLowerCase();
         const normSec = sec.content.replace(/[\s\W]+/g, "").toLowerCase();
-        if (sec.imageUrl && !sectionImageToSend) {
-          sectionImageToSend = sec.imageUrl;
-          sectionImageCaption = sec.content || void 0;
-        }
-        if (sec.content) {
+        const isDuplicate = normSec && normPrimary && (normPrimary.includes(normSec.slice(0, 40)) || normSec.includes(normPrimary.slice(0, 40)));
+        if (sec.imageUrl) {
+          sectionItems.push({
+            imageUrl: sec.imageUrl,
+            imageCaption: sec.content || void 0
+          });
+        } else if (sec.content && !isDuplicate) {
           if (!primaryMessage) {
             primaryMessage = sec.content;
-          } else if (!normPrimary.includes(normSec.slice(0, 40)) && !normSec.includes(normPrimary.slice(0, 40))) {
-            if (sec.imageUrl && sectionImageToSend === sec.imageUrl) {
-              sectionImageCaption = sec.content;
-            } else {
-              extraSectionMessages.push(sec.content);
-            }
+          } else {
+            sectionItems.push({ text: sec.content });
           }
         }
       }
@@ -5062,10 +5074,6 @@ ${label}` : `Han bhai, ye dekho ${lockedTool.name} ka interface \u{1F447}`],
     }
     text = text.replace(imageTagMatch[0], "").trim();
   }
-  if (!imageToSend && sectionImageToSend) {
-    imageToSend = sectionImageToSend;
-    imageCaption = sectionImageCaption;
-  }
   if (!imageToSend && autoAttachImage) {
     imageToSend = autoAttachImage;
   }
@@ -5178,9 +5186,6 @@ ${formatPlanLines(toolPlans)}`;
       messages = [text];
     }
   }
-  if (extraSectionMessages.length > 0) {
-    messages = [...extraSectionMessages, ...messages];
-  }
   messages = messages.map((m) => m.replace(/^(Message\s*\d+:|\d+\.)\s*/i, "").trim()).filter((m) => m.length > 0);
   if (messages.length > 3) {
     messages = messages.slice(0, 3);
@@ -5192,31 +5197,51 @@ ${formatPlanLines(toolPlans)}`;
     textMessages: messages,
     imageToSend,
     imageCaption,
-    templateMessage
+    templateMessage,
+    sectionItems
   };
 }
-async function sendResponse(cleanJid, textMessages, imageToSend, delaySec, userId, templateMessage, imageCaption) {
+async function sendResponse(cleanJid, textMessages, imageToSend, delaySec, userId, templateMessage, imageCaption, sectionItems) {
   if (templateMessage && templateMessage.trim().length > 0) {
     console.log(`[Agent:${userId || "default"}] Sending saved product template FIRST to ${cleanJid}.`);
     await sendMessage(cleanJid, templateMessage, userId);
-    if (textMessages.length > 0 || imageToSend) {
+    if (textMessages.length > 0 || imageToSend || sectionItems && sectionItems.length > 0) {
       const waitMs = Math.max(900, Math.min(2500, delaySec * 1e3));
       await new Promise((resolve) => setTimeout(resolve, waitMs));
+    }
+  }
+  if (sectionItems && sectionItems.length > 0) {
+    for (let i = 0; i < sectionItems.length; i++) {
+      const item = sectionItems[i];
+      if (item.imageUrl) {
+        console.log(`[Agent:${userId || "default"}] Delivering dynamic section image [${i + 1}/${sectionItems.length}] to ${cleanJid}: ${item.imageUrl}${item.imageCaption ? ` (caption: "${item.imageCaption.slice(0, 30)}...")` : ""}`);
+        await sendToolImage(cleanJid, item.imageUrl, item.imageCaption || void 0, userId);
+      } else if (item.text) {
+        console.log(`[Agent:${userId || "default"}] Sending dynamic section text [${i + 1}/${sectionItems.length}] to ${cleanJid}: "${item.text.slice(0, 30)}..."`);
+        await sendMessage(cleanJid, item.text, userId);
+      }
+      if (i < sectionItems.length - 1 || textMessages.length > 0 || imageToSend) {
+        const waitMs = Math.max(900, Math.min(2500, delaySec * 1e3));
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+      }
     }
   }
   for (let i = 0; i < textMessages.length; i++) {
     const msg = textMessages[i];
     console.log(`[Agent:${userId || "default"}] Sending message [${i + 1}/${textMessages.length}] to ${cleanJid}: "${msg}"`);
     await sendMessage(cleanJid, msg, userId);
-    if (i < textMessages.length - 1) {
+    if (i < textMessages.length - 1 || imageToSend) {
       const waitMs = Math.max(900, Math.min(2500, delaySec * 1e3));
       await new Promise((resolve) => setTimeout(resolve, waitMs));
     }
   }
   if (imageToSend) {
-    console.log(`[Agent:${userId || "default"}] Delivering tool image/screenshot to ${cleanJid}: ${imageToSend}${imageCaption ? ` (caption: "${imageCaption}")` : ""}`);
-    await new Promise((resolve) => setTimeout(resolve, 1e3));
-    await sendToolImage(cleanJid, imageToSend, imageCaption || void 0, userId);
+    const alreadySentInSection = sectionItems?.some((s) => s.imageUrl === imageToSend);
+    if (!alreadySentInSection) {
+      console.log(`[Agent:${userId || "default"}] Delivering tool image/screenshot to ${cleanJid}: ${imageToSend}${imageCaption ? ` (caption: "${imageCaption}")` : ""}`);
+      await new Promise((resolve) => setTimeout(resolve, 1e3));
+      await sendToolImage(cleanJid, imageToSend, imageCaption || void 0, userId);
+    }
   }
 }
 async function evaluateAndApplyCustomerStatus(cleanJid, customer, latestCustomerText, aiStatusTag, userId = "usr_admin_badar", buyingIntentDetected = false) {
