@@ -2,7 +2,7 @@
   {
     "id": "1788311665125",
     "name": "ClipShield – YouTube Copyright Claim Remover",
-    "description": "ClipShield is a high-performance desktop application built for content creators to download, edit, and repurpose YouTube videos without triggering copyright claims. It downloads HD streams, automatically identifies viral hooks, reframes videos to 9:16 vertical format, and applies 9 layers of advanced protection to make videos undetectable by YouTube Content ID.",
+    "description": "ClipShield is a high-performance application built for content creators (available for both Mobile devices and Windows PC) to download, edit, and repurpose YouTube videos without triggering copyright claims. It downloads HD streams, automatically identifies viral hooks, reframes videos to 9:16 vertical format, and applies 9 layers of advanced protection to make videos undetectable by YouTube Content ID.",
     "category": "AI Tools",
     "status": "active",
     "pricePkr": "1500",
@@ -82,11 +82,12 @@
       "AI Viral Hook Finder: Scans long-form video to automatically identify the most viral, engaging clips",
       "Smart 9:16 Reframing: Converts landscape videos (16:9) to vertical shorts (9:16) with face-centering",
       "9-Layer Content ID Protection: Applies audio pitch, micro-speed, color grade, metadata spoofing, and crop filters",
-      "Super Fast Local Processing: All rendering runs 100% locally on your computer with zero cloud upload delays",
+      "Super Fast Local Processing: Runs on your device (Mobile or Windows PC) with zero cloud upload delays",
       "99.8% Claim-Free Success Rate: Proven track record avoiding copyright claims and channel strikes"
     ],
     "sales_points": [
-      "100% Private & Offline: Operates locally on your PC so your video assets remain completely private",
+      "Mobile & Desktop Supported: Available for both Mobile users and Windows PC creators",
+      "100% Private & Offline: Operates locally on your device so your video assets remain completely private",
       "Eliminates hours of manual editing and bypasses Content ID automatically",
       "Flexible Pricing: Monthly License at Rs. 1,500 (negotiable down to Rs. 1,000 - 1,200) and Lifetime License at Rs. 3,500 (negotiable down to Rs. 2,800 - 3,000)",
       "Lifetime updates included with Lifetime License with zero recurring fees",
@@ -100,14 +101,14 @@
       "YouTube automation and faceless channel monetization"
     ],
     "requirements": [
-      "Windows PC",
+      "Mobile device (Android/iOS) or Windows PC",
       "Hardware ID (HWID) copied from application settings for license activation"
     ],
     "limitations": [
       "Requires license key for full unlimited video processing",
       "Free version includes 1 trial video test"
     ],
-    "how_to_use": "1. Download the application & read setup guide from: https://docs.google.com/document/d/1Y4dAxV-JO_scOKUW_2gXk5Mv4c59nQQvOBETKpCALF0/edit?usp=sharing\n2. Open ClipShield, go to Settings, and copy your Hardware ID (HWID).\n3. Send your HWID to us on WhatsApp to activate your license.\n4. Paste your license key into ClipShield and start repurposing copyright-free videos.",
+    "how_to_use": "1. Download the application & read setup guide from: https://docs.google.com/document/d/1Y4dAxV-JO_scOKUW_2gXk5Mv4c59nQQvOBETKpCALF0/edit?usp=sharing (for PC) or https://docs.google.com/document/d/1dKX0N3qHkH0KqHyJw3_BD701n7aXsR-MwdOc_1jjB4U/edit (for Mobile).\n2. Open ClipShield, go to Settings, and copy your Hardware ID (HWID).\n3. Send your HWID to us on WhatsApp to activate your license.\n4. Paste your license key into ClipShield and start repurposing copyright-free videos.",
     "links": [
       {
         "title": "Official App Download & Setup Guide",
@@ -124,7 +125,7 @@
       {
         "id": "sec_1",
         "title": "Constant Dynamic Knowledge Message",
-        "content": "💯Copyright Removal Tool Full Working\nRemove YouTube Video Copyright also Convert YouTube Video into Shorts Using Ai\n\nHere is 🔰Copyright Removal Tool Link with tutorial \n\n1️⃣  Download App For Mobile\nhttps://docs.google.com/document/d/1dKX0N3qHkH0KqHyJw3_BD701n7aXsR-MwdOc_1jjB4U/edit?tab=t.0\n\nDownload Software For PC or Laptop 👇👇👇\nhttps://docs.google.com/document/d/1Y4dAxV-JO_scOKUW_2gXk5Mv4c59nQQvOBETKpCALF0/edit?usp=sharing\n\n2️⃣ See Tutorial Video\nApp: https://youtu.be/ILmoR9bkWtY\nSoftware: https://youtu.be/9tmoZPbgD84\n3️⃣It Gives only 1 Trial then you need to Buy License Key\n4️⃣1 Month Key 1200 Pkr Just\n5️⃣LifeTime Key 3500 Pkr\n\n\nFollow the BU Labs💻 channel on WhatsApp: https://whatsapp.com/channel/0029VbD0TwiFy72GJkpVaA20"
+        "content": "💯Copyright Removal Tool Full Working\nRemove YouTube Video Copyright also Convert YouTube Video into Shorts Using Ai\n\nHere is 🔰Copyright Removal Tool Link with tutorial \n\n1️⃣  Download App For Mobile\nhttps://docs.google.com/document/d/1dKX0N3qHkH0KqHyJw3_BD701n7aXsR-MwdOc_1jjB4U/edit?tab=t.0\n\nDownload Software For PC or Laptop 👇👇👇\nhttps://docs.google.com/document/d/1Y4dAxV-JO_scOKUW_2gXk5Mv4c59nQQvOBETKpCALF0/edit?usp=sharing\n\n2️⃣ See Tutorial Video\nApp: https://youtu.be/ILmoR9bkWtY\nSoftware: https://youtu.be/9tmoZPbgD84\n3️⃣It Gives only 1 Trial then you need to Buy License Key\n4️⃣1 Month Key 1500 Pkr Just\n5️⃣LifeTime Key 3500 Pkr\n\n\nFollow the BU Labs💻 channel on WhatsApp: https://whatsapp.com/channel/0029VbD0TwiFy72GJkpVaA20"
       },
       {
         "id": "sec_1789574911904",
@@ -156,12 +157,16 @@
     "objection_responses": {
       "too_expensive": "Explain that avoiding a single copyright strike or saving dozens of hours in manual video editing saves way more money than the license cost.",
       "need_time": "Remind them they can download the app right now from the doc link and test 1 free trial video to verify it works.",
-      "comparing_competitor": "Emphasize ClipShield 9-layer anti-Content ID protection and 100% local PC offline processing speed."
+      "comparing_competitor": "Emphasize ClipShield 9-layer anti-Content ID protection and local processing speed."
     },
     "faq": [
       {
         "question": "Can I test it before buying?",
         "answer": "Yes! You can download the app from our setup document and process 1 free trial video."
+      },
+      {
+        "question": "Does it work on Mobile?",
+        "answer": "Yes! ClipShield works on both Mobile devices and Windows PC with dedicated setup guides for both."
       },
       {
         "question": "Does it work on Windows?",
@@ -179,7 +184,7 @@
     "priority": 2,
     "templateMessage": {
       "enabled": true,
-      "content": "💯Copyright Removal Tool Full Working\nRemove YouTube Video Copyright also Convert YouTube Video into Shorts Using Ai\n\nHere is 🔰Copyright Removal Tool Link with tutorial\n\n1️⃣  Download Software 👇👇👇\nhttps://docs.google.com/document/d/1Y4dAxV-JO_scOKUW_2gXk5Mv4c59nQQvOBETKpCALF0/edit?usp=sharing\n\n2️⃣ See Tutorial Video https://youtu.be/9tmoZPbgD84\n3️⃣It Gives only 1 Trial then you need to Buy License Key\n4️⃣1 Month Key 1500 Pkr Just\n5️⃣LifeTime Key 3500 Pkr\n\n\nFollow the BU Labs💻 channel on WhatsApp: https://whatsapp.com/channel/0029VbD0TwiFy72GJkpVaA20",
+      "content": "💯Copyright Removal Tool Full Working\nRemove YouTube Video Copyright also Convert YouTube Video into Shorts Using Ai\n\nHere is 🔰Copyright Removal Tool Link with tutorial \n\n1️⃣  Download App For Mobile\nhttps://docs.google.com/document/d/1dKX0N3qHkH0KqHyJw3_BD701n7aXsR-MwdOc_1jjB4U/edit?tab=t.0\n\nDownload Software For PC or Laptop 👇👇👇\nhttps://docs.google.com/document/d/1Y4dAxV-JO_scOKUW_2gXk5Mv4c59nQQvOBETKpCALF0/edit?usp=sharing\n\n2️⃣ See Tutorial Video\nApp: https://youtu.be/ILmoR9bkWtY\nSoftware: https://youtu.be/9tmoZPbgD84\n3️⃣It Gives only 1 Trial then you need to Buy License Key\n4️⃣1 Month Key 1500 Pkr Just\n5️⃣LifeTime Key 3500 Pkr\n\n\nFollow the BU Labs💻 channel on WhatsApp: https://whatsapp.com/channel/0029VbD0TwiFy72GJkpVaA20",
       "sendOnce": true,
       "variablesEnabled": false
     },
