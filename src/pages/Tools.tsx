@@ -1682,10 +1682,10 @@ export default function Tools() {
                               className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs text-slate-800 outline-none focus:border-emerald-500 font-sans resize-y leading-relaxed"
                             />
 
-                            {/* Section Image & Caption Block */}
+                            {/* Section Image Block */}
                             <div className="bg-white p-3 rounded-lg border border-slate-200 space-y-2">
                               <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wider block">
-                                Section Image & Caption Message (Optional)
+                                Section Image (Optional)
                               </span>
 
                               {sec.imageUrl ? (
@@ -1735,16 +1735,6 @@ export default function Tools() {
                                   />
                                 </label>
                               )}
-
-                              <div>
-                                <input
-                                  type="text"
-                                  value={sec.imageCaption || ""}
-                                  onChange={(e) => handleUpdateSection(idx, "imageCaption", e.target.value)}
-                                  placeholder="Caption message sent with image (e.g. Here is the setup interface:)"
-                                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 outline-none focus:border-emerald-500"
-                                />
-                              </div>
                             </div>
                           </div>
                         ))}

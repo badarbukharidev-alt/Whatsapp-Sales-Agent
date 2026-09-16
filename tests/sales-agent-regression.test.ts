@@ -34,6 +34,7 @@ import {
   enforceCatalogPrices,
   enforceKnownPaymentDetails,
   stripRoboticPhrasing,
+  stripUnsolicitedSalam,
 } from "../src/server/services/reply-guard.js";
 
 /**
@@ -1433,6 +1434,18 @@ async function runRegressionSuite() {
     assert.ok(rendered.includes("Download Software"));
     assert.ok(rendered.includes("Tutorial Video"));
     assert.ok(rendered.includes("Features & Safety"));
+  });
+
+  test("16.2 UNPROMPTED SALAM: stripUnsolicitedSalam removes Walaikum Assalam when customer did not say Salam", () => {
+    const customerTextNoSalam = "copyright remover tool chyie";
+    const aiReply = "Walaikum Assalam Badar bhai! Khairiyat se hain? Aap Youtube pe kis kisam ka content...";
+    const stripped = stripUnsolicitedSalam(aiReply, customerTextNoSalam);
+    assert.strictEqual(stripped.includes("Walaikum"), false, "Must strip Walaikum Assalam when customer did not say Salam");
+    assert.ok(stripped.includes("Khairiyat se hain"));
+
+    const customerTextWithSalam = "AOA bhai copyright remover tool chyie";
+    const kept = stripUnsolicitedSalam(aiReply, customerTextWithSalam);
+    assert.ok(kept.includes("Walaikum Assalam"), "Must KEEP Walaikum Assalam when customer DID say AOA/Salam");
   });
 
   for (const t of testQueue) {

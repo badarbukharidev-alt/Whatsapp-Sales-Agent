@@ -3447,8 +3447,8 @@ CRITICAL RULES (ABSOLUTELY NO ROBOTIC BOT BEHAVIOR & ZERO HALLUCINATIONS):
    - ClipShield and VoiceDelta are ALWAYS IN STOCK and AVAILABLE for immediate setup. NEVER say "yeh filhal available nahi hai".
    - When discussing VoiceDelta, ALWAYS refer to the product as VoiceDelta. NEVER rename or call the product "ElevenLabs". You can explain that VoiceDelta includes access to official ElevenLabs and OpenAI voice models, but the product is VoiceDelta.
 3. GREETING CADENCE & NATURAL DIALOGUE:
-   - Only greet (e.g. "AOA" or "Walaikum Assalam") ONCE at the very beginning of a conversation.
-   - In an ongoing conversation (turns 2, 3, 4, etc.), DO NOT repeat greetings, and DO NOT repeat the customer's name on every message (e.g. do not say "Badar bhai" on every turn). Reply directly and conversationally to their question.
+   - ONLY say "Walaikum Assalam" (or "Walaikumassalam") IF AND ONLY IF the customer explicitly greeted with "Salam", "Assalam", "Aoa", "Slm", or "Walaikum" in their message. If the customer did NOT say Salam (e.g. they asked "copyright remover tool chiye"), NEVER say "Walaikum Assalam"! Start directly with "Ji Badar bhai!" or answer their question immediately.
+   - Only greet ONCE at the very beginning of a conversation. In an ongoing conversation (turns 2, 3, 4, etc.), DO NOT repeat greetings, and DO NOT repeat the customer's name on every message. Reply directly and conversationally to their question.
 4. VALUE SELLING & REAL PERSUASION:
    - When a customer shows interest in a tool (e.g., "Clipshied tool lena ha", "voice over tool", "Copyright Removal"), enthusiastically validate their choice! Explain WHY it is the best tool, its standout features (e.g., bypasses YouTube Content ID with 9-layer protection, instant voice cloning, local PC speed), state the price clearly, and ask a relevant question about their use case.
 5. RICH DETAILS ON DEMAND:
@@ -3891,7 +3891,20 @@ function stripRepeatedOffer(text, lastAgentText) {
   const result = kept.join("\n").trim();
   return result.length > 0 ? result : text;
 }
-var URL_REGEX, META_LEAK_REGEX, REPLY_PRICE_REGEX, PAYMENT_IDENTIFIER_REGEX, ROBOTIC_PHRASES, PLACEHOLDER_HOST_REGEX, AFFIRMATION_WORD_REGEX, AFFIRMATION_FILLER_REGEX, OFFER_VERB_SOURCE, OFFER_VERB_REGEX, CONTINUATION_STARTER_REGEX;
+function stripUnsolicitedSalam(replyText, latestCustomerText) {
+  if (!replyText) return replyText;
+  const customerSaidSalam = SALAM_GREETING_REGEX.test(latestCustomerText || "");
+  if (customerSaidSalam) return replyText;
+  const regex = /^\s*(?:Walaikum\s*Assalam|Walaikumassalam|Walaikum-assalam|Walikum\s*Assalam)\s*(?:[A-Za-z0-9_\u0600-\u06FF]+\s*(?:bhai|jan|jee|ji)?)?\s*[\!\.\,\?\:]*\s*/i;
+  if (regex.test(replyText)) {
+    const cleaned = replyText.replace(regex, "").trim();
+    if (cleaned.length > 0) {
+      return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+    }
+  }
+  return replyText;
+}
+var URL_REGEX, META_LEAK_REGEX, REPLY_PRICE_REGEX, PAYMENT_IDENTIFIER_REGEX, ROBOTIC_PHRASES, PLACEHOLDER_HOST_REGEX, AFFIRMATION_WORD_REGEX, AFFIRMATION_FILLER_REGEX, OFFER_VERB_SOURCE, OFFER_VERB_REGEX, CONTINUATION_STARTER_REGEX, SALAM_GREETING_REGEX;
 var init_reply_guard = __esm({
   "src/server/services/reply-guard.ts"() {
     URL_REGEX = /(?:https?:\/\/|www\.)[^\s<>()\[\]{}"'`]+/gi;
@@ -3914,6 +3927,7 @@ var init_reply_guard = __esm({
     OFFER_VERB_SOURCE = "bhej(?:un|oon|on|u|ou)?|bhejta|bhejdun|bhej\\s*d(?:oon|un|u|ta)|(?:send|share|de|kar|bhej|bata)\\s*(?:kar\\s*)?(?:d(?:oon|un|u|e|ee)|deta|deti)\\s*(?:h(?:oon|u|un|o|ai))?|batau|bata\\s*(?:doon|dun)|chahiye|chahye|karun|karoon";
     OFFER_VERB_REGEX = new RegExp(`(?:${OFFER_VERB_SOURCE})`, "i");
     CONTINUATION_STARTER_REGEX = /^(?:ko|ka|ki|ke|se|me|mein|par|pe|aur|ya|taake|takay|takke|jis|jise|jin|jo|hai|hain|tha|thi|the|kar|karta|karti|karte|karne|karna|kiya|deta|deti|dete|diya|raha|rahi|rahe|wala|wali|wale|bhi|to|ho|hota|hoti|hote|nahi|na|kyunke|kyunki|lekin|magar|phir|is|us|iska|uska|jab|agar)\b/i;
+    SALAM_GREETING_REGEX = /(?:salam|slm|aoa|assalam|walikum|walaikum)/i;
   }
 });
 
@@ -4561,10 +4575,12 @@ function renderTemplateMessage(tm, tool) {
 function renderDynamicSections(sections, tool) {
   if (!sections || sections.length === 0) return "";
   const parts = [];
+  const genericTitleRegex = /^(?:Constant Dynamic Knowledge Message|Dynamic Section\s*\d*|Section\s*\d*|Knowledge Section\s*\d*)$/i;
   for (const sec of sections) {
     const title = (sec.title || "").trim();
     const content = (sec.content || "").trim();
-    if (title && content) {
+    const isGenericTitle = genericTitleRegex.test(title);
+    if (title && content && !isGenericTitle) {
       if (content.toLowerCase().startsWith(title.toLowerCase())) {
         parts.push(content);
       } else {
@@ -4573,7 +4589,7 @@ ${content}`);
       }
     } else if (content) {
       parts.push(content);
-    } else if (title) {
+    } else if (title && !isGenericTitle) {
       parts.push(`*${title}*`);
     }
   }
@@ -4823,7 +4839,9 @@ async function generateResponse(cleanJid, latestCustomerText, name, batch, userI
         const sectionsText = renderDynamicSections(lockedTool.sections, lockedTool);
         if (sectionsText.trim().length > 0) {
           if (primaryMessage.trim().length > 0) {
-            if (!primaryMessage.includes(sectionsText.slice(0, 30))) {
+            const normPrimary = primaryMessage.replace(/[\s\W]+/g, "").toLowerCase();
+            const normSections = sectionsText.replace(/[\s\W]+/g, "").toLowerCase();
+            if (!normPrimary.includes(normSections.slice(0, 40)) && !normSections.includes(normPrimary.slice(0, 40))) {
               primaryMessage = primaryMessage + "\n\n" + sectionsText;
             }
           } else {
@@ -5066,6 +5084,7 @@ ${label}` : `Han bhai, ye dekho ${lockedTool.name} ka interface \u{1F447}`],
   }
   text = stripLeadingContinuationFragment(text);
   text = stripRepeatedOffer(text, lastAgentText);
+  text = stripUnsolicitedSalam(text, latestCustomerText);
   if (templateMessage && (!text || text.length < 5)) {
     text = "Aap pehle test kar lein, jab satisfied hon toh batayega payment details share kar doonga.";
   }

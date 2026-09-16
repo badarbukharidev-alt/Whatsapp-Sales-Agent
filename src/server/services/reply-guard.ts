@@ -479,3 +479,25 @@ export function stripRepeatedOffer(text: string, lastAgentText?: string | null):
   const result = kept.join("\n").trim();
   return result.length > 0 ? result : text;
 }
+
+const SALAM_GREETING_REGEX = /(?:salam|slm|aoa|assalam|walikum|walaikum)/i;
+
+/**
+ * Strips "Walaikum Assalam" or "Walaikumassalam" from the agent reply if the customer
+ * did NOT explicitly greet with a Salam in their message.
+ */
+export function stripUnsolicitedSalam(replyText: string, latestCustomerText: string): string {
+  if (!replyText) return replyText;
+  const customerSaidSalam = SALAM_GREETING_REGEX.test(latestCustomerText || "");
+  if (customerSaidSalam) return replyText;
+
+  // Customer did NOT say Salam -> strip any "Walaikum Assalam [Name]!" opening
+  const regex = /^\s*(?:Walaikum\s*Assalam|Walaikumassalam|Walaikum-assalam|Walikum\s*Assalam)\s*(?:[A-Za-z0-9_\u0600-\u06FF]+\s*(?:bhai|jan|jee|ji)?)?\s*[\!\.\,\?\:]*\s*/i;
+  if (regex.test(replyText)) {
+    const cleaned = replyText.replace(regex, "").trim();
+    if (cleaned.length > 0) {
+      return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+    }
+  }
+  return replyText;
+}

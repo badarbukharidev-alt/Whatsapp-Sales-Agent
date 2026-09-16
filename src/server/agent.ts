@@ -19,6 +19,7 @@ import {
   enforceCatalogPrices,
   enforceKnownPaymentDetails,
   stripRoboticPhrasing,
+  stripUnsolicitedSalam,
 } from "./services/reply-guard.js";
 import {
   getToolPlans,
@@ -86,10 +87,14 @@ function renderTemplateMessage(
 function renderDynamicSections(sections: ToolSection[], tool: Tool): string {
   if (!sections || sections.length === 0) return "";
   const parts: string[] = [];
+  const genericTitleRegex = /^(?:Constant Dynamic Knowledge Message|Dynamic Section\s*\d*|Section\s*\d*|Knowledge Section\s*\d*)$/i;
+
   for (const sec of sections) {
     const title = (sec.title || "").trim();
     const content = (sec.content || "").trim();
-    if (title && content) {
+    const isGenericTitle = genericTitleRegex.test(title);
+
+    if (title && content && !isGenericTitle) {
       if (content.toLowerCase().startsWith(title.toLowerCase())) {
         parts.push(content);
       } else {
@@ -97,7 +102,7 @@ function renderDynamicSections(sections: ToolSection[], tool: Tool): string {
       }
     } else if (content) {
       parts.push(content);
-    } else if (title) {
+    } else if (title && !isGenericTitle) {
       parts.push(`*${title}*`);
     }
   }
@@ -539,7 +544,9 @@ async function generateResponse(
         const sectionsText = renderDynamicSections(lockedTool.sections!, lockedTool);
         if (sectionsText.trim().length > 0) {
           if (primaryMessage.trim().length > 0) {
-            if (!primaryMessage.includes(sectionsText.slice(0, 30))) {
+            const normPrimary = primaryMessage.replace(/[\s\W]+/g, "").toLowerCase();
+            const normSections = sectionsText.replace(/[\s\W]+/g, "").toLowerCase();
+            if (!normPrimary.includes(normSections.slice(0, 40)) && !normSections.includes(normPrimary.slice(0, 40))) {
               primaryMessage = primaryMessage + "\n\n" + sectionsText;
             }
           } else {
@@ -913,6 +920,7 @@ async function generateResponse(
   }
   text = stripLeadingContinuationFragment(text);
   text = stripRepeatedOffer(text, lastAgentText);
+  text = stripUnsolicitedSalam(text, latestCustomerText);
 
   // If template was sent and AI reply became empty or trivial after URL stripping, provide clean short follow-up
   if (templateMessage && (!text || text.length < 5)) {
