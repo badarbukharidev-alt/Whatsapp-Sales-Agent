@@ -3451,6 +3451,7 @@ CRITICAL RULES (ABSOLUTELY NO ROBOTIC BOT BEHAVIOR & ZERO HALLUCINATIONS):
    - Only greet ONCE at the very beginning of a conversation. In an ongoing conversation (turns 2, 3, 4, etc.), DO NOT repeat greetings, and DO NOT repeat the customer's name on every message. Reply directly and conversationally to their question.
 4. VALUE SELLING & REAL PERSUASION:
    - When a customer shows interest in a tool (e.g., "Clipshied tool lena ha", "voice over tool", "Copyright Removal"), enthusiastically validate their choice! Explain WHY it is the best tool, its standout features (e.g., bypasses YouTube Content ID with 9-layer protection, instant voice cloning, local PC speed), state the price clearly, and ask a relevant question about their use case.
+   - NO OVERLY TECHNICAL CHAT & NO IRRELEVANT DISCOVERY QUESTIONS: Most customers do not understand complex technical jargon. Keep language simple, clear, and easy to understand. NEVER ask irrelevant interview questions like "monetization ke liye use karna chahte hain ya koi specific channel ke liye chahiye?", "shorts ke liye ya long videos?", or "aap kis kisam ka content banana chahte hain?". Answer directly, share the tool details/links, state the price, and move straight to trial/payment.
 5. RICH DETAILS ON DEMAND:
    - When the customer asks for "Details" or "How to use": Share comprehensive, structured, attractive details from the tool specifications, dynamic sections, and features. Make them realize the immense value of the software.
 6. SHARE LINKS FREELY:
@@ -3904,7 +3905,14 @@ function stripUnsolicitedSalam(replyText, latestCustomerText) {
   }
   return replyText;
 }
-var URL_REGEX, META_LEAK_REGEX, REPLY_PRICE_REGEX, PAYMENT_IDENTIFIER_REGEX, ROBOTIC_PHRASES, PLACEHOLDER_HOST_REGEX, AFFIRMATION_WORD_REGEX, AFFIRMATION_FILLER_REGEX, OFFER_VERB_SOURCE, OFFER_VERB_REGEX, CONTINUATION_STARTER_REGEX, SALAM_GREETING_REGEX;
+function stripIrrelevantDiscoveryQuestions(text) {
+  if (!text) return text;
+  if (!IRRELEVANT_DISCOVERY_REGEX.test(text)) return text;
+  let cleaned = text.replace(IRRELEVANT_DISCOVERY_REGEX, "").trim();
+  cleaned = cleaned.replace(/(?:ya\??|taake\s*sahi\s*guide\s*kar\s*sakoon\??|mashwara\s*den\??)\s*$/gi, "").trim();
+  return cleaned;
+}
+var URL_REGEX, META_LEAK_REGEX, REPLY_PRICE_REGEX, PAYMENT_IDENTIFIER_REGEX, ROBOTIC_PHRASES, PLACEHOLDER_HOST_REGEX, AFFIRMATION_WORD_REGEX, AFFIRMATION_FILLER_REGEX, OFFER_VERB_SOURCE, OFFER_VERB_REGEX, CONTINUATION_STARTER_REGEX, SALAM_GREETING_REGEX, IRRELEVANT_DISCOVERY_REGEX;
 var init_reply_guard = __esm({
   "src/server/services/reply-guard.ts"() {
     URL_REGEX = /(?:https?:\/\/|www\.)[^\s<>()\[\]{}"'`]+/gi;
@@ -3928,6 +3936,7 @@ var init_reply_guard = __esm({
     OFFER_VERB_REGEX = new RegExp(`(?:${OFFER_VERB_SOURCE})`, "i");
     CONTINUATION_STARTER_REGEX = /^(?:ko|ka|ki|ke|se|me|mein|par|pe|aur|ya|taake|takay|takke|jis|jise|jin|jo|hai|hain|tha|thi|the|kar|karta|karti|karte|karne|karna|kiya|deta|deti|dete|diya|raha|rahi|rahe|wala|wali|wale|bhi|to|ho|hota|hoti|hote|nahi|na|kyunke|kyunki|lekin|magar|phir|is|us|iska|uska|jab|agar)\b/i;
     SALAM_GREETING_REGEX = /(?:salam|slm|aoa|assalam|walikum|walaikum)/i;
+    IRRELEVANT_DISCOVERY_REGEX = /(?:aap\s+basically\s+long\s+videos|monetization\s*ke\s*liye\s*use\s*karna|specific\s*channel\s*ke\s*liye|kis\s*kisam\s*ka\s*content|konse?\s*content|niche\s*kya\s*hai|kaunsa\s*channel|use\s*karna\s*chahte\s*hain\s*ya|mashwara\s*den\s*taake)/gi;
   }
 });
 
@@ -4572,40 +4581,6 @@ function renderTemplateMessage(tm, tool) {
     (m) => values[m] !== void 0 && values[m] !== "" ? values[m] : m
   );
 }
-function renderDynamicSections(sections, tool) {
-  if (!sections || sections.length === 0) return "";
-  const parts = [];
-  const genericTitleRegex = /^(?:Constant Dynamic Knowledge Message|Dynamic Section\s*\d*|Section\s*\d*|Knowledge Section\s*\d*)$/i;
-  for (const sec of sections) {
-    const title = (sec.title || "").trim();
-    const content = (sec.content || "").trim();
-    const isGenericTitle = genericTitleRegex.test(title);
-    if (title && content && !isGenericTitle) {
-      if (content.toLowerCase().startsWith(title.toLowerCase())) {
-        parts.push(content);
-      } else {
-        parts.push(`*${title}*
-${content}`);
-      }
-    } else if (content) {
-      parts.push(content);
-    } else if (title && !isGenericTitle) {
-      parts.push(`*${title}*`);
-    }
-  }
-  let combined = parts.join("\n\n");
-  const link = tool.links && tool.links[0] && tool.links[0].url || "";
-  const values = {
-    "{tool_name}": tool.name || "",
-    "{price_pkr}": tool.pricePkr ? `Rs. ${tool.pricePkr}` : "",
-    "{price_usd}": tool.priceUsd ? `$${tool.priceUsd}` : "",
-    "{link}": link
-  };
-  return combined.replace(
-    /\{tool_name\}|\{price_pkr\}|\{price_usd\}|\{link\}/g,
-    (m) => values[m] !== void 0 && values[m] !== "" ? values[m] : m
-  );
-}
 function extractQuotedPriceSummary(templateContent) {
   const matches = templateContent.match(PRICE_MENTION_REGEX) || [];
   const cleaned = matches.map((m) => m.replace(/[^\S\r\n]+/g, " ").trim()).filter(Boolean).slice(0, 4);
@@ -5027,7 +5002,10 @@ ${label}` : `Han bhai, ye dekho ${lockedTool.name} ka interface \u{1F447}`],
       imageCaption = matchedImage.description || matchedImage.title;
     } else if (matchedSection && matchedSection.imageUrl) {
       imageToSend = matchedSection.imageUrl;
-      imageCaption = matchedSection.imageCaption || matchedSection.title;
+      const secContent = (matchedSection.content || "").trim();
+      const genericTitleRegex = /^(?:Constant Dynamic Knowledge Message|Dynamic Section\s*\d*|Section\s*\d*|Knowledge Section\s*\d*)$/i;
+      const secTitle = (matchedSection.title || "").trim();
+      imageCaption = secContent.length > 0 ? secContent : !genericTitleRegex.test(secTitle) ? secTitle : void 0;
     } else if (ref.startsWith("data/tool-images/") || ref.startsWith("/tool-images/") || ref.includes(".")) {
       imageToSend = ref;
     }
@@ -5040,13 +5018,19 @@ ${label}` : `Han bhai, ye dekho ${lockedTool.name} ka interface \u{1F447}`],
     const secWithImg = lockedTool.sections.find((s) => s.imageUrl && s.imageUrl.trim().length > 0);
     if (secWithImg) {
       imageToSend = secWithImg.imageUrl;
-      imageCaption = secWithImg.imageCaption || secWithImg.title || void 0;
+      const secContent = (secWithImg.content || "").trim();
+      const genericTitleRegex = /^(?:Constant Dynamic Knowledge Message|Dynamic Section\s*\d*|Section\s*\d*|Knowledge Section\s*\d*)$/i;
+      const secTitle = (secWithImg.title || "").trim();
+      imageCaption = secContent.length > 0 ? secContent : !genericTitleRegex.test(secTitle) ? secTitle : void 0;
     }
   }
   if (imageToSend && !imageCaption && lockedTool?.sections) {
     const matchedSec = lockedTool.sections.find((sec) => sec.imageUrl && (sec.imageUrl === imageToSend || imageToSend.includes(sec.imageUrl)));
-    if (matchedSec?.imageCaption) {
-      imageCaption = matchedSec.imageCaption;
+    if (matchedSec) {
+      const secContent = (matchedSec.content || "").trim();
+      const genericTitleRegex = /^(?:Constant Dynamic Knowledge Message|Dynamic Section\s*\d*|Section\s*\d*|Knowledge Section\s*\d*)$/i;
+      const secTitle = (matchedSec.title || "").trim();
+      imageCaption = secContent.length > 0 ? secContent : !genericTitleRegex.test(secTitle) ? secTitle : void 0;
     }
   }
   if (imageToSend) {
@@ -5085,8 +5069,11 @@ ${label}` : `Han bhai, ye dekho ${lockedTool.name} ka interface \u{1F447}`],
   text = stripLeadingContinuationFragment(text);
   text = stripRepeatedOffer(text, lastAgentText);
   text = stripUnsolicitedSalam(text, latestCustomerText);
-  if (templateMessage && (!text || text.length < 5)) {
-    text = "Aap pehle test kar lein, jab satisfied hon toh batayega payment details share kar doonga.";
+  text = stripIrrelevantDiscoveryQuestions(text);
+  if (templateMessage) {
+    if (text.length < 15 || /YouTube copyright removal|ClipShield best tool|Aap basically/i.test(text)) {
+      text = "";
+    }
   }
   if (match.matched.length > 0) {
     for (const tool of match.matched) {

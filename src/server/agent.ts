@@ -20,6 +20,7 @@ import {
   enforceKnownPaymentDetails,
   stripRoboticPhrasing,
   stripUnsolicitedSalam,
+  stripIrrelevantDiscoveryQuestions,
 } from "./services/reply-guard.js";
 import {
   getToolPlans,
@@ -80,33 +81,19 @@ function renderTemplateMessage(
   );
 }
 
+export interface FormattedSection {
+  title: string;
+  content: string;
+  imageUrl?: string;
+}
+
 /**
- * Renders all dynamic knowledge sections of a tool into a clean, formatted text string
- * for initial tool detection.
+ * Renders all dynamic knowledge sections of a tool into a list of formatted section objects
+ * for clean multi-message dispatch.
  */
-function renderDynamicSections(sections: ToolSection[], tool: Tool): string {
-  if (!sections || sections.length === 0) return "";
-  const parts: string[] = [];
+function renderDynamicSectionsList(sections: ToolSection[], tool: Tool): FormattedSection[] {
+  if (!sections || sections.length === 0) return [];
   const genericTitleRegex = /^(?:Constant Dynamic Knowledge Message|Dynamic Section\s*\d*|Section\s*\d*|Knowledge Section\s*\d*)$/i;
-
-  for (const sec of sections) {
-    const title = (sec.title || "").trim();
-    const content = (sec.content || "").trim();
-    const isGenericTitle = genericTitleRegex.test(title);
-
-    if (title && content && !isGenericTitle) {
-      if (content.toLowerCase().startsWith(title.toLowerCase())) {
-        parts.push(content);
-      } else {
-        parts.push(`*${title}*\n${content}`);
-      }
-    } else if (content) {
-      parts.push(content);
-    } else if (title && !isGenericTitle) {
-      parts.push(`*${title}*`);
-    }
-  }
-  let combined = parts.join("\n\n");
   const link = (tool.links && tool.links[0] && tool.links[0].url) || "";
   const values: Record<string, string> = {
     "{tool_name}": tool.name || "",
@@ -114,10 +101,41 @@ function renderDynamicSections(sections: ToolSection[], tool: Tool): string {
     "{price_usd}": tool.priceUsd ? `$${tool.priceUsd}` : "",
     "{link}": link,
   };
-  return combined.replace(
-    /\{tool_name\}|\{price_pkr\}|\{price_usd\}|\{link\}/g,
-    (m) => (values[m] !== undefined && values[m] !== "" ? values[m] : m)
-  );
+
+  const replaceVars = (str: string) =>
+    str.replace(/\{tool_name\}|\{price_pkr\}|\{price_usd\}|\{link\}/g, (m) =>
+      values[m] !== undefined && values[m] !== "" ? values[m] : m
+    );
+
+  const result: FormattedSection[] = [];
+  for (const sec of sections) {
+    const title = (sec.title || "").trim();
+    const rawContent = (sec.content || "").trim();
+    const isGenericTitle = genericTitleRegex.test(title);
+    let formattedText = "";
+
+    if (title && rawContent && !isGenericTitle) {
+      if (rawContent.toLowerCase().startsWith(title.toLowerCase())) {
+        formattedText = replaceVars(rawContent);
+      } else {
+        formattedText = `*${replaceVars(title)}*\n${replaceVars(rawContent)}`;
+      }
+    } else if (rawContent) {
+      formattedText = replaceVars(rawContent);
+    } else if (title && !isGenericTitle) {
+      formattedText = `*${replaceVars(title)}*`;
+    }
+
+    if (formattedText || sec.imageUrl) {
+      result.push({
+        title: isGenericTitle ? "" : title,
+        content: formattedText,
+        imageUrl: sec.imageUrl && sec.imageUrl.trim().length > 0 ? sec.imageUrl.trim() : undefined,
+      });
+    }
+  }
+
+  return result;
 }
 
 /** Matches a "Rs. 1200" / "1200 Pkr" / "$6" style price mention with its own label line. */
@@ -824,7 +842,10 @@ async function generateResponse(
       imageCaption = matchedImage.description || matchedImage.title;
     } else if (matchedSection && matchedSection.imageUrl) {
       imageToSend = matchedSection.imageUrl;
-      imageCaption = matchedSection.imageCaption || matchedSection.title;
+      const secContent = (matchedSection.content || "").trim();
+      const genericTitleRegex = /^(?:Constant Dynamic Knowledge Message|Dynamic Section\s*\d*|Section\s*\d*|Knowledge Section\s*\d*)$/i;
+      const secTitle = (matchedSection.title || "").trim();
+      imageCaption = secContent.length > 0 ? secContent : (!genericTitleRegex.test(secTitle) ? secTitle : undefined);
     } else if (ref.startsWith("data/tool-images/") || ref.startsWith("/tool-images/") || ref.includes(".")) {
       imageToSend = ref;
     }
@@ -843,14 +864,20 @@ async function generateResponse(
     const secWithImg = lockedTool.sections.find((s) => s.imageUrl && s.imageUrl.trim().length > 0);
     if (secWithImg) {
       imageToSend = secWithImg.imageUrl!;
-      imageCaption = secWithImg.imageCaption || secWithImg.title || undefined;
+      const secContent = (secWithImg.content || "").trim();
+      const genericTitleRegex = /^(?:Constant Dynamic Knowledge Message|Dynamic Section\s*\d*|Section\s*\d*|Knowledge Section\s*\d*)$/i;
+      const secTitle = (secWithImg.title || "").trim();
+      imageCaption = secContent.length > 0 ? secContent : (!genericTitleRegex.test(secTitle) ? secTitle : undefined);
     }
   }
 
   if (imageToSend && !imageCaption && lockedTool?.sections) {
     const matchedSec = lockedTool.sections.find((sec) => sec.imageUrl && (sec.imageUrl === imageToSend || imageToSend.includes(sec.imageUrl)));
-    if (matchedSec?.imageCaption) {
-      imageCaption = matchedSec.imageCaption;
+    if (matchedSec) {
+      const secContent = (matchedSec.content || "").trim();
+      const genericTitleRegex = /^(?:Constant Dynamic Knowledge Message|Dynamic Section\s*\d*|Section\s*\d*|Knowledge Section\s*\d*)$/i;
+      const secTitle = (matchedSec.title || "").trim();
+      imageCaption = secContent.length > 0 ? secContent : (!genericTitleRegex.test(secTitle) ? secTitle : undefined);
     }
   }
 
@@ -921,10 +948,13 @@ async function generateResponse(
   text = stripLeadingContinuationFragment(text);
   text = stripRepeatedOffer(text, lastAgentText);
   text = stripUnsolicitedSalam(text, latestCustomerText);
+  text = stripIrrelevantDiscoveryQuestions(text);
 
-  // If template was sent and AI reply became empty or trivial after URL stripping, provide clean short follow-up
-  if (templateMessage && (!text || text.length < 5)) {
-    text = "Aap pehle test kar lein, jab satisfied hon toh batayega payment details share kar doonga.";
+  // If initial dynamic sections / template were sent in this turn, discard redundant AI questions / pitch
+  if (templateMessage) {
+    if (text.length < 15 || /YouTube copyright removal|ClipShield best tool|Aap basically/i.test(text)) {
+      text = "";
+    }
   }
 
   // 8. Track stated facts for anti-repetition

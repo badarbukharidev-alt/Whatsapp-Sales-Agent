@@ -501,3 +501,18 @@ export function stripUnsolicitedSalam(replyText: string, latestCustomerText: str
   }
   return replyText;
 }
+
+const IRRELEVANT_DISCOVERY_REGEX =
+  /(?:aap\s+basically\s+long\s+videos|monetization\s*ke\s*liye\s*use\s*karna|specific\s*channel\s*ke\s*liye|kis\s*kisam\s*ka\s*content|konse?\s*content|niche\s*kya\s*hai|kaunsa\s*channel|use\s*karna\s*chahte\s*hain\s*ya|mashwara\s*den\s*taake)/gi;
+
+/**
+ * Strips irrelevant interview questions (e.g. "shorts ke liye ya long videos?", "specific channel ke liye chahiye?")
+ * that annoy customers asking for a tool.
+ */
+export function stripIrrelevantDiscoveryQuestions(text: string): string {
+  if (!text) return text;
+  if (!IRRELEVANT_DISCOVERY_REGEX.test(text)) return text;
+  let cleaned = text.replace(IRRELEVANT_DISCOVERY_REGEX, "").trim();
+  cleaned = cleaned.replace(/(?:ya\??|taake\s*sahi\s*guide\s*kar\s*sakoon\??|mashwara\s*den\??)\s*$/gi, "").trim();
+  return cleaned;
+}
