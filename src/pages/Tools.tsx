@@ -274,10 +274,13 @@ export default function Tools() {
   };
 
   const handleAddSection = () => {
-    setEditSections(prev => [...prev, { title: "New Dynamic Section", content: "" }]);
+    setEditSections(prev => [
+      ...prev,
+      { id: `sec_${Date.now()}`, title: `Dynamic Section ${prev.length + 1}`, content: "", imageUrl: "", imageCaption: "" }
+    ]);
   };
 
-  const handleUpdateSection = (index: number, field: "title" | "content", value: string) => {
+  const handleUpdateSection = (index: number, field: keyof ToolSection, value: string) => {
     setEditSections(prev => {
       const updated = [...prev];
       updated[index] = { ...updated[index], [field]: value };
@@ -287,6 +290,26 @@ export default function Tools() {
 
   const handleDeleteSection = (index: number) => {
     setEditSections(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleUploadSectionImage = async (index: number, file: File) => {
+    try {
+      const base64 = await fileToBase64(file);
+      const res = await axios.post("/api/tools/upload-image", {
+        filename: file.name,
+        data: base64,
+        description: `Section Image: ${editSections[index]?.title || "Dynamic Section"}`,
+        toolId: editingTool?.id,
+      });
+      if (res.data && res.data.image) {
+        const imgUrl = res.data.image.url || res.data.image.filepath;
+        handleUpdateSection(index, "imageUrl", imgUrl);
+        showToast("Section image uploaded successfully!");
+      }
+    } catch (err) {
+      console.error("Failed to upload section image:", err);
+      alert("Failed to upload section image.");
+    }
   };
 
   const handleAddLink = () => {
@@ -426,9 +449,7 @@ export default function Tools() {
         how_to_use: editHowToUse.trim(),
         limitations: editLimitations.split("\n").map(l => l.trim()).filter(Boolean),
         images: editImages,
-        sections: editSingleDynamicText.trim()
-          ? [{ id: "sec_1", title: "Constant Dynamic Knowledge Message", content: editSingleDynamicText.trim() }]
-          : [],
+        sections: editSections.filter((s) => (s.title || "").trim() || (s.content || "").trim() || (s.imageUrl || "").trim()),
         links: editLinks,
         rawDraft: editRawDraft,
         templateMessage: {
@@ -1606,24 +1627,138 @@ export default function Tools() {
                     )}
                   </div>
 
-                  {/* Single Constant Dynamic Message Section */}
-                  <div className="space-y-3">
-                    <div>
-                      <span className="text-xs font-bold text-slate-800 uppercase tracking-wider block">
-                        Constant Dynamic Section Message
-                      </span>
-                      <p className="text-[11px] text-slate-500">
-                        Enter your tool's single constant dynamic message here (as lengthy as needed). This message contains complete tool details, tutorial URLs, pricing, and WhatsApp channel link.
-                      </p>
+                  {/* Dynamic Sections (Multiple Sections with Image Upload & Caption Message) */}
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <span className="text-xs font-bold text-slate-800 uppercase tracking-wider block">
+                          Knowledge Sections ({editSections.length})
+                        </span>
+                        <p className="text-[11px] text-slate-500">
+                          Add multiple dynamic sections for guides, setup steps, or pricing. Each section supports attached images and caption messages.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleAddSection}
+                        className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-all shadow-2xs flex items-center gap-1.5"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        Add Dynamic Section
+                      </button>
                     </div>
 
-                    <textarea
-                      value={editSingleDynamicText}
-                      onChange={(e) => setEditSingleDynamicText(e.target.value)}
-                      rows={12}
-                      placeholder="Paste your tool's constant dynamic message here..."
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3.5 text-xs text-slate-800 font-sans outline-none focus:border-emerald-500 focus:bg-white resize-y leading-relaxed shadow-2xs font-mono"
-                    />
+                    {editSections.length === 0 ? (
+                      <div className="p-6 text-center bg-slate-50 rounded-xl border border-dashed border-slate-300 text-slate-400">
+                        <p className="text-xs">No dynamic sections created yet. Click "Add Dynamic Section" to create one.</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        {editSections.map((sec, idx) => (
+                          <div key={idx} className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3 relative group">
+                            <div className="flex items-center justify-between gap-2">
+                              <input
+                                type="text"
+                                value={sec.title}
+                                onChange={(e) => handleUpdateSection(idx, "title", e.target.value)}
+                                placeholder="Section Title (e.g. Setup Guide & Download Links)"
+                                className="w-full font-bold text-xs text-slate-900 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-emerald-500"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteSection(idx)}
+                                className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors shrink-0"
+                                title="Delete section"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+
+                            <textarea
+                              value={sec.content}
+                              onChange={(e) => handleUpdateSection(idx, "content", e.target.value)}
+                              rows={4}
+                              placeholder="Full section text content, instructions, links, or pricing..."
+                              className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs text-slate-800 outline-none focus:border-emerald-500 font-sans resize-y leading-relaxed"
+                            />
+
+                            {/* Section Image & Caption Block */}
+                            <div className="bg-white p-3 rounded-lg border border-slate-200 space-y-2">
+                              <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wider block">
+                                Section Image & Caption Message (Optional)
+                              </span>
+
+                              {sec.imageUrl ? (
+                                <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
+                                  <img
+                                    src={sec.imageUrl}
+                                    alt={sec.title}
+                                    className="w-16 h-16 object-cover rounded-lg border border-slate-200"
+                                  />
+                                  <div className="flex-1 space-y-1 w-full">
+                                    <p className="text-[11px] text-slate-500 font-mono truncate">{sec.imageUrl}</p>
+                                    <div className="flex items-center gap-2">
+                                      <label className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg cursor-pointer transition-colors inline-block">
+                                        Change Image
+                                        <input
+                                          type="file"
+                                          accept="image/*"
+                                          className="hidden"
+                                          onChange={(e) => {
+                                            const file = e.target.files?.[0];
+                                            if (file) handleUploadSectionImage(idx, file);
+                                          }}
+                                        />
+                                      </label>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleUpdateSection(idx, "imageUrl", "")}
+                                        className="text-xs text-red-600 hover:underline"
+                                      >
+                                        Remove Image
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+                              ) : (
+                                <label className="flex items-center gap-2 px-3 py-2 bg-slate-50 hover:bg-slate-100 border border-dashed border-slate-300 rounded-lg cursor-pointer text-xs text-slate-600 transition-colors w-fit">
+                                  <ImageIcon className="w-4 h-4 text-slate-500" />
+                                  Upload Section Image
+                                  <input
+                                    type="file"
+                                    accept="image/*"
+                                    className="hidden"
+                                    onChange={(e) => {
+                                      const file = e.target.files?.[0];
+                                      if (file) handleUploadSectionImage(idx, file);
+                                    }}
+                                  />
+                                </label>
+                              )}
+
+                              <div>
+                                <input
+                                  type="text"
+                                  value={sec.imageCaption || ""}
+                                  onChange={(e) => handleUpdateSection(idx, "imageCaption", e.target.value)}
+                                  placeholder="Caption message sent with image (e.g. Here is the setup interface:)"
+                                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 outline-none focus:border-emerald-500"
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+
+                        <button
+                          type="button"
+                          onClick={handleAddSection}
+                          className="w-full py-2 bg-white hover:bg-slate-100 text-emerald-700 border border-dashed border-emerald-300 rounded-xl text-xs font-bold transition-colors flex items-center justify-center gap-1.5 shadow-2xs"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          Add Dynamic Section
+                        </button>
+                      </div>
+                    )}
                   </div>
 
                   {/* Raw Draft Preservation Accordion */}

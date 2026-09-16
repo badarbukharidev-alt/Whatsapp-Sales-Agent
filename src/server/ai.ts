@@ -358,7 +358,7 @@ export function buildCompactPublicQuery(prompt: string, systemPrompt?: string, j
     const featuresMatch = prompt.match(/Key Features:\s*\n([\s\S]*?)(?=\n[A-Z]|\n===|$)/i);
     // FIXED: match the actual header used by prompt-service.ts: "Official Links & Downloads:"
     const linksMatch = prompt.match(/Official Links \& Downloads:\s*\n([\s\S]*?)(?=\n[A-Z]|\n===|$)/i);
-    const sectionsMatch = prompt.match(/(?:Constant Dynamic Section Message|\[SECTION:[^\]]+\])\s*\n([\s\S]*?)(?=\n\[SECTION|\n===|\n[A-Z]|$)/i);
+    const sectionsMatch = prompt.match(/(?:Dynamic Knowledge Sections[^\n]*|Constant Dynamic Section Message|=== SECTION \d+:[^\n]*|\[SECTION:[^\]]+\])\s*\n([\s\S]*?)(?=\n=== PRODUCT|\nCUSTOMER'S|\n[A-Z_]+:|$)/i);
 
     const desc = descMatch ? descMatch[1].slice(0, 140).trim() : "";
     const price = priceMatch ? priceMatch[1].slice(0, 80).trim() : "";
@@ -374,7 +374,7 @@ export function buildCompactPublicQuery(prompt: string, systemPrompt?: string, j
       ? `Official Links & Downloads:\n${allLinkLines.map(l => `  ${l.trim()}`).join("\n")}`
       : "";
 
-    const sec = sectionsMatch ? sectionsMatch[1].slice(0, 120).trim() : "";
+    const sec = sectionsMatch ? sectionsMatch[1].slice(0, 450).trim() : "";
 
     toolSummary = `ACTIVE TOOL: ${toolName}. ${desc ? `Desc: ${desc}. ` : ""}${price ? `Price: ${price}. ` : ""}${feat ? `Features: ${feat}. ` : ""}${link ? `Link: ${link}. ` : ""}${sec ? `Details: ${sec}. ` : ""}`;
 

@@ -1248,7 +1248,7 @@ function buildCompactPublicQuery(prompt, systemPrompt, jsonMode) {
     const priceMatch = prompt.match(/(?:Pricing|Regular Price|List Price):\s*([^\n]+)/i);
     const featuresMatch = prompt.match(/Key Features:\s*\n([\s\S]*?)(?=\n[A-Z]|\n===|$)/i);
     const linksMatch = prompt.match(/Official Links \& Downloads:\s*\n([\s\S]*?)(?=\n[A-Z]|\n===|$)/i);
-    const sectionsMatch = prompt.match(/(?:Constant Dynamic Section Message|\[SECTION:[^\]]+\])\s*\n([\s\S]*?)(?=\n\[SECTION|\n===|\n[A-Z]|$)/i);
+    const sectionsMatch = prompt.match(/(?:Dynamic Knowledge Sections[^\n]*|Constant Dynamic Section Message|=== SECTION \d+:[^\n]*|\[SECTION:[^\]]+\])\s*\n([\s\S]*?)(?=\n=== PRODUCT|\nCUSTOMER'S|\n[A-Z_]+:|$)/i);
     const desc = descMatch ? descMatch[1].slice(0, 140).trim() : "";
     const price = priceMatch ? priceMatch[1].slice(0, 80).trim() : "";
     const feat = featuresMatch ? featuresMatch[1].split("\n").filter(Boolean).slice(0, 2).map((f) => f.replace(/^[\*\-]\s*/, "")).join("; ").slice(0, 160) : "";
@@ -1256,7 +1256,7 @@ function buildCompactPublicQuery(prompt, systemPrompt, jsonMode) {
     const link = allLinkLines.slice(0, 1).join(" ").slice(0, 200);
     extractedLinksBlock = allLinkLines.length > 0 ? `Official Links & Downloads:
 ${allLinkLines.map((l) => `  ${l.trim()}`).join("\n")}` : "";
-    const sec = sectionsMatch ? sectionsMatch[1].slice(0, 120).trim() : "";
+    const sec = sectionsMatch ? sectionsMatch[1].slice(0, 450).trim() : "";
     toolSummary = `ACTIVE TOOL: ${toolName}. ${desc ? `Desc: ${desc}. ` : ""}${price ? `Price: ${price}. ` : ""}${feat ? `Features: ${feat}. ` : ""}${link ? `Link: ${link}. ` : ""}${sec ? `Details: ${sec}. ` : ""}`;
     if (/voice\s*delta|voicedelta/i.test(toolName)) {
       toolSummary += " [Product is VoiceDelta. Includes ElevenLabs & OpenAI voice models. Do NOT rename or call product ElevenLabs.]";
@@ -3583,9 +3583,15 @@ ${t.how_to_use}`);
         t.images.forEach((img) => toolLines.push(`  - id="${img.id}": ${img.title || img.description || "product image"}`));
       }
       if (t.sections && t.sections.length > 0) {
-        toolLines.push(`Constant Dynamic Section Message:`);
-        for (const sec of t.sections) {
-          toolLines.push(sec.content || sec.title);
+        toolLines.push(`Dynamic Knowledge Sections (${t.sections.length}):`);
+        for (let i = 0; i < t.sections.length; i++) {
+          const sec = t.sections[i];
+          toolLines.push(`=== SECTION ${i + 1}: ${sec.title || "Knowledge Section"} ===`);
+          if (sec.content) toolLines.push(sec.content);
+          if (sec.imageUrl) {
+            toolLines.push(`  - Section Attached Image: "${sec.imageUrl}"${sec.imageCaption ? ` (Caption: "${sec.imageCaption}")` : ""}`);
+            toolLines.push(`  - To send this image with caption, output tag: [SEND_IMAGE: ${sec.imageUrl}]`);
+          }
         }
       }
       if (t.faq && t.faq.length > 0) {
@@ -4702,7 +4708,7 @@ async function handleCustomerMessageBatch(phoneNumber, batch, name, userId = "us
     return;
   }
   const delaySec = settings.responseDelaySeconds || 1.4;
-  await sendResponse(cleanJid, response.textMessages, response.imageToSend, delaySec, userId, response.templateMessage);
+  await sendResponse(cleanJid, response.textMessages, response.imageToSend, delaySec, userId, response.templateMessage, response.imageCaption);
   const replyParts = [];
   if (response.templateMessage) replyParts.push(response.templateMessage);
   replyParts.push(...response.textMessages);
@@ -4942,15 +4948,31 @@ ${label}` : `Han bhai, ye dekho ${lockedTool.name} ka interface \u{1F447}`],
     text = text.replace(statusTagMatch[0], "").trim();
   }
   let imageToSend = null;
+  let imageCaption = void 0;
   const imageTagMatch = text.match(/\[(?:SEND_IMAGE|ATTACH_IMAGE):\s*([^\]]+)\]/i);
   if (imageTagMatch) {
     const ref = imageTagMatch[1].trim().replace(/^["']|["']$/g, "");
-    const matchedImage = lockedTool?.images?.find((img) => img.id === ref || img.filename === ref);
-    imageToSend = matchedImage ? matchedImage.filepath || matchedImage.url : null;
+    const matchedImage = lockedTool?.images?.find((img) => img.id === ref || img.filename === ref || img.filepath === ref || img.url === ref);
+    const matchedSection = lockedTool?.sections?.find((sec) => sec.imageUrl && (sec.imageUrl === ref || sec.imageUrl.includes(ref)));
+    if (matchedImage) {
+      imageToSend = matchedImage.filepath || matchedImage.url;
+      imageCaption = matchedImage.description || matchedImage.title;
+    } else if (matchedSection && matchedSection.imageUrl) {
+      imageToSend = matchedSection.imageUrl;
+      imageCaption = matchedSection.imageCaption || matchedSection.title;
+    } else if (ref.startsWith("data/tool-images/") || ref.startsWith("/tool-images/") || ref.includes(".")) {
+      imageToSend = ref;
+    }
     text = text.replace(imageTagMatch[0], "").trim();
   }
   if (!imageToSend && autoAttachImage) {
     imageToSend = autoAttachImage;
+  }
+  if (imageToSend && !imageCaption && lockedTool?.sections) {
+    const matchedSec = lockedTool.sections.find((sec) => sec.imageUrl && (sec.imageUrl === imageToSend || imageToSend.includes(sec.imageUrl)));
+    if (matchedSec?.imageCaption) {
+      imageCaption = matchedSec.imageCaption;
+    }
   }
   if (imageToSend) {
     const sentImage = autoAttachSelection?.image || lockedTool?.images?.find((img) => (img.filepath || img.url) === imageToSend);
@@ -5048,10 +5070,11 @@ ${formatPlanLines(toolPlans)}`;
   return {
     textMessages: messages,
     imageToSend,
+    imageCaption,
     templateMessage
   };
 }
-async function sendResponse(cleanJid, textMessages, imageToSend, delaySec, userId, templateMessage) {
+async function sendResponse(cleanJid, textMessages, imageToSend, delaySec, userId, templateMessage, imageCaption) {
   if (templateMessage && templateMessage.trim().length > 0) {
     console.log(`[Agent:${userId || "default"}] Sending saved product template FIRST to ${cleanJid}.`);
     await sendMessage(cleanJid, templateMessage, userId);
@@ -5070,9 +5093,9 @@ async function sendResponse(cleanJid, textMessages, imageToSend, delaySec, userI
     }
   }
   if (imageToSend) {
-    console.log(`[Agent:${userId || "default"}] Delivering tool screenshot to ${cleanJid}: ${imageToSend}`);
+    console.log(`[Agent:${userId || "default"}] Delivering tool image/screenshot to ${cleanJid}: ${imageToSend}${imageCaption ? ` (caption: "${imageCaption}")` : ""}`);
     await new Promise((resolve) => setTimeout(resolve, 1e3));
-    await sendToolImage(cleanJid, imageToSend, void 0, userId);
+    await sendToolImage(cleanJid, imageToSend, imageCaption || void 0, userId);
   }
 }
 async function evaluateAndApplyCustomerStatus(cleanJid, customer, latestCustomerText, aiStatusTag, userId = "usr_admin_badar", buyingIntentDetected = false) {

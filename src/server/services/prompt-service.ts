@@ -259,11 +259,17 @@ CRITICAL RULES (ABSOLUTELY NO ROBOTIC BOT BEHAVIOR & ZERO HALLUCINATIONS):
         t.images.forEach((img) => toolLines.push(`  - id="${img.id}": ${img.title || img.description || "product image"}`));
       }
 
-      // SINGLE CONSTANT DYNAMIC SECTION MESSAGE
+      // MULTIPLE DYNAMIC KNOWLEDGE SECTIONS
       if (t.sections && t.sections.length > 0) {
-        toolLines.push(`Constant Dynamic Section Message:`);
-        for (const sec of t.sections) {
-          toolLines.push(sec.content || sec.title);
+        toolLines.push(`Dynamic Knowledge Sections (${t.sections.length}):`);
+        for (let i = 0; i < t.sections.length; i++) {
+          const sec = t.sections[i];
+          toolLines.push(`=== SECTION ${i + 1}: ${sec.title || "Knowledge Section"} ===`);
+          if (sec.content) toolLines.push(sec.content);
+          if (sec.imageUrl) {
+            toolLines.push(`  - Section Attached Image: "${sec.imageUrl}"${sec.imageCaption ? ` (Caption: "${sec.imageCaption}")` : ""}`);
+            toolLines.push(`  - To send this image with caption, output tag: [SEND_IMAGE: ${sec.imageUrl}]`);
+          }
         }
       }
 

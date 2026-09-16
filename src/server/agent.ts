@@ -365,7 +365,7 @@ async function handleCustomerMessageBatch(
 
   // 4. Send response: saved product template FIRST (exactly as stored), then AI messages.
   const delaySec = settings.responseDelaySeconds || 1.4;
-  await sendResponse(cleanJid, response.textMessages, response.imageToSend, delaySec, userId, response.templateMessage);
+  await sendResponse(cleanJid, response.textMessages, response.imageToSend, delaySec, userId, response.templateMessage, response.imageCaption);
 
   // 5. Save agent reply immediately to permanent memory (template included for history).
   // A delivered image is stored as a real imageUrl so the admin chat view renders
@@ -388,7 +388,7 @@ async function generateResponse(
   name?: string,
   batch?: QueuedIncomingMessage[],
   userId = "usr_admin_badar"
-): Promise<{ textMessages: string[]; imageToSend: string | null; templateMessage: string | null }> {
+): Promise<{ textMessages: string[]; imageToSend: string | null; imageCaption?: string; templateMessage: string | null }> {
   const settings = await getSettings(userId);
 
   // 1. Load permanent customer record BEFORE generating reply
@@ -748,12 +748,25 @@ async function generateResponse(
   // an image that actually exists (an id it invents simply resolves to
   // nothing and no image is sent, rather than trying to read an arbitrary
   // fabricated file path off disk).
+  // 6. Extract image tags e.g. [SEND_IMAGE: <id_or_url>] — resolved against the
+  // locked tool's real uploaded images OR dynamic section images with captions.
   let imageToSend: string | null = null;
+  let imageCaption: string | undefined = undefined;
   const imageTagMatch = text.match(/\[(?:SEND_IMAGE|ATTACH_IMAGE):\s*([^\]]+)\]/i);
   if (imageTagMatch) {
     const ref = imageTagMatch[1].trim().replace(/^["']|["']$/g, "");
-    const matchedImage = lockedTool?.images?.find((img) => img.id === ref || img.filename === ref);
-    imageToSend = matchedImage ? matchedImage.filepath || matchedImage.url : null;
+    const matchedImage = lockedTool?.images?.find((img) => img.id === ref || img.filename === ref || img.filepath === ref || img.url === ref);
+    const matchedSection = lockedTool?.sections?.find((sec) => sec.imageUrl && (sec.imageUrl === ref || sec.imageUrl.includes(ref)));
+
+    if (matchedImage) {
+      imageToSend = matchedImage.filepath || matchedImage.url;
+      imageCaption = matchedImage.description || matchedImage.title;
+    } else if (matchedSection && matchedSection.imageUrl) {
+      imageToSend = matchedSection.imageUrl;
+      imageCaption = matchedSection.imageCaption || matchedSection.title;
+    } else if (ref.startsWith("data/tool-images/") || ref.startsWith("/tool-images/") || ref.includes(".")) {
+      imageToSend = ref;
+    }
     text = text.replace(imageTagMatch[0], "").trim();
   }
 
@@ -762,6 +775,14 @@ async function generateResponse(
   if (!imageToSend && autoAttachImage) {
     imageToSend = autoAttachImage;
   }
+
+  if (imageToSend && !imageCaption && lockedTool?.sections) {
+    const matchedSec = lockedTool.sections.find((sec) => sec.imageUrl && (sec.imageUrl === imageToSend || imageToSend.includes(sec.imageUrl)));
+    if (matchedSec?.imageCaption) {
+      imageCaption = matchedSec.imageCaption;
+    }
+  }
+
   // Record whatever actually goes out, so cooldown/anti-repeat works next turn.
   if (imageToSend) {
     const sentImage =
@@ -922,6 +943,7 @@ async function generateResponse(
   return {
     textMessages: messages,
     imageToSend,
+    imageCaption,
     templateMessage,
   };
 }
@@ -935,7 +957,8 @@ async function sendResponse(
   imageToSend: string | null,
   delaySec: number,
   userId?: string,
-  templateMessage?: string | null
+  templateMessage?: string | null,
+  imageCaption?: string | null
 ) {
   // TEMPLATE ORDER GUARANTEE: the saved product template is ALWAYS sent first,
   // exactly as stored, before any AI-generated message.
@@ -960,9 +983,9 @@ async function sendResponse(
   }
 
   if (imageToSend) {
-    console.log(`[Agent:${userId || 'default'}] Delivering tool screenshot to ${cleanJid}: ${imageToSend}`);
+    console.log(`[Agent:${userId || 'default'}] Delivering tool image/screenshot to ${cleanJid}: ${imageToSend}${imageCaption ? ` (caption: "${imageCaption}")` : ""}`);
     await new Promise((resolve) => setTimeout(resolve, 1000));
-    await sendToolImage(cleanJid, imageToSend, undefined, userId);
+    await sendToolImage(cleanJid, imageToSend, imageCaption || undefined, userId);
   }
 }
 

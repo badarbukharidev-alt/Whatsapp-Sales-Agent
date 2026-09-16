@@ -174,6 +174,8 @@ export interface ToolSection {
   id?: string;
   title: string;
   content: string;
+  imageUrl?: string;
+  imageCaption?: string;
 }
 
 export interface ToolLink {
