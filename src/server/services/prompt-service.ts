@@ -318,8 +318,9 @@ CRITICAL RULES (ABSOLUTELY NO ROBOTIC BOT BEHAVIOR & ZERO HALLUCINATIONS):
   // 4. PAYMENT METHODS (Injected when payment is mentioned)
   const isPaymentRelevant =
     explicitPaymentRequest ||
-    latestCustomerText.match(/(?:pay|payment|jazzcash|easypaisa|bank|raast|account|bhejo|transfer|kese\s+loon|kharidna|buy)/i) ||
-    memory?.stage === "payment_pending";
+    Boolean(latestCustomerText.match(/(?:pay|payment|jazzcash|easypaisa|bank|raast|account|acc|acct|bhejo|bhjo|transfer|kese\s+loon|kharidna|buy)/i)) ||
+    memory?.stage === "payment_pending" ||
+    memory?.paymentDetailsSent === true;
 
   const paymentLines: string[] = [];
   if (isPaymentRelevant) {

@@ -39,9 +39,9 @@ import { selectImageForTurn, recordImageSent, describeImageForPrompt } from "./s
 const BUYING_INTENT_REGEX =
   /(?:\b(?:le?na|lena|leni|chahiye|chaiye|chahye)\b|\blink\b|\bprice\b|\brate\b|\bkitne?\b|\bkitna\b|final\s*price|\bpayment\b|jazz\s*cash|jazzcash|easy\s*paisa|easypaisa|\braast\b|account\s*(?:number|details|no)|\bpro\b|start\s*kar|shuru\s*kar|kharid|khareed|purchase|\bbuy\b|sub\s*len|order\s*kar|paise?\s*(?:bhej|send|transfer|kaha))/i;
 
-/** Explicit payment-details request. */
+/** Explicit payment-details request (Roman Urdu + English shorthand). */
 const EXPLICIT_PAYMENT_REGEX =
-  /(?:payment\s*(?:details|method|info|kaise|karni|kar\s*d|number|account)|kaise?\s*pay|kahan?\s*(?:pay|paise|paisay|bhej)|account\s*(?:number|details|title|no)\b|jazz\s*cash|jazzcash|easy\s*paisa|easypaisa|\braast\b|bank\s*(?:details|account)|\bpay\s*(?:karna|karni|karu|karoon|kru|kro|kese|kaise)\b|pais(?:e|ay)?\s*(?:kaise|kese)\s*(?:du|doon|dun|de|karu|karoon)|\bhow\s*to\s*pay\b)/i;
+  /(?:payment\s*(?:details|method|info|kaise|karni|kar\s*d|number|account|krni|krna|karna|do|de|bhejo|bhjo|bhej|send|share|hy|hai)?|kaise?\s*pay|kahan?\s*(?:pay|paise|paisay|bhej)|account\s*(?:number|details|title|no|bhejo|bhjo|bhej|do|de|send|share)?\b|\bacc(?:t)?\s*(?:details|number|no|title|bhejo|bhjo|bhej|do|de|send|share)?\b|jazz\s*cash|jazzcash|easy\s*paisa|easypaisa|\braast\b|bank\s*(?:details|account)|\bpay\s*(?:karna|karni|krna|krni|karu|karoon|kru|kro|kese|kaise|do|de|bhejo|bhjo|bhej)\b|pais(?:e|ay)?\s*(?:kaise|kese)\s*(?:du|doon|dun|de|karu|karoon)|\bhow\s*to\s*pay\b|\bwhere\s*to\s*pay\b)/i;
 
 /** Explicit link / download request. */
 const EXPLICIT_LINK_REGEX =
