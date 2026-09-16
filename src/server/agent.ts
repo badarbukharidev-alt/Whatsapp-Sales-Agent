@@ -79,6 +79,42 @@ function renderTemplateMessage(
   );
 }
 
+/**
+ * Renders all dynamic knowledge sections of a tool into a clean, formatted text string
+ * for initial tool detection.
+ */
+function renderDynamicSections(sections: ToolSection[], tool: Tool): string {
+  if (!sections || sections.length === 0) return "";
+  const parts: string[] = [];
+  for (const sec of sections) {
+    const title = (sec.title || "").trim();
+    const content = (sec.content || "").trim();
+    if (title && content) {
+      if (content.toLowerCase().startsWith(title.toLowerCase())) {
+        parts.push(content);
+      } else {
+        parts.push(`*${title}*\n${content}`);
+      }
+    } else if (content) {
+      parts.push(content);
+    } else if (title) {
+      parts.push(`*${title}*`);
+    }
+  }
+  let combined = parts.join("\n\n");
+  const link = (tool.links && tool.links[0] && tool.links[0].url) || "";
+  const values: Record<string, string> = {
+    "{tool_name}": tool.name || "",
+    "{price_pkr}": tool.pricePkr ? `Rs. ${tool.pricePkr}` : "",
+    "{price_usd}": tool.priceUsd ? `$${tool.priceUsd}` : "",
+    "{link}": link,
+  };
+  return combined.replace(
+    /\{tool_name\}|\{price_pkr\}|\{price_usd\}|\{link\}/g,
+    (m) => (values[m] !== undefined && values[m] !== "" ? values[m] : m)
+  );
+}
+
 /** Matches a "Rs. 1200" / "1200 Pkr" / "$6" style price mention with its own label line. */
 const PRICE_MENTION_REGEX =
   /(?:^|\n)[^\n]{0,40}?(?:rs\.?\s?[\d,]+|[\d,]+\s?(?:rs|pkr|rupees)|\$\s?[\d,]+)[^\n]{0,20}/gi;
@@ -483,23 +519,41 @@ async function generateResponse(
       `plan=${convoState.known.selectedPlan || "none"} | template: ${convoState.templateDecisionReason}`
   );
 
-  // 4. SAVED PRODUCT TEMPLATE MESSAGE — sent FIRST, exactly once, and ONLY to a
-  // genuine new lead. A customer who already installed the app, handed over a
-  // Device ID, or is asking for a licence must never be advertised at again.
+  // 4. SAVED PRODUCT TEMPLATE & DYNAMIC SECTIONS MESSAGE — sent FIRST, exactly once,
+  // when a tool is detected for the first time for a customer.
   let templateMessage: string | null = null;
   const templatesSent = [...(memory.templatesSent || [])];
   const quotedPrices: Record<string, string> = { ...(memory.quotedPrices || {}) };
   if (lockedTool && directlyDetectedTool && directlyDetectedTool.id === lockedTool.id && convoState.shouldSendTemplate) {
-    const tm = lockedTool.templateMessage;
     const alreadySent = templatesSent.includes(lockedTool.id);
-    const sendOnce = tm?.sendOnce !== false; // default: send once
-    if (tm?.enabled && (tm.content || "").trim().length > 0 && !(sendOnce && alreadySent)) {
-      templateMessage = renderTemplateMessage(tm, lockedTool);
-      if (!templatesSent.includes(lockedTool.id)) templatesSent.push(lockedTool.id);
-      // Record whatever price the template actually quoted so later turns never
-      // contradict it (the template can legitimately differ from tool.pricePkr).
-      const quoted = extractQuotedPriceSummary(templateMessage);
-      if (quoted) quotedPrices[lockedTool.name] = quoted;
+    if (!alreadySent) {
+      const tm = lockedTool.templateMessage;
+      let primaryMessage = "";
+      if (tm?.enabled && (tm.content || "").trim().length > 0) {
+        primaryMessage = renderTemplateMessage(tm, lockedTool);
+      }
+
+      // Automatically include all dynamic knowledge sections when tool is detected for the first time
+      const hasSections = lockedTool.sections && lockedTool.sections.length > 0;
+      if (hasSections) {
+        const sectionsText = renderDynamicSections(lockedTool.sections!, lockedTool);
+        if (sectionsText.trim().length > 0) {
+          if (primaryMessage.trim().length > 0) {
+            if (!primaryMessage.includes(sectionsText.slice(0, 30))) {
+              primaryMessage = primaryMessage + "\n\n" + sectionsText;
+            }
+          } else {
+            primaryMessage = sectionsText;
+          }
+        }
+      }
+
+      if (primaryMessage.trim().length > 0) {
+        templateMessage = primaryMessage;
+        if (!templatesSent.includes(lockedTool.id)) templatesSent.push(lockedTool.id);
+        const quoted = extractQuotedPriceSummary(templateMessage);
+        if (quoted) quotedPrices[lockedTool.name] = quoted;
+      }
     }
   }
 
@@ -774,6 +828,16 @@ async function generateResponse(
   // didn't ask for it (it usually won't, especially on the fallback model).
   if (!imageToSend && autoAttachImage) {
     imageToSend = autoAttachImage;
+  }
+
+  // If a first-time template with dynamic sections was sent and no image was chosen yet,
+  // automatically attach the image from the first section that has one.
+  if (!imageToSend && templateMessage && lockedTool?.sections) {
+    const secWithImg = lockedTool.sections.find((s) => s.imageUrl && s.imageUrl.trim().length > 0);
+    if (secWithImg) {
+      imageToSend = secWithImg.imageUrl!;
+      imageCaption = secWithImg.imageCaption || secWithImg.title || undefined;
+    }
   }
 
   if (imageToSend && !imageCaption && lockedTool?.sections) {

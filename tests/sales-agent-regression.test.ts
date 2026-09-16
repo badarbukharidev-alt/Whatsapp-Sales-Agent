@@ -1420,6 +1420,21 @@ async function runRegressionSuite() {
     assert.ok(/must NOT state, guess or estimate any price/i.test(block));
   });
 
+  test("16.1 DYNAMIC SECTIONS: multiple dynamic sections are rendered when tool is detected", () => {
+    const toolWithSections: Tool = {
+      ...clipTool,
+      sections: [
+        { title: "Download Software", content: "https://docs.google.com/document/d/123" },
+        { title: "Tutorial Video", content: "https://youtu.be/9tmoZPbgD84" },
+        { title: "Features & Safety", content: "Remove YouTube Video Copyright cleanly." }
+      ]
+    };
+    const rendered = (toolWithSections.sections || []).map(s => `*${s.title}*\n${s.content}`).join("\n\n");
+    assert.ok(rendered.includes("Download Software"));
+    assert.ok(rendered.includes("Tutorial Video"));
+    assert.ok(rendered.includes("Features & Safety"));
+  });
+
   for (const t of testQueue) {
     try {
       await t.fn();

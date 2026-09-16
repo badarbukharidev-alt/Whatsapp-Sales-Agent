@@ -4558,6 +4558,38 @@ function renderTemplateMessage(tm, tool) {
     (m) => values[m] !== void 0 && values[m] !== "" ? values[m] : m
   );
 }
+function renderDynamicSections(sections, tool) {
+  if (!sections || sections.length === 0) return "";
+  const parts = [];
+  for (const sec of sections) {
+    const title = (sec.title || "").trim();
+    const content = (sec.content || "").trim();
+    if (title && content) {
+      if (content.toLowerCase().startsWith(title.toLowerCase())) {
+        parts.push(content);
+      } else {
+        parts.push(`*${title}*
+${content}`);
+      }
+    } else if (content) {
+      parts.push(content);
+    } else if (title) {
+      parts.push(`*${title}*`);
+    }
+  }
+  let combined = parts.join("\n\n");
+  const link = tool.links && tool.links[0] && tool.links[0].url || "";
+  const values = {
+    "{tool_name}": tool.name || "",
+    "{price_pkr}": tool.pricePkr ? `Rs. ${tool.pricePkr}` : "",
+    "{price_usd}": tool.priceUsd ? `$${tool.priceUsd}` : "",
+    "{link}": link
+  };
+  return combined.replace(
+    /\{tool_name\}|\{price_pkr\}|\{price_usd\}|\{link\}/g,
+    (m) => values[m] !== void 0 && values[m] !== "" ? values[m] : m
+  );
+}
 function extractQuotedPriceSummary(templateContent) {
   const matches = templateContent.match(PRICE_MENTION_REGEX) || [];
   const cleaned = matches.map((m) => m.replace(/[^\S\r\n]+/g, " ").trim()).filter(Boolean).slice(0, 4);
@@ -4779,14 +4811,32 @@ async function generateResponse(cleanJid, latestCustomerText, name, batch, userI
   const templatesSent = [...memory.templatesSent || []];
   const quotedPrices = { ...memory.quotedPrices || {} };
   if (lockedTool && directlyDetectedTool && directlyDetectedTool.id === lockedTool.id && convoState.shouldSendTemplate) {
-    const tm = lockedTool.templateMessage;
     const alreadySent = templatesSent.includes(lockedTool.id);
-    const sendOnce = tm?.sendOnce !== false;
-    if (tm?.enabled && (tm.content || "").trim().length > 0 && !(sendOnce && alreadySent)) {
-      templateMessage = renderTemplateMessage(tm, lockedTool);
-      if (!templatesSent.includes(lockedTool.id)) templatesSent.push(lockedTool.id);
-      const quoted = extractQuotedPriceSummary(templateMessage);
-      if (quoted) quotedPrices[lockedTool.name] = quoted;
+    if (!alreadySent) {
+      const tm = lockedTool.templateMessage;
+      let primaryMessage = "";
+      if (tm?.enabled && (tm.content || "").trim().length > 0) {
+        primaryMessage = renderTemplateMessage(tm, lockedTool);
+      }
+      const hasSections = lockedTool.sections && lockedTool.sections.length > 0;
+      if (hasSections) {
+        const sectionsText = renderDynamicSections(lockedTool.sections, lockedTool);
+        if (sectionsText.trim().length > 0) {
+          if (primaryMessage.trim().length > 0) {
+            if (!primaryMessage.includes(sectionsText.slice(0, 30))) {
+              primaryMessage = primaryMessage + "\n\n" + sectionsText;
+            }
+          } else {
+            primaryMessage = sectionsText;
+          }
+        }
+      }
+      if (primaryMessage.trim().length > 0) {
+        templateMessage = primaryMessage;
+        if (!templatesSent.includes(lockedTool.id)) templatesSent.push(lockedTool.id);
+        const quoted = extractQuotedPriceSummary(templateMessage);
+        if (quoted) quotedPrices[lockedTool.name] = quoted;
+      }
     }
   }
   const journeyPatch = memoryPatchFromState(convoState);
@@ -4967,6 +5017,13 @@ ${label}` : `Han bhai, ye dekho ${lockedTool.name} ka interface \u{1F447}`],
   }
   if (!imageToSend && autoAttachImage) {
     imageToSend = autoAttachImage;
+  }
+  if (!imageToSend && templateMessage && lockedTool?.sections) {
+    const secWithImg = lockedTool.sections.find((s) => s.imageUrl && s.imageUrl.trim().length > 0);
+    if (secWithImg) {
+      imageToSend = secWithImg.imageUrl;
+      imageCaption = secWithImg.imageCaption || secWithImg.title || void 0;
+    }
   }
   if (imageToSend && !imageCaption && lockedTool?.sections) {
     const matchedSec = lockedTool.sections.find((sec) => sec.imageUrl && (sec.imageUrl === imageToSend || imageToSend.includes(sec.imageUrl)));
