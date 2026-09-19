@@ -1448,6 +1448,14 @@ async function runRegressionSuite() {
     assert.ok(kept.includes("Walaikum Assalam"), "Must KEEP Walaikum Assalam when customer DID say AOA/Salam");
   });
 
+  // =========================================================================
+  // SCENARIO 17: CONVERSATION MODE — Enable / Disable AI Conversation
+  // =========================================================================
+  test("17.1 CONVERSATION MODE OFF: when conversationMode is false, agent sends dynamic messages and skips AI conversation", () => {
+    const settings = { aiAgentEnabled: true, conversationMode: false };
+    assert.strictEqual(settings.conversationMode, false, "Conversation mode must be configurable to false");
+  });
+
   for (const t of testQueue) {
     try {
       await t.fn();

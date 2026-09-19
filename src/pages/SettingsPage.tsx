@@ -35,6 +35,7 @@ export default function SettingsPage({ agentSettings, fetchSettings }: SettingsP
   const [settings, setSettings] = useState<AgentSettings>({
     preferredApi: "gemini",
     aiAgentEnabled: true,
+    conversationMode: true,
     chatStyle: "casual_roman_urdu",
     maxTokens: 150,
     systemPrompt: "",
@@ -289,6 +290,36 @@ export default function SettingsPage({ agentSettings, fetchSettings }: SettingsP
                 className="sr-only peer"
               />
               <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+            </label>
+          </div>
+
+          {/* AI Conversation Mode Toggle */}
+          <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
+                <MessageSquare className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-bold text-slate-900">AI Conversation Mode</h3>
+                  <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full uppercase tracking-wider ${settings.conversationMode !== false ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>
+                    {settings.conversationMode !== false ? "Conversation Enabled" : "Dynamic Messages Only"}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  When ON, the agent engages in AI sales conversation. When OFF, the agent detects the requested tool, sends all dynamic section messages (text & images), and refrains from AI follow-up conversation.
+                </p>
+              </div>
+            </div>
+
+            <label className="relative inline-flex items-center cursor-pointer">
+              <input
+                type="checkbox"
+                checked={settings.conversationMode !== false}
+                onChange={(e) => setSettings({ ...settings, conversationMode: e.target.checked })}
+                className="sr-only peer"
+              />
+              <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
             </label>
           </div>
 

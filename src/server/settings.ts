@@ -13,6 +13,7 @@ export const getSettingsFile = (userId?: string) => {
 
 const DEFAULT_SETTINGS = {
   aiAgentEnabled: true,
+  conversationMode: true,
   preferredApi: "gemini",
   defaultLLM: "Gemini",
   language: "Roman Urdu",

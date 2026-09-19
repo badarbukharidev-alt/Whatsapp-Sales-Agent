@@ -966,6 +966,7 @@ var init_settings = __esm({
     };
     DEFAULT_SETTINGS = {
       aiAgentEnabled: true,
+      conversationMode: true,
       preferredApi: "gemini",
       defaultLLM: "Gemini",
       language: "Roman Urdu",
@@ -4860,9 +4861,9 @@ async function generateResponse(cleanJid, latestCustomerText, name, batch, userI
   const sectionItems = [];
   const templatesSent = [...memory.templatesSent || []];
   const quotedPrices = { ...memory.quotedPrices || {} };
-  if (lockedTool && directlyDetectedTool && directlyDetectedTool.id === lockedTool.id && convoState.shouldSendTemplate) {
+  if (lockedTool && directlyDetectedTool && directlyDetectedTool.id === lockedTool.id && (convoState.shouldSendTemplate || settings.conversationMode === false)) {
     const alreadySent = templatesSent.includes(lockedTool.id);
-    if (!alreadySent) {
+    if (!alreadySent || settings.conversationMode === false) {
       const tm = lockedTool.templateMessage;
       let primaryMessage = "";
       if (tm?.enabled && (tm.content || "").trim().length > 0) {
@@ -4911,6 +4912,17 @@ async function generateResponse(cleanJid, latestCustomerText, name, batch, userI
     );
   } else if (Object.keys(journeyPatch).length > 0) {
     await customerService.updateCustomerMemory(cleanJid, journeyPatch, userId);
+  }
+  if (settings.conversationMode === false) {
+    console.log(`[Agent:${userId}] Conversation Mode is OFF. Returning dynamic section messages without AI conversation for ${cleanJid}.`);
+    await evaluateAndApplyCustomerStatus(cleanJid, customer, latestCustomerText, null, userId, BUYING_INTENT_REGEX.test(latestCustomerText));
+    return {
+      textMessages: [],
+      imageToSend: null,
+      imageCaption: void 0,
+      templateMessage,
+      sectionItems
+    };
   }
   const buyingIntent = BUYING_INTENT_REGEX.test(latestCustomerText);
   const explicitPaymentRequest = EXPLICIT_PAYMENT_REGEX.test(latestCustomerText);

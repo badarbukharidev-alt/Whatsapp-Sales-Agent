@@ -392,6 +392,7 @@ export interface PaymentMethod {
 
 export interface AgentSettings {
   aiAgentEnabled: boolean;
+  conversationMode?: boolean;
   preferredApi?: "gemini" | "deepseek-v3" | "claude-haiku" | "gptlogic" | string;
   defaultLLM?: "Gemini" | "DeepSeek" | "Claude" | "GPTLogic" | string;
   language?: string;

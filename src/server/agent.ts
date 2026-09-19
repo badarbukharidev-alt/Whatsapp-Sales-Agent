@@ -573,16 +573,16 @@ async function generateResponse(
 
   const templatesSent = [...(memory.templatesSent || [])];
   const quotedPrices: Record<string, string> = { ...(memory.quotedPrices || {}) };
-  if (lockedTool && directlyDetectedTool && directlyDetectedTool.id === lockedTool.id && convoState.shouldSendTemplate) {
+  if (lockedTool && directlyDetectedTool && directlyDetectedTool.id === lockedTool.id && (convoState.shouldSendTemplate || settings.conversationMode === false)) {
     const alreadySent = templatesSent.includes(lockedTool.id);
-    if (!alreadySent) {
+    if (!alreadySent || settings.conversationMode === false) {
       const tm = lockedTool.templateMessage;
       let primaryMessage = "";
       if (tm?.enabled && (tm.content || "").trim().length > 0) {
         primaryMessage = renderTemplateMessage(tm, lockedTool);
       }
 
-      // Automatically include all dynamic knowledge sections when tool is detected for the first time
+      // Automatically include all dynamic knowledge sections when tool is detected
       const formattedSecs = renderDynamicSectionsList(lockedTool.sections || [], lockedTool);
       for (let i = 0; i < formattedSecs.length; i++) {
         const sec = formattedSecs[i];
@@ -631,6 +631,20 @@ async function generateResponse(
     );
   } else if (Object.keys(journeyPatch).length > 0) {
     await customerService.updateCustomerMemory(cleanJid, journeyPatch, userId);
+  }
+
+  // 5b. CONVERSATION MODE GUARD — when Conversation Mode is OFF (conversationMode === false):
+  // Send tool template & dynamic sections if available, then immediately return with ZERO AI conversation messages.
+  if (settings.conversationMode === false) {
+    console.log(`[Agent:${userId}] Conversation Mode is OFF. Returning dynamic section messages without AI conversation for ${cleanJid}.`);
+    await evaluateAndApplyCustomerStatus(cleanJid, customer, latestCustomerText, null, userId, BUYING_INTENT_REGEX.test(latestCustomerText));
+    return {
+      textMessages: [],
+      imageToSend: null,
+      imageCaption: undefined,
+      templateMessage,
+      sectionItems,
+    };
   }
 
   // 6. Buying-intent & explicit-request detection.
